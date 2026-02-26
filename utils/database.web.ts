@@ -93,7 +93,7 @@ export async function markCashuTokenVerified(_id: string): Promise<void> {}
 export async function markCashuTokenSpent(_id: string): Promise<void> {}
 export async function markCashuTokenPending(_id: string): Promise<void> {}
 export async function markCashuTokenUnspent(_id: string): Promise<void> {}
-export async function getCashuBalance(): Promise<number> { return 0; }
+export async function getCashuBalance(): Promise<{ total: number; byMint: Record<string, number> }> { return { total: 0, byMint: {} }; }
 export async function getUnspentCashuTokens(): Promise<DBCashuToken[]> { return []; }
 export async function incrementRetryCount(_msgId: string): Promise<number> { return 0; }
 export async function saveContact(_contact: Omit<DBContact, 'addedAt' | 'updatedAt'>): Promise<void> {}
