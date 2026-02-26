@@ -16,41 +16,21 @@ if (!fs.existsSync(indexPath)) {
 
 let content = fs.readFileSync(indexPath, 'utf8');
 
-let indexPatched = false;
+const originalIndexContent = content;
 
-if (content.includes('import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js";')) {
-  content = content.replace(
-    'import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js";',
-    '// import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js"; // Commenté pour React Native (pas de module stream)\nconst NodeJSSerialConnection = null; // Fallback pour React Native'
-  );
-  indexPatched = true;
-}
+content = content
+  .replace(
+    /import NodeJSSerialConnection from "\.\/connection\/nodejs_serial_connection\.js";/g,
+    'const NodeJSSerialConnection = null;'
+  )
+  .replace(
+    /import TCPConnection from "\.\/connection\/tcp_connection\.js";/g,
+    'const TCPConnection = null;'
+  )
+  .replace(/\n\s*NodeJSSerialConnection,\s*/g, '\n')
+  .replace(/\n\s*TCPConnection,\s*/g, '\n');
 
-if (content.includes('NodeJSSerialConnection,')) {
-  content = content.replace(
-    'NodeJSSerialConnection,',
-    '// NodeJSSerialConnection, // Commenté pour React Native'
-  );
-  indexPatched = true;
-}
-
-if (content.includes('import TCPConnection from "./connection/tcp_connection.js";')) {
-  content = content.replace(
-    'import TCPConnection from "./connection/tcp_connection.js";',
-    '// import TCPConnection from "./connection/tcp_connection.js"; // Commenté pour React Native (pas de module net)\nconst TCPConnection = null; // Fallback pour React Native'
-  );
-  indexPatched = true;
-}
-
-if (content.includes('TCPConnection,')) {
-  content = content.replace(
-    'TCPConnection,',
-    '// TCPConnection, // Commenté pour React Native'
-  );
-  indexPatched = true;
-}
-
-if (indexPatched) {
+if (content !== originalIndexContent) {
   fs.writeFileSync(indexPath, content);
   console.log('[patch-meshcore] Patch index.js appliqué avec succès');
 } else {
@@ -59,20 +39,24 @@ if (indexPatched) {
 
 const tcpPath = path.join(__dirname, '../node_modules/@liamcottle/meshcore.js/src/connection/tcp_connection.js');
 if (fs.existsSync(tcpPath)) {
-  let tcpContent = fs.readFileSync(tcpPath, 'utf8');
-  if (!tcpContent.includes('// PATCHED')) {
-    tcpContent = '// PATCHED for React Native - net module not available\nexport default class TCPConnection { constructor() { throw new Error("TCPConnection is not supported in React Native"); } }\n';
-    fs.writeFileSync(tcpPath, tcpContent);
+  const tcpContent = fs.readFileSync(tcpPath, 'utf8');
+  const patchedTcpContent = '// PATCHED for React Native - net module not available\nexport default class TCPConnection { constructor() { throw new Error("TCPConnection is not supported in React Native"); } }\n';
+  if (tcpContent !== patchedTcpContent) {
+    fs.writeFileSync(tcpPath, patchedTcpContent);
     console.log('[patch-meshcore] Patch tcp_connection.js appliqué');
+  } else {
+    console.log('[patch-meshcore] tcp_connection.js déjà patché, skip');
   }
 }
 
 const nodejsSerialPath = path.join(__dirname, '../node_modules/@liamcottle/meshcore.js/src/connection/nodejs_serial_connection.js');
 if (fs.existsSync(nodejsSerialPath)) {
-  let nsContent = fs.readFileSync(nodejsSerialPath, 'utf8');
-  if (!nsContent.includes('// PATCHED')) {
-    nsContent = '// PATCHED for React Native - stream module not available\nexport default class NodeJSSerialConnection { constructor() { throw new Error("NodeJSSerialConnection is not supported in React Native"); } }\n';
-    fs.writeFileSync(nodejsSerialPath, nsContent);
+  const nsContent = fs.readFileSync(nodejsSerialPath, 'utf8');
+  const patchedNodeJsSerialContent = '// PATCHED for React Native - stream module not available\nexport default class NodeJSSerialConnection { constructor() { throw new Error("NodeJSSerialConnection is not supported in React Native"); } }\n';
+  if (nsContent !== patchedNodeJsSerialContent) {
+    fs.writeFileSync(nodejsSerialPath, patchedNodeJsSerialContent);
     console.log('[patch-meshcore] Patch nodejs_serial_connection.js appliqué');
+  } else {
+    console.log('[patch-meshcore] nodejs_serial_connection.js déjà patché, skip');
   }
 }
