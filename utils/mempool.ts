@@ -6,6 +6,62 @@
 const MEMPOOL_API_BASE = 'https://mempool.space/api';
 const MEMPOOL_TESTNET_API_BASE = 'https://mempool.space/testnet/api';
 
+const DEFAULT_FEE_ESTIMATES: MempoolFeeEstimates = {
+  fastestFee: 20,
+  halfHourFee: 10,
+  hourFee: 5,
+  economyFee: 2,
+  minimumFee: 1,
+};
+
+function parseFeeEstimateNumber(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+
+  return Math.ceil(value);
+}
+
+function normalizeFeeEstimates(data: unknown): MempoolFeeEstimates {
+  const fees = (typeof data === 'object' && data !== null ? data : {}) as Partial<MempoolFeeEstimates>;
+
+  return {
+    fastestFee: parseFeeEstimateNumber(fees.fastestFee, DEFAULT_FEE_ESTIMATES.fastestFee),
+    halfHourFee: parseFeeEstimateNumber(fees.halfHourFee, DEFAULT_FEE_ESTIMATES.halfHourFee),
+    hourFee: parseFeeEstimateNumber(fees.hourFee, DEFAULT_FEE_ESTIMATES.hourFee),
+    economyFee: parseFeeEstimateNumber(fees.economyFee, DEFAULT_FEE_ESTIMATES.economyFee),
+    minimumFee: parseFeeEstimateNumber(fees.minimumFee, DEFAULT_FEE_ESTIMATES.minimumFee),
+  };
+}
+
+function getFetchErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+async function fetchFeeEstimatesFromUrl(baseUrl: string): Promise<MempoolFeeEstimates> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/fees/recommended`, {
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data: unknown = await response.json();
+    return normalizeFeeEstimates(data);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export interface MempoolTxStatus {
   confirmed: boolean;
   blockHeight?: number;
@@ -100,26 +156,24 @@ export async function getAddressBalance(address: string, url?: string): Promise<
  * Récupère les estimations de frais actuels
  */
 export async function getFeeEstimates(url?: string): Promise<MempoolFeeEstimates> {
-  try {
-    const baseUrl = url || MEMPOOL_API_BASE;
-    const response = await fetch(`${baseUrl}/v1/fees/recommended`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+  const primaryUrl = url || MEMPOOL_API_BASE;
+  const fallbackUrls = primaryUrl === MEMPOOL_API_BASE
+    ? [MEMPOOL_TESTNET_API_BASE]
+    : [MEMPOOL_API_BASE, MEMPOOL_TESTNET_API_BASE].filter((item) => item !== primaryUrl);
+  const candidates = [primaryUrl, ...fallbackUrls];
+
+  for (const candidate of candidates) {
+    try {
+      const estimates = await fetchFeeEstimatesFromUrl(candidate);
+      console.log('[Mempool] Frais récupérés depuis:', candidate, estimates);
+      return estimates;
+    } catch (error) {
+      console.warn('[Mempool] Échec récupération frais sur', candidate, '-', getFetchErrorMessage(error));
     }
-    
-    return await response.json();
-  } catch (error) {
-    console.error('[Mempool] Erreur récupération frais:', error);
-    // Valeurs par défaut sécuritaires
-    return {
-      fastestFee: 20,
-      halfHourFee: 10,
-      hourFee: 5,
-      economyFee: 2,
-      minimumFee: 1,
-    };
   }
+
+  console.warn('[Mempool] Utilisation des frais par défaut');
+  return DEFAULT_FEE_ESTIMATES;
 }
 
 /**
