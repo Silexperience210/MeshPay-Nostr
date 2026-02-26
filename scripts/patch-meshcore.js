@@ -16,36 +16,46 @@ if (!fs.existsSync(indexPath)) {
 
 let content = fs.readFileSync(indexPath, 'utf8');
 
-// Vérifier si déjà patché
-if (content.includes('// import NodeJSSerialConnection')) {
-  console.log('[patch-meshcore] Déjà patché, skip');
-  process.exit(0);
+let indexPatched = false;
+
+if (content.includes('import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js";')) {
+  content = content.replace(
+    'import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js";',
+    '// import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js"; // Commenté pour React Native (pas de module stream)\nconst NodeJSSerialConnection = null; // Fallback pour React Native'
+  );
+  indexPatched = true;
 }
 
-// Patcher NodeJSSerialConnection
-content = content.replace(
-  'import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js";',
-  '// import NodeJSSerialConnection from "./connection/nodejs_serial_connection.js"; // Commenté pour React Native (pas de module stream)\nconst NodeJSSerialConnection = null; // Fallback pour React Native'
-);
+if (content.includes('NodeJSSerialConnection,')) {
+  content = content.replace(
+    'NodeJSSerialConnection,',
+    '// NodeJSSerialConnection, // Commenté pour React Native'
+  );
+  indexPatched = true;
+}
 
-content = content.replace(
-  'NodeJSSerialConnection,',
-  '// NodeJSSerialConnection, // Commenté pour React Native'
-);
+if (content.includes('import TCPConnection from "./connection/tcp_connection.js";')) {
+  content = content.replace(
+    'import TCPConnection from "./connection/tcp_connection.js";',
+    '// import TCPConnection from "./connection/tcp_connection.js"; // Commenté pour React Native (pas de module net)\nconst TCPConnection = null; // Fallback pour React Native'
+  );
+  indexPatched = true;
+}
 
-// Patcher TCPConnection (au cas où)
-content = content.replace(
-  'import TCPConnection from "./connection/tcp_connection.js";',
-  '// import TCPConnection from "./connection/tcp_connection.js"; // Commenté pour React Native (pas de module net)\nconst TCPConnection = null; // Fallback pour React Native'
-);
+if (content.includes('TCPConnection,')) {
+  content = content.replace(
+    'TCPConnection,',
+    '// TCPConnection, // Commenté pour React Native'
+  );
+  indexPatched = true;
+}
 
-content = content.replace(
-  /TCPConnection,(?!.*\/\/ Commenté)/,
-  '// TCPConnection, // Commenté pour React Native'
-);
-
-fs.writeFileSync(indexPath, content);
-console.log('[patch-meshcore] Patch index.js appliqué avec succès');
+if (indexPatched) {
+  fs.writeFileSync(indexPath, content);
+  console.log('[patch-meshcore] Patch index.js appliqué avec succès');
+} else {
+  console.log('[patch-meshcore] index.js déjà patché, skip');
+}
 
 const tcpPath = path.join(__dirname, '../node_modules/@liamcottle/meshcore.js/src/connection/tcp_connection.js');
 if (fs.existsSync(tcpPath)) {
