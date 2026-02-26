@@ -9,7 +9,42 @@ import React, { createContext, useContext, useState, useRef, useCallback } from 
 import { Platform } from 'react-native';
 import { UsbSerialManager } from 'react-native-usb-serialport-for-android';
 // @ts-ignore - meshcore.js n'a pas de types
-import * as MeshCore from '@liamcottle/meshcore.js';
+import SerialConnection from '@liamcottle/meshcore.js/src/connection/serial_connection.js';
+
+const BaseSerialConnection = SerialConnection as unknown as { new (): any };
+
+class ReactNativeSerialConnection extends BaseSerialConnection {
+  private adapter: {
+    write: (data: Uint8Array) => Promise<void>;
+    onData: (callback: (data: Uint8Array) => void) => void;
+    close: () => Promise<void>;
+  };
+
+  constructor(adapter: {
+    write: (data: Uint8Array) => Promise<void>;
+    onData: (callback: (data: Uint8Array) => void) => void;
+    close: () => Promise<void>;
+  }) {
+    super();
+    this.adapter = adapter;
+  }
+
+  async connect() {
+    this.adapter.onData((data: Uint8Array) => {
+      void this.onDataReceived(data);
+    });
+    await this.onConnected();
+  }
+
+  async close() {
+    await this.adapter.close();
+    this.onDisconnected();
+  }
+
+  async write(bytes: Uint8Array) {
+    await this.adapter.write(bytes);
+  }
+}
 
 export interface MeshCoreDevice {
   id: number;
@@ -138,7 +173,7 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
       const { createMeshCoreAdapter } = await import('@/utils/meshcore-usb');
       const adapter = await createMeshCoreAdapter(deviceId);
 
-      const meshConnection = new MeshCore.NodeJSSerialConnection(adapter as any);
+      const meshConnection = new ReactNativeSerialConnection(adapter as any);
 
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
