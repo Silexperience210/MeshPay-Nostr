@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
+import { useWalletSeed } from '@/providers/WalletSeedProvider';
+import { deriveMeshIdentity } from '@/utils/identity';
 
 export type MessageType = 'text' | 'cashu' | 'btc_tx' | 'lora' | 'audio' | 'image' | 'gif';
 
@@ -102,12 +104,36 @@ const noopAsync = async () => {
 };
 
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
+  const { mnemonic } = useWalletSeed();
   const [conversations] = useState<StoredConversation[]>([]);
   const [messagesByConv] = useState<Record<string, StoredMessage[]>>({});
   const [contacts] = useState<DBContact[]>([]);
+  const [identity, setIdentity] = useState<MeshIdentity | null>(null);
+
+  useEffect(() => {
+    if (!mnemonic) {
+      console.log('[Messages-Web] No mnemonic found, identity cleared');
+      setIdentity(null);
+      return;
+    }
+
+    try {
+      const derivedIdentity = deriveMeshIdentity(mnemonic);
+      console.log('[Messages-Web] Derived identity:', derivedIdentity.nodeId);
+      setIdentity({
+        nodeId: derivedIdentity.nodeId,
+        pubkeyHex: derivedIdentity.pubkeyHex,
+        privkeyHex: derivedIdentity.privkeyHex,
+        displayName: derivedIdentity.displayName ?? 'Mon Node',
+      });
+    } catch (error) {
+      console.log('[Messages-Web] Failed to derive identity:', error);
+      setIdentity(null);
+    }
+  }, [mnemonic]);
 
   return {
-    identity: null,
+    identity,
     mqttState: 'disconnected',
     conversations,
     messagesByConv,

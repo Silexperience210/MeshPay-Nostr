@@ -757,7 +757,7 @@ function CashuBalanceCard({
           testID="receive-cashu-button"
         >
           <ArrowDownLeft size={18} color={Colors.cyan} />
-          <Text style={styles.cashuActionTextAlt}>Receive</Text>
+          <Text style={styles.cashuActionTextAlt}>Import</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.cashuActionButtonAlt}
@@ -927,12 +927,12 @@ function CashuBalanceCard({
         </View>
       )}
 
-      {/* Modal RECEIVE : coller un token cashuA */}
+      {/* Modal IMPORT : coller un token cashuA */}
       {showReceiveModal && (
         <View style={styles.meltModalContainer}>
-          <Text style={styles.meltModalTitle}>Receive eCash Token</Text>
+          <Text style={styles.meltModalTitle}>Import eCash Token</Text>
           <Text style={styles.meltModalDesc}>
-            Paste a cashuA token received from another user
+            Paste a cashuA token from another user. For a Lightning receive flow, use Mint.
           </Text>
           <TextInput
             style={[styles.meltInput, { height: 80 }]}
@@ -979,7 +979,7 @@ function CashuBalanceCard({
               {receiveLoading ? (
                 <ActivityIndicator color={Colors.black} size="small" />
               ) : (
-                <Text style={styles.meltConfirmText}>Import Token</Text>
+                <Text style={styles.meltConfirmText}>Import cashuA</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -1391,12 +1391,14 @@ export default function WalletScreen() {
               style={styles.quickAction}
               activeOpacity={0.7}
               onPress={() => {
-                if (walletInfo?.firstReceiveAddress) {
-                  Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch(() => {});
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  Alert.alert('Copied', 'Full address copied');
+                if (!isInitialized || !walletInfo?.firstReceiveAddress) {
+                  Alert.alert('No Wallet', 'Generate a seed phrase in Settings first');
+                  return;
                 }
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setShowReceiveModal(true);
               }}
+              testID="quick-action-show-qr"
             >
               <QrCode size={18} color={Colors.textSecondary} />
               <Text style={styles.quickActionText}>QR Code</Text>
@@ -1411,6 +1413,7 @@ export default function WalletScreen() {
                   Alert.alert('Copied', walletInfo.firstReceiveAddress);
                 }
               }}
+              testID="quick-action-copy-address"
             >
               <Copy size={18} color={Colors.textSecondary} />
               <Text style={styles.quickActionText}>Address</Text>
