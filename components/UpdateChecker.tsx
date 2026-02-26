@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -15,13 +15,52 @@ import Colors from '@/constants/colors';
 const APP_VERSION = Constants.expoConfig?.version ?? '1.0.1';
 
 export function UpdateChecker() {
-  const [checking, setChecking] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [checking, setChecking] = useState<boolean>(false);
+  const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
+  const [downloading, setDownloading] = useState<boolean>(false);
 
-  async function checkForUpdates() {
+  const downloadUpdate = useCallback(async (): Promise<void> => {
+    setDownloading(true);
+    try {
+      console.log('[Update] Fetching OTA update...');
+      await Updates.fetchUpdateAsync();
+      Alert.alert(
+        'Mise à jour téléchargée',
+        'Redémarrer pour appliquer la mise à jour ?',
+        [
+          { text: 'Plus tard', style: 'cancel' },
+          {
+            text: 'Redémarrer',
+            onPress: () => {
+              console.log('[Update] Reloading app with new update...');
+              Updates.reloadAsync().catch((err: unknown) => {
+                console.error('[Update] Reload failed:', err);
+              });
+            },
+          },
+        ]
+      );
+    } catch (err: unknown) {
+      console.error('[Update] Erreur téléchargement:', err);
+      Alert.alert('Erreur', 'Impossible de télécharger la mise à jour pour le moment.');
+    } finally {
+      setDownloading(false);
+    }
+  }, []);
+
+  const checkForUpdates = useCallback(async (): Promise<void> => {
+    if (__DEV__ || !Updates.isEnabled) {
+      console.log('[Update] Check skipped: expo-updates disabled in this runtime');
+      Alert.alert(
+        'Indisponible ici',
+        'La vérification OTA fonctionne seulement dans une build de production avec expo-updates activé.'
+      );
+      return;
+    }
+
     setChecking(true);
     try {
+      console.log('[Update] Checking for OTA updates...');
       const update = await Updates.checkForUpdateAsync();
       if (update.isAvailable) {
         setUpdateAvailable(true);
@@ -30,39 +69,20 @@ export function UpdateChecker() {
           'Une nouvelle version de BitMesh est disponible. Voulez-vous la télécharger ?',
           [
             { text: 'Plus tard', style: 'cancel' },
-            { text: 'Télécharger', onPress: downloadUpdate },
+            { text: 'Télécharger', onPress: () => void downloadUpdate() },
           ]
         );
       } else {
-        Alert.alert('À jour', 'Vous utilisez la dernière version de BitMesh.');
+        setUpdateAvailable(false);
+        Alert.alert('À jour', 'Vous utilisez la dernière version disponible.');
       }
-    } catch (err) {
-      console.log('[Update] Erreur vérification:', err);
-      Alert.alert('Erreur', 'Impossible de vérifier les mises à jour.');
+    } catch (err: unknown) {
+      console.error('[Update] Erreur vérification:', err);
+      Alert.alert('Erreur', 'Impossible de vérifier les mises à jour. Réessayez plus tard.');
     } finally {
       setChecking(false);
     }
-  }
-
-  async function downloadUpdate() {
-    setDownloading(true);
-    try {
-      await Updates.fetchUpdateAsync();
-      Alert.alert(
-        'Mise à jour téléchargée',
-        'Redémarrer pour appliquer la mise à jour ?',
-        [
-          { text: 'Plus tard', style: 'cancel' },
-          { text: 'Redémarrer', onPress: () => Updates.reloadAsync() },
-        ]
-      );
-    } catch (err) {
-      console.log('[Update] Erreur téléchargement:', err);
-      Alert.alert('Erreur', 'Impossible de télécharger la mise à jour.');
-    } finally {
-      setDownloading(false);
-    }
-  }
+  }, [downloadUpdate]);
 
   return (
     <View style={styles.container}>
@@ -85,8 +105,9 @@ export function UpdateChecker() {
       
       <TouchableOpacity
         style={styles.button}
-        onPress={checkForUpdates}
+        onPress={() => void checkForUpdates()}
         disabled={checking || downloading}
+        testID="check-updates-button"
       >
         {checking || downloading ? (
           <ActivityIndicator color={Colors.black} />
