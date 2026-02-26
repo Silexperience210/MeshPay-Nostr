@@ -1,0 +1,97 @@
+{
+  "expo": {
+    "name": "MeshPay: LoRa Messaging & BTC",
+    "slug": "meshpay-lora-messaging-btc",
+    "version": "1.0.3",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "rork-app",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.rork.meshpay-lora-messaging-btc",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa.",
+        "NSBluetoothPeripheralUsageDescription": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "package": "app.rork.meshpay_lora_messaging_btc",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.INTERNET",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://rork.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "BitMesh utilise votre position GPS pour afficher les pairs sur le radar.",
+          "locationWhenInUsePermission": "BitMesh utilise votre position GPS pour afficher les pairs sur le radar."
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": [],
+          "bluetoothAlwaysPermission": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa ESP32."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "BitMesh accède à votre galerie pour envoyer des photos et GIFs.",
+          "cameraPermission": "BitMesh accède à votre caméra pour prendre des photos."
+        }
+      ]
+    ],
+    "updates": {
+      "url": "https://u.expo.dev/d3863e7f-06e3-4670-9545-60471cc35e76",
+      "enabled": true,
+      "fallbackToCacheTimeout": 0,
+      "checkAutomatically": "ON_LOAD"
+    },
+    "runtimeVersion": "1.0.1",
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": "https://rork.com/"
+      },
+      "eas": {
+        "projectId": "d3863e7f-06e3-4670-9545-60471cc35e76"
+      }
+    },
+    "owner": "silexperience"
+  }
+}
