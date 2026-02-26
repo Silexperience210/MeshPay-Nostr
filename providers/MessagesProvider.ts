@@ -127,7 +127,7 @@ export interface MessagesState {
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
   const { mnemonic } = useWalletSeed();
   const ble = useBle(); // Accès au BLE gateway pour LoRa
-  const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu } = useGateway();
+  const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu, getMqttBrokerUrl } = useGateway();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
   const [mqttState, setMqttState] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
@@ -1127,10 +1127,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       return;
     }
 
-    console.log('[Messages] Connexion MQTT nodeId:', identity.nodeId);
+    const brokerUrl = getMqttBrokerUrl();
+    console.log('[Messages] Connexion MQTT nodeId:', identity.nodeId, 'broker:', brokerUrl);
     setMqttState('connecting');
 
-    const client = createMeshMqttClient(identity.nodeId, identity.pubkeyHex);
+    const client = createMeshMqttClient(identity.nodeId, identity.pubkeyHex, brokerUrl);
     mqttRef.current = client;
 
     // FIX: Fonction de setup des subscriptions (appelée à chaque reconnexion)
@@ -1171,7 +1172,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       }
     }, 1000);
     statePollerRef.current = statePoller;
-  }, [identity, handleIncomingDM, handleIncomingForum, handleIncomingRouteMessage, handlePeerPresence, handleForumAnnouncement, getForumHandler]);
+  }, [identity, getMqttBrokerUrl, handleIncomingDM, handleIncomingForum, handleIncomingRouteMessage, handlePeerPresence, handleForumAnnouncement, getForumHandler]);
 
   // Auto-connexion dès que l'identité est disponible
   useEffect(() => {

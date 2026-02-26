@@ -5,6 +5,109 @@
 
 const MEMPOOL_API_BASE = 'https://mempool.space/api';
 const MEMPOOL_TESTNET_API_BASE = 'https://mempool.space/testnet/api';
+const BLOCKSTREAM_API_BASE = 'https://blockstream.info/api';
+const REQUEST_TIMEOUT_MS = 10000;
+const DEFAULT_MAINNET_BASE = 'https://mempool.space';
+
+function normalizeBaseUrl(url?: string): string {
+  const raw = (url ?? '').trim().replace(/\/$/, '');
+  if (!raw) {
+    return DEFAULT_MAINNET_BASE;
+  }
+  return raw;
+}
+
+function buildApiCandidates(url?: string): string[] {
+  const base = normalizeBaseUrl(url);
+  const candidates = new Set<string>();
+
+  candidates.add(base);
+  if (!base.endsWith('/api')) {
+    candidates.add(`${base}/api`);
+  }
+  if (base.endsWith('/api')) {
+    candidates.add(base.replace(/\/api$/, ''));
+  }
+
+  candidates.add(MEMPOOL_API_BASE);
+  candidates.add(BLOCKSTREAM_API_BASE);
+
+  return Array.from(candidates);
+}
+
+async function fetchWithTimeout(input: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchJsonWithFallback<T>(
+  pathBuilder: (base: string) => string,
+  options?: RequestInit,
+  url?: string
+): Promise<T> {
+  const candidates = buildApiCandidates(url);
+  let lastError: Error | null = null;
+
+  for (const candidate of candidates) {
+    try {
+      const endpoint = pathBuilder(candidate);
+      console.log('[Mempool] Tentative requête:', endpoint);
+      const response = await fetchWithTimeout(endpoint, options);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = (await response.json()) as T;
+      return data;
+    } catch (error) {
+      const message = getFetchErrorMessage(error);
+      lastError = new Error(message);
+      console.warn('[Mempool] Endpoint indisponible:', candidate, '-', message);
+    }
+  }
+
+  throw new Error(lastError?.message ?? 'Échec réseau mempool');
+}
+
+async function fetchTextWithFallback(
+  pathBuilder: (base: string) => string,
+  options?: RequestInit,
+  url?: string
+): Promise<string> {
+  const candidates = buildApiCandidates(url);
+  let lastError: Error | null = null;
+
+  for (const candidate of candidates) {
+    try {
+      const endpoint = pathBuilder(candidate);
+      console.log('[Mempool] Tentative requête texte:', endpoint);
+      const response = await fetchWithTimeout(endpoint, options);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}${errorText ? `: ${errorText}` : ''}`);
+      }
+
+      return await response.text();
+    } catch (error) {
+      const message = getFetchErrorMessage(error);
+      lastError = new Error(message);
+      console.warn('[Mempool] Endpoint texte indisponible:', candidate, '-', message);
+    }
+  }
+
+  throw new Error(lastError?.message ?? 'Échec réseau mempool');
+}
 
 const DEFAULT_FEE_ESTIMATES: MempoolFeeEstimates = {
   fastestFee: 20,
@@ -43,23 +146,15 @@ function getFetchErrorMessage(error: unknown): string {
 }
 
 async function fetchFeeEstimatesFromUrl(baseUrl: string): Promise<MempoolFeeEstimates> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const endpoint = `${baseUrl}/v1/fees/recommended`;
+  const response = await fetchWithTimeout(endpoint);
 
-  try {
-    const response = await fetch(`${baseUrl}/v1/fees/recommended`, {
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data: unknown = await response.json();
-    return normalizeFeeEstimates(data);
-  } finally {
-    clearTimeout(timeout);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
   }
+
+  const data: unknown = await response.json();
+  return normalizeFeeEstimates(data);
 }
 
 export interface MempoolTxStatus {
@@ -89,19 +184,16 @@ export interface MempoolFeeEstimates {
  */
 export async function testMempoolConnection(url?: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const baseUrl = url || MEMPOOL_API_BASE;
-    const response = await fetch(`${baseUrl}/blocks/tip/height`, {
-      method: 'GET',
-      headers: { 'Accept': 'text/plain' },
-    });
-    
-    if (response.ok) {
-      const height = await response.text();
-      console.log('[Mempool] Connecté, hauteur bloc:', height);
-      return { success: true };
-    }
-    
-    return { success: false, error: `HTTP ${response.status}` };
+    const height = await fetchTextWithFallback(
+      (baseUrl) => `${baseUrl}/blocks/tip/height`,
+      {
+        method: 'GET',
+        headers: { Accept: 'text/plain' },
+      },
+      url
+    );
+    console.log('[Mempool] Connecté, hauteur bloc:', height);
+    return { success: true };
   } catch (error) {
     console.error('[Mempool] Erreur connexion:', error);
     return { success: false, error: String(error) };
@@ -113,14 +205,11 @@ export async function testMempoolConnection(url?: string): Promise<{ success: bo
  */
 export async function getAddressUtxos(address: string, url?: string): Promise<MempoolUtxo[]> {
   try {
-    const baseUrl = url || MEMPOOL_API_BASE;
-    const response = await fetch(`${baseUrl}/address/${address}/utxo`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const utxos: MempoolUtxo[] = await response.json();
+    const utxos = await fetchJsonWithFallback<MempoolUtxo[]>(
+      (baseUrl) => `${baseUrl}/address/${address}/utxo`,
+      undefined,
+      url
+    );
     console.log(`[Mempool] ${utxos.length} UTXOs trouvés pour ${address}`);
     return utxos;
   } catch (error) {
@@ -134,14 +223,11 @@ export async function getAddressUtxos(address: string, url?: string): Promise<Me
  */
 export async function getAddressBalance(address: string, url?: string): Promise<{ confirmed: number; unconfirmed: number; total: number }> {
   try {
-    const baseUrl = url || MEMPOOL_API_BASE;
-    const response = await fetch(`${baseUrl}/address/${address}`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const data = await response.json();
+    const data = await fetchJsonWithFallback<Record<string, any>>(
+      (baseUrl) => `${baseUrl}/address/${address}`,
+      undefined,
+      url
+    );
     const confirmed = data.chain_stats?.funded_txo_sum - data.chain_stats?.spent_txo_sum || 0;
     const unconfirmed = data.mempool_stats?.funded_txo_sum - data.mempool_stats?.spent_txo_sum || 0;
     
@@ -183,22 +269,17 @@ export async function getFeeEstimates(url?: string): Promise<MempoolFeeEstimates
 export async function broadcastTransaction(txHex: string, url?: string): Promise<{ txid: string }> {
   try {
     console.log('[Mempool] Broadcast transaction...');
-    const baseUrl = url || MEMPOOL_API_BASE;
-    
-    const response = await fetch(`${baseUrl}/tx`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
+    const txid = await fetchTextWithFallback(
+      (baseUrl) => `${baseUrl}/tx`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: txHex,
       },
-      body: txHex,
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Broadcast failed: ${errorText}`);
-    }
-    
-    const txid = await response.text();
+      url
+    );
     console.log('[Mempool] Transaction broadcastée:', txid);
     
     return { txid };
@@ -213,13 +294,9 @@ export async function broadcastTransaction(txHex: string, url?: string): Promise
  */
 export async function getTransactionStatus(txid: string): Promise<MempoolTxStatus> {
   try {
-    const response = await fetch(`${MEMPOOL_API_BASE}/tx/${txid}/status`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    return await response.json();
+    return await fetchJsonWithFallback<MempoolTxStatus>(
+      (baseUrl) => `${baseUrl}/tx/${txid}/status`
+    );
   } catch (error) {
     console.error('[Mempool] Erreur statut transaction:', error);
     throw error;
@@ -231,13 +308,9 @@ export async function getTransactionStatus(txid: string): Promise<MempoolTxStatu
  */
 export async function getBitcoinPrice(): Promise<number> {
   try {
-    const response = await fetch(`${MEMPOOL_API_BASE}/v1/prices`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const data = await response.json();
+    const data = await fetchJsonWithFallback<Record<string, number>>(
+      (baseUrl) => `${baseUrl}/v1/prices`
+    );
     const price = data.USD;
     console.log('[Mempool] Prix Bitcoin:', price, 'USD');
     return price;
@@ -253,14 +326,11 @@ export async function getBitcoinPrice(): Promise<number> {
  */
 export async function getAddressTransactions(address: string, limit: number = 50, url?: string): Promise<any[]> {
   try {
-    const baseUrl = url || MEMPOOL_API_BASE;
-    const response = await fetch(`${baseUrl}/address/${address}/txs`);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const txs = await response.json();
+    const txs = await fetchJsonWithFallback<any[]>(
+      (baseUrl) => `${baseUrl}/address/${address}/txs`,
+      undefined,
+      url
+    );
     return txs.slice(0, limit);
   } catch (error) {
     console.error('[Mempool] Erreur historique transactions:', error);
@@ -279,7 +349,7 @@ export const fetchBtcPrice = async (_mempoolUrl?: string, currency?: string): Pr
     const url = `https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=${vsCurrency}`;
     console.log('[Price] Fetching from CoinGecko:', url);
     
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
