@@ -39,9 +39,10 @@ jobs:
             --platform android \
             --profile ci \
             --non-interactive \
-            --json 2>/dev/null > /tmp/eas-build.json
-          cat /tmp/eas-build.json
-          APK_URL=$(jq -r 'if type == "array" then .[0].artifacts.buildUrl else .artifacts.buildUrl end' /tmp/eas-build.json)
+            --json 2>&1 | tee /tmp/eas-build.log
+          BUILD_JSON=$(grep -E '^\[|^\{' /tmp/eas-build.log | tail -1)
+          echo "Build JSON: $BUILD_JSON"
+          APK_URL=$(echo "$BUILD_JSON" | jq -r 'if type == "array" then .[0].artifacts.buildUrl else .artifacts.buildUrl end')
           echo "Downloading APK from: $APK_URL"
           curl -fL "$APK_URL" -o meshpay.apk
           echo "Downloaded: $(du -sh meshpay.apk)"
