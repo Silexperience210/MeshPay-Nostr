@@ -1573,7 +1573,7 @@ export default function WalletScreen() {
       visible={showReceiveModal}
       onClose={() => setShowReceiveModal(false)}
       address={walletInfo?.firstReceiveAddress || ''}
-      addresses={receiveAddresses}
+      addresses={allAddresses}
     />
     
     {/* Modal NFC */}
