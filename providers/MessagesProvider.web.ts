@@ -130,6 +130,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const identityRef = useRef<MeshIdentity | null>(null);
   const joinedForums = useRef<Set<string>>(new Set());
+  const brokerUrlRef = useRef<string>(getMqttBrokerUrl());
 
   // Persist conversations
   const persistConversations = useCallback((convs: StoredConversation[]) => {
@@ -199,7 +200,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       disconnectMesh(mqttRef.current);
       mqttRef.current = null;
     }
-    const brokerUrl = getMqttBrokerUrl();
+    const brokerUrl = brokerUrlRef.current;
     console.log('[Messages-Web] Connecting to MQTT:', brokerUrl);
     setMqttState('connecting');
 
@@ -257,7 +258,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         });
       });
     }, 1000);
-  }, [getMqttBrokerUrl, startStatePoller]);
+  }, [startStatePoller]);
 
   const disconnect = useCallback(() => {
     if (pollerRef.current) clearInterval(pollerRef.current);
@@ -270,27 +271,33 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   const reconnectMqtt = useCallback(() => {
     console.log('[Messages-Web] Force reconnect');
+    brokerUrlRef.current = getMqttBrokerUrl();
     disconnect();
     setTimeout(connect, 500);
-  }, [disconnect, connect]);
+  }, [disconnect, connect, getMqttBrokerUrl]);
 
   // Auto-connect when identity is ready
   useEffect(() => {
     if (!identity) return;
     const timer = setTimeout(connect, 300);
     return () => clearTimeout(timer);
-  }, [identity, connect]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
 
-  // Reconnect when broker URL changes
-  const prevBrokerRef = useRef('');
+  // Sync broker URL ref and reconnect when it changes
   useEffect(() => {
     const url = getMqttBrokerUrl();
-    if (prevBrokerRef.current && prevBrokerRef.current !== url && identity) {
+    const prev = brokerUrlRef.current;
+    brokerUrlRef.current = url;
+    if (prev && prev !== url && identityRef.current) {
       console.log('[Messages-Web] Broker changed, reconnecting:', url);
-      reconnectMqtt();
+      if (mqttRef.current) {
+        disconnectMesh(mqttRef.current);
+        mqttRef.current = null;
+      }
+      setTimeout(connect, 500);
     }
-    prevBrokerRef.current = url;
-  }, [getMqttBrokerUrl, identity, reconnectMqtt]);
+  }, [getMqttBrokerUrl, connect]);
 
   // Cleanup on unmount
   useEffect(() => {
