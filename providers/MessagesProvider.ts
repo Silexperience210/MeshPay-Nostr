@@ -144,6 +144,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const joinedForums = useRef<Set<string>>(new Set());
   // FIX: Référence vers l'interval de polling pour cleanup en cas de démontage pendant connexion
   const statePollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const shouldAutoConnectRef = useRef<boolean>(true);
   // Ref vers la dernière fonction connect (évite les dépendances cycliques dans les effects)
   const connectRef = useRef<() => void>(() => {});
   // Ref vers l'URL broker précédente (pour détecter les vrais changements)
@@ -1215,11 +1217,46 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   // Auto-connexion dès que l'identité est disponible
   useEffect(() => {
-    if (identity && mqttRef.current === null) {
+    if (identity && mqttRef.current === null && shouldAutoConnectRef.current) {
       connectRef.current();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity]);
+
+  // Watchdog: si MQTT tombe, tenter une reconnexion automatique
+  useEffect(() => {
+    if (!identity) return;
+
+    if (watchdogRef.current) {
+      clearInterval(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+
+    watchdogRef.current = setInterval(() => {
+      if (!shouldAutoConnectRef.current || !identity) return;
+      const currentState = mqttRef.current?.state ?? 'disconnected';
+      if (currentState === 'disconnected' || currentState === 'error') {
+        console.log('[Messages] MQTT watchdog: reconnexion automatique, état=', currentState);
+        connectRef.current();
+      }
+    }, 5000);
+
     return () => {
-      // FIX: Nettoyer l'interval de polling si le composant se démonte pendant la connexion
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+    };
+  }, [identity]);
+
+  // Cleanup au démontage
+  useEffect(() => {
+    return () => {
+      shouldAutoConnectRef.current = false;
+      if (watchdogRef.current) {
+        clearInterval(watchdogRef.current);
+        watchdogRef.current = null;
+      }
       if (statePollerRef.current) {
         clearInterval(statePollerRef.current);
         statePollerRef.current = null;
@@ -1229,8 +1266,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         mqttRef.current = null;
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]); // connect dépend de identity — on ne se reconnecte qu'une fois par identité
+  }, []);
 
   // ✅ NOUVEAU : Cleanup automatique des messages > 24h toutes les heures
   useEffect(() => {
@@ -1289,6 +1325,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, []);
 
   const disconnect = useCallback(() => {
+    shouldAutoConnectRef.current = false;
     if (mqttRef.current) {
       disconnectMesh(mqttRef.current);
       mqttRef.current = null;
@@ -1907,6 +1944,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   const reconnectMqtt = useCallback(() => {
     console.log('[Messages] Force reconnect MQTT...');
+    shouldAutoConnectRef.current = true;
     if (mqttRef.current) {
       disconnectMesh(mqttRef.current);
       mqttRef.current = null;

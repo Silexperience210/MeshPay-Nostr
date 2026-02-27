@@ -15,15 +15,6 @@
         "buildType": "apk"
       }
     },
-    "ci": {
-      "extends": "preview",
-      "distribution": "internal",
-      "credentialsSource": "remote",
-      "channel": "preview",
-      "android": {
-        "buildType": "apk"
-      }
-    },
     "production": {
       "channel": "production",
       "android": {
