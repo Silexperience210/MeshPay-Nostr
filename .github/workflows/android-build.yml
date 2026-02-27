@@ -89,21 +89,18 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
-      - name: Fix compileSdkVersion on all subprojects
+      - name: Fix USB serial compileSdkVersion (lStar)
         # Corrige: "resource android:attr/lStar not found"
         # react-native-usb-serialport-for-android (dep transitive de @liamcottle/meshcore.js)
-        # compile avec SDK < 31, alors que lStar est un attribut Material You (API 31+).
-        # Solution: forcer compileSdkVersion 35 sur tous les sous-projets via afterEvaluate.
+        # utilise safeExtGet('UsbSerialportForAndroid_compileSdkVersion', 30) — defaut SDK 30.
+        # lStar est un attribut Material You introduit en API 31.
+        # Fix idiomatique: definir rootProject.ext que safeExtGet() lit en priorite.
         run: |
-          printf '\n// CI Fix: force compileSdkVersion 35 (corrige lStar / Material You)\n' >> android/build.gradle
-          printf 'subprojects {\n' >> android/build.gradle
-          printf '    afterEvaluate {\n' >> android/build.gradle
-          printf '        try { android { compileSdkVersion 35 } } catch (Exception ignored) {}\n' >> android/build.gradle
-          printf '    }\n' >> android/build.gradle
-          printf '}\n' >> android/build.gradle
-          echo "[OK] android/build.gradle patche"
-          echo "Dernières lignes de android/build.gradle:"
-          tail -8 android/build.gradle
+          printf '\n// CI Fix: UsbSerialportForAndroid SDK 30 -> 35 (corrige lStar / API 31+)\n' >> android/build.gradle
+          printf 'ext.UsbSerialportForAndroid_compileSdkVersion = 35\n' >> android/build.gradle
+          printf 'ext.UsbSerialportForAndroid_targetSdkVersion = 35\n' >> android/build.gradle
+          echo "[OK] rootProject.ext USB serial SDK override: 30 -> 35"
+          tail -5 android/build.gradle
 
       - name: Restore Keystore
         run: |
