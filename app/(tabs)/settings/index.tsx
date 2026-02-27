@@ -757,13 +757,21 @@ function GatewayModeCard() {
   }, [getMqttBrokerUrl]);
 
   const handleSaveMqttCustom = useCallback(() => {
-    updateGwSettings({ mqttCustomBroker: mqttInput.trim(), useCustomMqttBroker: true });
+    const trimmedUrl = mqttInput.trim();
+    if (!trimmedUrl.startsWith('ws://') && !trimmedUrl.startsWith('wss://')) {
+      Alert.alert('Invalid URL', 'Use ws:// or wss:// for MQTT broker URL');
+      return;
+    }
+    console.log('[Settings] Custom MQTT broker saved:', trimmedUrl);
+    updateGwSettings({ mqttCustomBroker: trimmedUrl, useCustomMqttBroker: true });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert('Saved', 'Custom MQTT broker URL saved');
   }, [mqttInput, updateGwSettings]);
 
   const handleSelectPresetBroker = useCallback((url: string) => {
-    updateGwSettings({ mqttBrokerUrl: url, useCustomMqttBroker: false });
+    console.log('[Settings] Preset MQTT broker selected:', url);
+    updateGwSettings({ mqttBrokerUrl: url, useCustomMqttBroker: false, mqttCustomBroker: '' });
+    setMqttInput('');
     setMqttStatus('idle');
     Haptics.selectionAsync();
   }, [updateGwSettings]);

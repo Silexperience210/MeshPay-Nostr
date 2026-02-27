@@ -107,10 +107,18 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   });
 
   const updateSettings = useCallback((partial: Partial<GatewaySettings>) => {
-    const updated = { ...settings, ...partial };
-    setSettings(updated);
-    saveSettingsMutation.mutate(updated);
-  }, [settings, saveSettingsMutation]);
+    setSettings((prev) => {
+      const updated = { ...prev, ...partial };
+      console.log('[GatewayProvider] Updating settings:', {
+        partial,
+        mqttBrokerUrl: updated.mqttBrokerUrl,
+        useCustomMqttBroker: updated.useCustomMqttBroker,
+        mqttCustomBroker: updated.mqttCustomBroker,
+      });
+      saveSettingsMutation.mutate(updated);
+      return updated;
+    });
+  }, [saveSettingsMutation]);
 
   const activateMutation = useMutation({
     mutationFn: async () => {

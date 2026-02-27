@@ -128,6 +128,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const { mnemonic } = useWalletSeed();
   const ble = useBle(); // Accès au BLE gateway pour LoRa
   const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu, getMqttBrokerUrl } = useGateway();
+  const activeBrokerUrl = getMqttBrokerUrl();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
   const [mqttState, setMqttState] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
@@ -1173,6 +1174,27 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }, 1000);
     statePollerRef.current = statePoller;
   }, [identity, getMqttBrokerUrl, handleIncomingDM, handleIncomingForum, handleIncomingRouteMessage, handlePeerPresence, handleForumAnnouncement, getForumHandler]);
+
+  useEffect(() => {
+    if (!identity) {
+      return;
+    }
+
+    if (!mqttRef.current) {
+      return;
+    }
+
+    console.log('[Messages] Broker URL changed, reconnecting MQTT:', activeBrokerUrl);
+    disconnectMesh(mqttRef.current);
+    mqttRef.current = null;
+    setMqttState('disconnected');
+
+    const reconnectTimer = setTimeout(() => {
+      connect();
+    }, 150);
+
+    return () => clearTimeout(reconnectTimer);
+  }, [activeBrokerUrl, identity, connect]);
 
   // Auto-connexion dès que l'identité est disponible
   useEffect(() => {
