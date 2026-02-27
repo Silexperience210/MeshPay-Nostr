@@ -55,7 +55,11 @@ import {
 import {
   fetchMintInfo,
   fetchMintKeysets,
+  fetchMintKeys,
   requestMintQuote,
+  checkMintQuoteStatus,
+  mintTokens,
+  isMintQuotePaid,
   testMintConnection,
   swapTokens,
   meltTokens,
@@ -383,6 +387,56 @@ function CashuBalanceCard({
       setQuoteLoading(false);
     }
   }, [mintAmount, mintUrl]);
+
+
+  // Polling: vérifie si l'invoice Lightning a été payée, mint les tokens automatiquement
+  useEffect(() => {
+    if (!mintQuote) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const status = await checkMintQuoteStatus(mintUrl, mintQuote.quote);
+        if (isMintQuotePaid(status)) {
+          if (cancelled) return;
+          clearInterval(interval);
+          const allKeys = await fetchMintKeys(mintUrl);
+          const activeKeyset = allKeys.find(k => k.active && k.unit === 'sat') ?? allKeys[0];
+          if (!activeKeyset) throw new Error('No active SAT keyset');
+          const proofs = await mintTokens(mintUrl, mintQuote.quote, mintQuote.amount, activeKeyset.id, activeKeyset.keys);
+          const token = { token: [{ mint: mintUrl, proofs }] };
+          const encoded = encodeCashuToken(token);
+          const tokenId = generateTokenId(token);
+          await saveCashuToken({
+            id: tokenId,
+            mintUrl,
+            amount: mintQuote.amount,
+            token: encoded,
+            proofs: JSON.stringify(proofs),
+            state: 'unspent',
+            source: 'lightning',
+            memo: 'Lightning receive ' + mintQuote.amount + ' sats',
+            unverified: false,
+            retryCount: 0,
+          });
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Alert.alert('Reçu !', mintQuote.amount + ' sats reçus via Lightning et mintés !');
+          setMintQuote(null);
+          setShowMintQuote(false);
+          setMintAmount('');
+          const balance = await getCashuBalance();
+          setCashuBalance(balance);
+          const unspent = await getUnspentCashuTokens();
+          setTokens(unspent);
+        }
+      } catch (err) {
+        console.log('[Cashu] Polling quote error:', err);
+      }
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [mintQuote, mintUrl]);
 
   const handleCopyInvoice = useCallback(() => {
     if (mintQuote?.request) {
