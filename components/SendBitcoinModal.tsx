@@ -36,17 +36,22 @@ export default function SendBitcoinModal({
   const { sendBitcoin, estimateSendFee } = useBitcoin();
   const [address, setAddress] = useState<string>('');
   const [amount, setAmount] = useState<string>('');
-  const [feeSpeed, setFeeSpeed] = useState<'economy' | 'normal' | 'fast'>('normal');
+  const [feeSpeed, setFeeSpeed] = useState<'economy' | 'normal' | 'fast' | 'custom'>('normal');
+  const [customFeeRate, setCustomFeeRate] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
 
   const feeRate = useMemo(() => {
+    if (feeSpeed === 'custom') {
+      const parsed = parseInt(customFeeRate, 10);
+      return isNaN(parsed) || parsed < 1 ? 1 : parsed;
+    }
     if (!fees) return 2;
     switch (feeSpeed) {
       case 'economy': return fees.economyFee;
       case 'fast': return fees.fastestFee;
       default: return fees.halfHourFee;
     }
-  }, [fees, feeSpeed]);
+  }, [fees, feeSpeed, customFeeRate]);
 
   const amountSats = useMemo(() => {
     const parsed = parseInt(amount, 10);
@@ -63,6 +68,14 @@ export default function SendBitcoinModal({
   const canSend = address.trim().length > 0 && amountSats > 0 && amountSats + estimatedFee <= balance;
 
   const currencySymbol = currency === 'USD' ? '$' : '\u20ac';
+
+  const handleClose = useCallback(() => {
+    setAddress('');
+    setAmount('');
+    setFeeSpeed('normal');
+    setCustomFeeRate('');
+    onClose();
+  }, [onClose]);
 
   const handleSend = useCallback(async () => {
     if (!canSend) return;
@@ -93,9 +106,7 @@ export default function SendBitcoinModal({
               const result = await sendBitcoin(trimmedAddr, amountSats, feeRate);
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert('Sent!', 'Transaction broadcast.\nTXID: ' + result.txid.slice(0, 16) + '...');
-              setAddress('');
-              setAmount('');
-              onClose();
+              handleClose();
             } catch (err) {
               const msg = err instanceof Error ? err.message : 'Unknown error';
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -107,16 +118,23 @@ export default function SendBitcoinModal({
         },
       ]
     );
-  }, [canSend, address, amountSats, estimatedFee, balance, feeRate, sendBitcoin, onClose]);
+  }, [canSend, address, amountSats, estimatedFee, balance, feeRate, sendBitcoin, handleClose]);
+
+  const feeChips: { speed: 'economy' | 'normal' | 'fast' | 'custom'; label: string; rate: number | undefined }[] = [
+    { speed: 'economy', label: 'Economy', rate: fees?.economyFee },
+    { speed: 'normal', label: 'Normal', rate: fees?.halfHourFee },
+    { speed: 'fast', label: 'Fast', rate: fees?.fastestFee },
+    { speed: 'custom', label: 'Custom', rate: undefined },
+  ];
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.handle} />
           <View style={styles.header}>
             <Text style={styles.title}>Send Bitcoin</Text>
-            <TouchableOpacity onPress={onClose} activeOpacity={0.7}>
+            <TouchableOpacity onPress={handleClose} activeOpacity={0.7}>
               <View style={styles.closeBtn}>
                 <Text style={styles.closeBtnText}>{'\u00d7'}</Text>
               </View>
@@ -152,13 +170,13 @@ export default function SendBitcoinModal({
           )}
 
           <Text style={styles.inputLabel}>Fee Speed</Text>
-          <View style={styles.feeSpeedRow}>
-            {(['economy', 'normal', 'fast'] as const).map((speed) => {
+          <View style={styles.feeSpeedGrid}>
+            {feeChips.map(({ speed, label, rate }) => {
               const isActive = feeSpeed === speed;
-              const speedLabel = speed === 'economy' ? 'Economy' : speed === 'normal' ? 'Normal' : 'Fast';
-              const speedRate = fees
-                ? speed === 'economy' ? fees.economyFee : speed === 'normal' ? fees.halfHourFee : fees.fastestFee
-                : '?';
+              const rateLabel =
+                speed === 'custom'
+                  ? customFeeRate ? customFeeRate + ' sat/vB' : 'Manuel'
+                  : rate != null ? rate + ' sat/vB' : '? sat/vB';
               return (
                 <TouchableOpacity
                   key={speed}
@@ -166,12 +184,29 @@ export default function SendBitcoinModal({
                   onPress={() => { setFeeSpeed(speed); Haptics.selectionAsync(); }}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.feeSpeedLabel, isActive && styles.feeSpeedLabelActive]}>{speedLabel}</Text>
-                  <Text style={styles.feeSpeedRate}>{speedRate} sat/vB</Text>
+                  <Text style={[styles.feeSpeedLabel, isActive && styles.feeSpeedLabelActive]}>{label}</Text>
+                  <Text style={[styles.feeSpeedRate, isActive && speed !== 'custom' && styles.feeSpeedRateActive]}>
+                    {rateLabel}
+                  </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
+
+          {feeSpeed === 'custom' && (
+            <View style={styles.customFeeRow}>
+              <TextInput
+                style={styles.customFeeInput}
+                placeholder="15"
+                placeholderTextColor={Colors.textMuted}
+                value={customFeeRate}
+                onChangeText={setCustomFeeRate}
+                keyboardType="number-pad"
+                autoFocus
+              />
+              <Text style={styles.customFeeUnit}>sat/vB</Text>
+            </View>
+          )}
 
           <View style={styles.balanceRow}>
             <Text style={styles.balanceLabel}>Available</Text>
@@ -272,13 +307,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 4,
   },
-  feeSpeedRow: {
+  feeSpeedGrid: {
     flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
     gap: 8,
     marginTop: 4,
   },
   feeSpeedChip: {
-    flex: 1,
+    width: '47%' as any,
     alignItems: 'center' as const,
     paddingVertical: 10,
     borderRadius: 10,
@@ -303,6 +339,32 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: 'monospace',
     marginTop: 2,
+  },
+  feeSpeedRateActive: {
+    color: Colors.accentDim,
+  },
+  customFeeRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    marginTop: 8,
+    gap: 10,
+  },
+  customFeeInput: {
+    flex: 1,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: Colors.text,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    fontFamily: 'monospace',
+  },
+  customFeeUnit: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '600' as const,
   },
   balanceRow: {
     flexDirection: 'row' as const,
