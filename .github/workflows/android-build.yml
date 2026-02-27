@@ -1,149 +1,74 @@
-name: Android Build Release
+name: Build & Release APK
 
 on:
   push:
     tags:
       - 'apk-*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (ex: v1.0.0)'
+        required: false
+        default: 'v1.0.0'
 
 jobs:
-  build:
-    name: Build Release APK
+  build-apk:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: write
+
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
-      - name: Setup bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      # bun.lock conflicte avec npm ci (EAS CLI utilise npm)
+      - name: Remove bun.lock
+        run: rm -f bun.lock
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun run postinstall
+        run: npm ci --legacy-peer-deps
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK components
+      - name: Build APK via EAS
         run: |
-          sdkmanager "platforms;android-36"
-          sdkmanager "build-tools;36.0.0"
+          EAS_SKIP_AUTO_FINGERPRINT=1 eas build \
+            --platform android \
+            --profile ci \
+            --non-interactive \
+            --output ./meshpay.apk
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
-          restore-keys: gradle-${{ runner.os }}-
-
-      - name: Generate version
-        id: version
+      - name: Get version tag
+        id: tag
         run: |
-          # Version auto-incrémentée basée sur le numéro de run GitHub Actions
-          VERSION="v1.0.${{ github.run_number }}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Generate Keystore
-        run: |
-          keytool -genkey -v \
-            -keystore android/app/bitmesh-release.keystore \
-            -alias bitmesh \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -storepass bitmesh2024 \
-            -keypass bitmesh2024 \
-            -dname "CN=BitMesh, OU=BitMesh, O=BitMesh, L=Unknown, ST=Unknown, C=US"
+      - name: Rename APK
+        run: mv meshpay.apk "MeshPay-${{ steps.tag.outputs.TAG }}.apk"
 
-      - name: Setup Signing Config
-        run: |
-          cat > android/app/signing.properties << EOF
-          MYAPP_UPLOAD_STORE_FILE=bitmesh-release.keystore
-          MYAPP_UPLOAD_KEY_ALIAS=bitmesh
-          MYAPP_UPLOAD_STORE_PASSWORD=bitmesh2024
-          MYAPP_UPLOAD_KEY_PASSWORD=bitmesh2024
-          EOF
-
-      - name: Build Release APK
-        run: |
-          cd android
-          chmod +x gradlew
-          export GRADLE_OPTS="-Xmx3072m -XX:MaxMetaspaceSize=768m"
-          ./gradlew assembleRelease \
-            -PMYAPP_UPLOAD_STORE_FILE=bitmesh-release.keystore \
-            -PMYAPP_UPLOAD_KEY_ALIAS=bitmesh \
-            -PMYAPP_UPLOAD_STORE_PASSWORD=bitmesh2024 \
-            -PMYAPP_UPLOAD_KEY_PASSWORD=bitmesh2024 \
-            --no-daemon \
-            --max-workers=2
-        timeout-minutes: 25
-        env:
-          JAVA_OPTS: "-Xmx3072m -XX:MaxMetaspaceSize=768m"
-
-      - name: Rename APK with version
-        run: |
-          cp android/app/build/outputs/apk/release/app-release.apk \
-             android/app/build/outputs/apk/release/BitMesh-${{ steps.version.outputs.VERSION }}.apk
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: BitMesh-${{ steps.version.outputs.VERSION }}
-          path: android/app/build/outputs/apk/release/BitMesh-${{ steps.version.outputs.VERSION }}.apk
-
-      - name: Delete old releases (garder les 5 dernières)
-        uses: dev-drprasad/delete-older-releases@v0.3.4
-        with:
-          keep_latest: 5
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.VERSION }}
-          name: "BitMesh ${{ steps.version.outputs.VERSION }}"
-          body: |
-            ## BitMesh ${{ steps.version.outputs.VERSION }}
-
-            **Commit** : ${{ github.sha }}
-            **Message** : ${{ github.event.head_commit.message }}
-
-            ### Fonctionnalités
-            - Messagerie P2P via MQTT et BLE/LoRa
-            - Encryption E2E (ECDH + AES-GCM)
-            - Wallet Bitcoin avec envoi/réception
-            - Cashu tokens
-            - SQLite persistence
-            - Message retry et ACKs
-            - Compression Smaz
-            - Chunking pour messages longs
-
-            ### Installation
-            1. Télécharger le fichier `.apk` ci-dessous
-            2. Autoriser l'installation depuis sources inconnues
-            3. Installer et profiter !
-          files: android/app/build/outputs/apk/release/BitMesh-${{ steps.version.outputs.VERSION }}.apk
+          tag_name: ${{ steps.tag.outputs.TAG }}
+          name: "MeshPay ${{ steps.tag.outputs.TAG }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: "MeshPay-${{ steps.tag.outputs.TAG }}.apk"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
