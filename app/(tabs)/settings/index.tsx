@@ -757,10 +757,16 @@ function GatewayModeCard() {
   }, [getMqttBrokerUrl]);
 
   const handleSaveMqttCustom = useCallback(() => {
-    updateGwSettings({ mqttCustomBroker: mqttInput.trim() });
+    updateGwSettings({ mqttCustomBroker: mqttInput.trim(), useCustomMqttBroker: true });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert('Saved', 'Custom MQTT broker URL saved');
   }, [mqttInput, updateGwSettings]);
+
+  const handleSelectPresetBroker = useCallback((url: string) => {
+    updateGwSettings({ mqttBrokerUrl: url, useCustomMqttBroker: false });
+    setMqttStatus('idle');
+    Haptics.selectionAsync();
+  }, [updateGwSettings]);
 
   const pulseOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -891,62 +897,55 @@ function GatewayModeCard() {
             </Text>
           </View>
 
+          <View style={styles.brokerSelector}>
+            <Text style={styles.brokerSelectorLabel}>Serveurs MQTT gratuits</Text>
+            {BROKER_OPTIONS.map((broker) => {
+              const isActivePreset = !gwSettings.useCustomMqttBroker && gwSettings.mqttBrokerUrl === broker.url;
+              return (
+                <TouchableOpacity
+                  key={broker.name}
+                  style={[styles.brokerOption, isActivePreset && styles.brokerOptionActive]}
+                  onPress={() => handleSelectPresetBroker(broker.url)}
+                  activeOpacity={0.7}
+                  testID={`mqtt-preset-${broker.name.replace(/\s+/g, '-').toLowerCase()}`}
+                >
+                  <Text style={[styles.brokerOptionName, isActivePreset && styles.brokerOptionNameActive]}>
+                    {broker.name}
+                  </Text>
+                  <Text style={styles.brokerOptionDesc}>{broker.description}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           <SettingToggle
             icon={<Server size={14} color={Colors.purple} />}
-            label="Custom Broker"
+            label="Utiliser un broker custom"
             value={gwSettings.useCustomMqttBroker}
             onToggle={(val) => updateGwSettings({ useCustomMqttBroker: val })}
           />
 
           {gwSettings.useCustomMqttBroker && (
-            <>
-              {/* ✅ SÉLECTEUR DE BROKER PRÉDÉFINI */}
-              <View style={styles.brokerSelector}>
-                <Text style={styles.brokerSelectorLabel}>Quick Select:</Text>
-                {BROKER_OPTIONS.map((broker) => (
-                  <TouchableOpacity
-                    key={broker.name}
-                    style={[
-                      styles.brokerOption,
-                      mqttInput === broker.url && styles.brokerOptionActive,
-                    ]}
-                    onPress={() => setMqttInput(broker.url)}
-                    activeOpacity={0.7}
-                  >
-                    <Text
-                      style={[
-                        styles.brokerOptionName,
-                        mqttInput === broker.url && styles.brokerOptionNameActive,
-                      ]}
-                    >
-                      {broker.name}
-                    </Text>
-                    <Text style={styles.brokerOptionDesc}>{broker.description}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <View style={styles.customEndpointContainer}>
-                <TextInput
-                  style={styles.endpointInput}
-                  placeholder="wss://your-broker.com:8084/mqtt"
-                  placeholderTextColor={Colors.textMuted}
-                  value={mqttInput}
-                  onChangeText={setMqttInput}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  testID="custom-mqtt-input"
-                />
-                <TouchableOpacity
-                  style={styles.saveEndpointBtn}
-                  onPress={handleSaveMqttCustom}
-                  activeOpacity={0.7}
-                >
-                  <Check size={16} color={Colors.purple} />
-                </TouchableOpacity>
-              </View>
-            </>
+            <View style={styles.customEndpointContainer}>
+              <TextInput
+                style={styles.endpointInput}
+                placeholder="wss://your-broker.com:8084/mqtt"
+                placeholderTextColor={Colors.textMuted}
+                value={mqttInput}
+                onChangeText={setMqttInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                testID="custom-mqtt-input"
+              />
+              <TouchableOpacity
+                style={styles.saveEndpointBtn}
+                onPress={handleSaveMqttCustom}
+                activeOpacity={0.7}
+              >
+                <Check size={16} color={Colors.purple} />
+              </TouchableOpacity>
+            </View>
           )}
 
           <TouchableOpacity

@@ -11,10 +11,9 @@ const DEFAULT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
 
 // ✅ BROKERS ALTERNATIFS (WebSocket ports)
 export const BROKER_OPTIONS = [
-  { name: 'EMQX Public', url: 'wss://broker.emqx.io:8084/mqtt', description: 'Broker public rapide' },
-  { name: 'HiveMQ Public', url: 'wss://broker.hivemq.com:8884/mqtt', description: 'Alternative fiable' },
-  { name: 'Mosquitto Test', url: 'wss://test.mosquitto.org:8081/mqtt', description: 'Broker de test Eclipse' },
-];
+  { name: 'EMQX Public', url: 'wss://broker.emqx.io:8084/mqtt', description: 'Gratuit, stable' },
+  { name: 'HiveMQ Public', url: 'wss://broker.hivemq.com:8884/mqtt', description: 'Gratuit, alternative fiable' },
+] as const;
 
 // Topics MeshCore
 export const TOPICS = {

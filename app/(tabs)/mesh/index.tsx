@@ -771,7 +771,9 @@ export default function MeshScreen() {
               <Server size={28} color={Colors.textMuted} />
               <Text style={styles.emptyText}>Aucun gateway détecté</Text>
               <Text style={styles.emptySubtext}>
-                {mqttState === 'connected' ? 'En attente de gateways MQTT' : 'Connexion MQTT en cours...'}
+                {mqttState === 'connected'
+                  ? 'MQTT est connecté. Vous pouvez déjà tester la messagerie internet (peer ↔ peer).'
+                  : 'Connexion MQTT en cours...'}
               </Text>
             </View>
           )}
