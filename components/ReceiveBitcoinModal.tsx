@@ -63,6 +63,7 @@ export default function ReceiveBitcoinModal({
   };
 
   const handleSelectAddress = (addr: string) => {
+    setCopied(false);
     setSelectedAddress(addr);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Scroll vers le haut pour voir le QR code mis à jour
@@ -226,7 +227,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '90%',
+    height: '88%',
     paddingBottom: 32,
   },
   header: {
