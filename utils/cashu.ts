@@ -31,8 +31,13 @@ export interface CashuMintQuote {
   quote: string;
   request: string;
   paid: boolean;
+  state?: 'UNPAID' | 'PENDING' | 'PAID'; // NUT-04 v2 (nutshell 0.15+)
   expiry: number;
   amount: number;
+}
+
+export function isMintQuotePaid(quote: CashuMintQuote): boolean {
+  return quote.paid === true || quote.state === 'PAID';
 }
 
 const mintInfoCache: Map<string, { info: CashuMintInfo; timestamp: number }> = new Map();
