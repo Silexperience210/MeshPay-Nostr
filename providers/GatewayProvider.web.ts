@@ -61,10 +61,6 @@ const DEFAULT_GATEWAY_SETTINGS: GatewaySettings = {
   maxPeerAge: 300000,
 };
 
-const noopAsync = async () => {
-  console.log('[Gateway-Web] Not available on web');
-};
-
 export const [GatewayContext, useGateway] = createContextHook(() => {
   const [gatewayState] = useState<GatewayState>({
     mode: 'client',
@@ -84,24 +80,41 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     cashuMintUrl: 'https://mint.minibits.cash/Bitcoin',
     activatedAt: null,
   });
-  const [settings] = useState<GatewaySettings>(DEFAULT_GATEWAY_SETTINGS);
+
+  const [settings, setSettings] = useState<GatewaySettings>(DEFAULT_GATEWAY_SETTINGS);
+
+  const updateSettings = useCallback((partial: Partial<GatewaySettings>) => {
+    console.log('[Gateway-Web] updateSettings:', partial);
+    setSettings(prev => ({ ...prev, ...partial }));
+  }, []);
+
+  const toggleService = useCallback((service: GatewayServiceType, val: boolean) => {
+    console.log('[Gateway-Web] toggleService:', service, val);
+    setSettings(prev => ({
+      ...prev,
+      services: { ...prev.services, [service]: val },
+    }));
+  }, []);
 
   const getMqttBrokerUrl = useCallback((): string => {
+    if (settings.useCustomMqttBroker && settings.mqttCustomBroker) {
+      return settings.mqttCustomBroker;
+    }
     return settings.mqttBrokerUrl;
   }, [settings]);
 
   return {
     gatewayState,
     settings,
-    updateSettings: () => {},
+    updateSettings,
     activateGateway: () => console.log('[Gateway-Web] Not available on web'),
     deactivateGateway: () => console.log('[Gateway-Web] Not available on web'),
     broadcastTx: () => {},
     relayCashu: () => {},
     handleLoRaMessage: () => {},
-    forwardPayment: noopAsync,
+    forwardPayment: async () => { console.log('[Gateway-Web] Not available on web'); },
     registerPeer: () => {},
-    toggleService: () => {},
+    toggleService,
     getMqttBrokerUrl,
     getUptime: () => '0s',
     isActivating: false,
