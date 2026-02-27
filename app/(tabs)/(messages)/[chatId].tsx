@@ -13,8 +13,8 @@ import { formatMessageTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useBle } from '@/providers/BleProvider';
-import { decodeCashuToken, getTokenAmount, verifyCashuToken, generateTokenId } from '@/utils/cashu';
-import { markCashuTokenSpent, markCashuTokenPending, markCashuTokenUnspent } from '@/utils/database';
+import { decodeCashuToken, getTokenAmount, verifyCashuToken, generateTokenId, reclaimProofs, fetchMintKeys, encodeCashuToken } from '@/utils/cashu';
+import { markCashuTokenSpent, markCashuTokenPending, markCashuTokenUnspent, saveCashuToken, getCashuBalance } from '@/utils/database';
 import type { StoredMessage } from '@/utils/messages-store';
 import {
   requestAudioPermissions,
@@ -410,12 +410,72 @@ export default function ChatScreen() {
     );
   }, [router]);
 
+  const handleReclaimToken = useCallback(async (item: StoredMessage) => {
+    if (!item.cashuToken) return;
+    const decoded = decodeCashuToken(item.cashuToken);
+    if (!decoded) return Alert.alert('Erreur', 'Token invalide');
+
+    const entry = decoded.token[0];
+    if (!entry) return Alert.alert('Erreur', 'Token vide');
+    const { mint: mintUrl, proofs } = entry;
+    const keysetId = proofs[0]?.id;
+    if (!keysetId) return Alert.alert('Erreur', 'Keyset introuvable');
+
+    Alert.alert(
+      '↩ Récupérer les sats ?',
+      `Vérification que le destinataire n'a pas encore encaissé ce token de ${item.cashuAmount ?? 0} sats...`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Récupérer',
+          onPress: async () => {
+            try {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              const keysets = await fetchMintKeys(mintUrl);
+              const keyset = keysets.find(k => k.id === keysetId && k.active) ?? keysets[0];
+              if (!keyset) throw new Error('Keyset introuvable sur le mint');
+
+              const newProofs = await reclaimProofs(mintUrl, proofs, keyset.id, keyset.keys);
+              const newToken = { token: [{ mint: mintUrl, proofs: newProofs }] };
+              const encoded = encodeCashuToken(newToken);
+              const amount = newProofs.reduce((s, p) => s + p.amount, 0);
+              await saveCashuToken({
+                id: generateTokenId(newToken),
+                mintUrl,
+                amount,
+                token: encoded,
+                proofs: JSON.stringify(newProofs),
+                keysetId: keyset.id,
+                state: 'unspent',
+                source: 'reclaim',
+                memo: `Récupéré · ${amount} sats`,
+                unverified: false,
+                retryCount: 0,
+              });
+              deleteMessage(item.id, convId);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert('✓ Récupéré !', `${amount} sats récupérés dans votre wallet.`);
+            } catch (err) {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              const msg = err instanceof Error ? err.message : 'Erreur inconnue';
+              if (msg.includes('already spent')) {
+                Alert.alert('Impossible', 'Le destinataire a déjà encaissé ce token.');
+              } else {
+                Alert.alert('Erreur', msg);
+              }
+            }
+          },
+        },
+      ]
+    );
+  }, [convId, deleteMessage]);
+
   const handleLongPressMessage = useCallback((item: StoredMessage) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (item.type === 'cashu' && item.cashuToken) {
       Alert.alert(
         'Token Cashu · ' + (item.cashuAmount ?? 0) + ' sats',
-        item.isMine ? 'Token envoyé' : 'Importé automatiquement dans votre wallet',
+        item.isMine ? 'Token envoyé (appuyer pour tenter de récupérer)' : 'Importé automatiquement dans votre wallet',
         [
           { text: 'Annuler', style: 'cancel' },
           {
@@ -426,6 +486,10 @@ export default function ChatScreen() {
             },
           },
           { text: 'Aller au wallet', onPress: () => router.push('/(tabs)/wallet') },
+          ...(item.isMine ? [{
+            text: '↩ Récupérer les sats',
+            onPress: () => handleReclaimToken(item),
+          }] : []),
           {
             text: 'Supprimer',
             style: 'destructive',
@@ -447,7 +511,7 @@ export default function ChatScreen() {
         },
       ]
     );
-  }, [convId, deleteMessage, router]);
+  }, [convId, deleteMessage, router, handleReclaimToken]);
 
   const handlePickMedia = useCallback(() => {
     if (isRecording || isSendingMedia) return;
