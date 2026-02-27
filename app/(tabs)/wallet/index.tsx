@@ -438,6 +438,46 @@ function CashuBalanceCard({
     };
   }, [mintQuote, mintUrl]);
 
+  const handleCashuBackup = useCallback(async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const unspentTokens = await getUnspentCashuTokens();
+    if (unspentTokens.length === 0) {
+      Alert.alert('Backup', 'Aucun token Cashu à sauvegarder.');
+      return;
+    }
+    const proofsByMint: Record<string, CashuProof[]> = {};
+    for (const t of unspentTokens) {
+      try {
+        const decoded = decodeCashuToken(t.token);
+        if (!decoded) continue;
+        for (const entry of decoded.token) {
+          if (!proofsByMint[entry.mint]) proofsByMint[entry.mint] = [];
+          proofsByMint[entry.mint].push(...entry.proofs);
+        }
+      } catch { /* skip invalid */ }
+    }
+    const backupTokens = Object.entries(proofsByMint).map(([mint, proofs]) =>
+      encodeCashuToken({ token: [{ mint, proofs }] })
+    );
+    const totalAmount = unspentTokens.reduce((s, t) => s + t.amount, 0);
+    const backupText = backupTokens.join('\n\n');
+    Alert.alert(
+      `Backup Cashu · ${totalAmount.toLocaleString()} sats`,
+      `${backupTokens.length} token(s) depuis ${Object.keys(proofsByMint).length} mint(s).\nCopiez et sauvegardez ce texte.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Copier',
+          onPress: () => {
+            Clipboard.setStringAsync(backupText);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Copié !', "Sauvegardez ce texte hors de l'appareil. Importable dans n'importe quel wallet Cashu.");
+          },
+        },
+      ]
+    );
+  }, []);
+
   const handleCopyInvoice = useCallback(() => {
     if (mintQuote?.request) {
       Clipboard.setStringAsync(mintQuote.request).catch(() => {});
@@ -1529,10 +1569,7 @@ export default function WalletScreen() {
             <TouchableOpacity
               style={styles.cashuQuickAction}
               activeOpacity={0.7}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                Alert.alert('Backup', 'Token backup will export all unspent proofs');
-              }}
+              onPress={handleCashuBackup}
             >
               <Shield size={16} color={Colors.cyan} />
               <Text style={styles.cashuQuickActionText}>Backup</Text>
