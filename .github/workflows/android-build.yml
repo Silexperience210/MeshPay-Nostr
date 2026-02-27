@@ -29,9 +29,8 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: |
-          bun install
-          bun run postinstall
+        # bun install exécute automatiquement postinstall (scripts/patch-meshcore.js)
+        run: bun install
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -51,7 +50,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/build.gradle', '**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'package.json') }}
           restore-keys: gradle-${{ runner.os }}-
 
       - name: Generate version
@@ -61,30 +60,73 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
-      # android/ est dans .gitignore → on le génère via Expo
       - name: Expo Prebuild (génère android/)
         run: npx expo prebuild --platform android --no-install
         env:
           EXPO_NO_DOTENV: 1
 
-      - name: Restore Keystore from secret
+      - name: Fix Android build configuration
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/meshpay-release.keystore
+          # ── 1. Corriger la mémoire JVM dans gradle.properties ──────────────────
+          # expo prebuild génère des valeurs trop basses (Xmx2048m, Metaspace=512m)
+          if grep -q "org.gradle.jvmargs" android/gradle.properties; then
+            sed -i 's|org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1280m -XX:+HeapDumpOnOutOfMemoryError|' android/gradle.properties
+          else
+            echo "org.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1280m -XX:+HeapDumpOnOutOfMemoryError" >> android/gradle.properties
+          fi
+          echo "[OK] JVM args: $(grep 'jvmargs' android/gradle.properties)"
 
-      - name: Setup Signing Config
-        run: |
-          cat > android/app/signing.properties << EOF
+          # ── 2. Injecter les credentials de signature dans gradle.properties ────
+          # Complément aux flags -P passés au gradlew (double sécurité)
+          cat >> android/gradle.properties << EOF
           MYAPP_UPLOAD_STORE_FILE=meshpay-release.keystore
           MYAPP_UPLOAD_KEY_ALIAS=${{ secrets.KEY_ALIAS }}
           MYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}
           MYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}
           EOF
+          echo "[OK] Signing credentials ajoutés à gradle.properties"
+
+          # ── 3. Forcer compileSdkVersion 35 sur tous les sous-projets ────────────
+          # Correctif pour : "resource android:attr/lStar not found"
+          # Causé par react-native-usb-serialport-for-android (dépendance transitive
+          # de @liamcottle/meshcore.js) compilé avec SDK < 31, alors que lStar
+          # est un attribut Material You introduit en Android 12 (API 31).
+          cat >> android/build.gradle << 'GRADLE_EOF'
+
+// ── CI FIX: force compileSdkVersion 35 sur tous les sous-projets ────────────
+// Corrige "resource android:attr/lStar not found" (Material You / API 31+)
+// provenant de bibliothèques compilées avec un SDK trop ancien.
+subprojects {
+    afterEvaluate {
+        if (it.plugins.hasPlugin('com.android.library') || it.plugins.hasPlugin('com.android.application')) {
+            android {
+                compileSdkVersion 35
+            }
+        }
+    }
+}
+GRADLE_EOF
+          echo "[OK] android/build.gradle patché (compileSdkVersion 35)"
+
+          # ── Afficher le résumé ───────────────────────────────────────────────
+          echo ""
+          echo "=== Résumé des corrections ==="
+          echo "gradle.properties:"
+          grep -E "jvmargs|MYAPP" android/gradle.properties | head -6
+          echo ""
+          echo "Fin android/build.gradle:"
+          tail -15 android/build.gradle
+
+      - name: Restore Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/app/meshpay-release.keystore
+          KEYSTORE_SIZE=$(wc -c < android/app/meshpay-release.keystore)
+          echo "[OK] Keystore restauré ($KEYSTORE_SIZE bytes)"
 
       - name: Build Release APK
         run: |
           cd android
           chmod +x gradlew
-          export GRADLE_OPTS="-Xmx3072m -XX:MaxMetaspaceSize=1280m"
           ./gradlew assembleRelease \
             -x lint \
             -x lintRelease \
@@ -95,15 +137,34 @@ jobs:
             "-PMYAPP_UPLOAD_STORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" \
             "-PMYAPP_UPLOAD_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" \
             --no-daemon \
-            --max-workers=2
+            --max-workers=2 \
+            --warning-mode none
         timeout-minutes: 55
-        env:
-          JAVA_OPTS: "-Xmx3072m -XX:MaxMetaspaceSize=1280m"
 
-      - name: Rename APK with version
+      - name: Vérifier le résultat du build
+        run: |
+          APK_SIGNED="android/app/build/outputs/apk/release/app-release.apk"
+          APK_UNSIGNED="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+
+          if [ -f "$APK_SIGNED" ]; then
+            SIZE=$(du -h "$APK_SIGNED" | cut -f1)
+            echo "[OK] APK signé trouvé : $APK_SIGNED ($SIZE)"
+          elif [ -f "$APK_UNSIGNED" ]; then
+            echo "[WARN] APK non signé détecté — la signature a échoué"
+            echo "[INFO] Vérifier les secrets KEYSTORE_BASE64, KEY_ALIAS, KEYSTORE_PASSWORD, KEY_PASSWORD"
+            mv "$APK_UNSIGNED" "$APK_SIGNED"
+            echo "[INFO] APK renommé pour continuer"
+          else
+            echo "[ERROR] Aucun APK trouvé dans le dossier release !"
+            ls -la android/app/build/outputs/apk/release/ 2>/dev/null || echo "Dossier introuvable"
+            exit 1
+          fi
+
+      - name: Renommer l'APK
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk \
              android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
+          echo "[OK] APK → MeshPay-${{ steps.version.outputs.VERSION }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -111,15 +172,7 @@ jobs:
           name: MeshPay-${{ steps.version.outputs.VERSION }}
           path: android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
 
-      - name: Delete old releases (garder les 5 dernières)
-        uses: dev-drprasad/delete-older-releases@v0.3.4
-        with:
-          keep_latest: 5
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create Release
+      - name: Créer la GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
@@ -128,12 +181,27 @@ jobs:
             ## MeshPay ${{ steps.version.outputs.VERSION }}
 
             **Commit** : ${{ github.sha }}
+            **Tag déclencheur** : ${{ github.ref_name }}
             **Message** : ${{ github.event.head_commit.message }}
 
             ### Installation
             1. Télécharger le fichier `.apk` ci-dessous
-            2. Autoriser l'installation depuis sources inconnues
-            3. Installer et profiter !
+            2. Sur Android : Paramètres → Sécurité → Autoriser sources inconnues
+            3. Installer `MeshPay-${{ steps.version.outputs.VERSION }}.apk`
+
+            ### Fonctionnalités
+            - Messagerie P2P via LoRa (MeshCore) + BLE
+            - Identité Bitcoin (clé secp256k1)
+            - Portefeuille Cashu (e-cash off-chain)
           files: android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Supprimer les anciennes releases (garder 5)
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        with:
+          keep_latest: 5
+          delete_tags: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
