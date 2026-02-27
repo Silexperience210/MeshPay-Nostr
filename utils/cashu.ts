@@ -679,6 +679,30 @@ export async function swapTokens(
   return proofs;
 }
 
+
+// NUT-07: reclaim sent proofs via swap (invalidates original token for receiver)
+export async function reclaimProofs(
+  mintUrl: string,
+  proofs: CashuProof[],
+  keysetId: string,
+  mintKeys: Record<string, string>
+): Promise<CashuProof[]> {
+  const totalAmount = proofs.reduce((s, p) => s + p.amount, 0);
+  console.log('[Cashu] Reclaiming', proofs.length, 'proofs,', totalAmount, 'sats');
+
+  const { spendable } = await checkProofsSpent(mintUrl, proofs);
+  const allUnspent = spendable.every(s => s === true);
+  if (!allUnspent) {
+    const spentCount = spendable.filter(s => !s).length;
+    throw new Error(`${spentCount}/${proofs.length} proofs already spent`);
+  }
+
+  const targetAmounts = splitAmountIntoPowerOfTwo(totalAmount);
+  const newProofs = await swapTokens(mintUrl, proofs, targetAmounts, keysetId, mintKeys);
+  console.log('[Cashu] Reclaim successful:', newProofs.length, 'new proofs');
+  return newProofs;
+}
+
 export async function meltTokens(
   mintUrl: string,
   proofs: CashuProof[],
