@@ -144,6 +144,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const joinedForums = useRef<Set<string>>(new Set());
   // FIX: Référence vers l'interval de polling pour cleanup en cas de démontage pendant connexion
   const statePollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref vers la dernière fonction connect (évite les dépendances cycliques dans les effects)
+  const connectRef = useRef<() => void>(() => {});
+  // Ref vers l'URL broker précédente (pour détecter les vrais changements)
+  const prevBrokerUrlRef = useRef<string>(activeBrokerUrl);
   // ✅ NOUVEAU : Forums découverts
   const [discoveredForums, setDiscoveredForums] = useState<ForumAnnouncement[]>([]);
   // FIX #1: Deduplication — Set des IDs de messages récents (max 200)
@@ -1176,31 +1180,43 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     statePollerRef.current = statePoller;
   }, [identity, getMqttBrokerUrl, handleIncomingDM, handleIncomingForum, handleIncomingRouteMessage, handlePeerPresence, handleForumAnnouncement, getForumHandler]);
 
+  // Maintenir connectRef à jour avec la dernière version de connect
   useEffect(() => {
-    if (!identity) {
-      return;
-    }
+    connectRef.current = connect;
+  }, [connect]);
 
-    if (!mqttRef.current) {
-      return;
-    }
+  // Reconnexion MQTT quand le broker URL change réellement
+  useEffect(() => {
+    const prevUrl = prevBrokerUrlRef.current;
+    prevBrokerUrlRef.current = activeBrokerUrl;
 
-    console.log('[Messages] Broker URL changed, reconnecting MQTT:', activeBrokerUrl);
-    disconnectMesh(mqttRef.current);
-    mqttRef.current = null;
+    // Ne rien faire si l'URL n'a pas réellement changé
+    if (prevUrl === activeBrokerUrl) return;
+    if (!identity) return;
+
+    console.log('[Messages] Broker URL changed:', prevUrl, '->', activeBrokerUrl);
+
+    if (mqttRef.current) {
+      disconnectMesh(mqttRef.current);
+      mqttRef.current = null;
+    }
+    if (statePollerRef.current) {
+      clearInterval(statePollerRef.current);
+      statePollerRef.current = null;
+    }
     setMqttState('disconnected');
 
     const reconnectTimer = setTimeout(() => {
-      connect();
-    }, 150);
+      connectRef.current();
+    }, 200);
 
     return () => clearTimeout(reconnectTimer);
-  }, [activeBrokerUrl, identity, connect]);
+  }, [activeBrokerUrl, identity]);
 
   // Auto-connexion dès que l'identité est disponible
   useEffect(() => {
     if (identity && mqttRef.current === null) {
-      connect();
+      connectRef.current();
     }
     return () => {
       // FIX: Nettoyer l'interval de polling si le composant se démonte pendant la connexion
@@ -1895,17 +1911,17 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       disconnectMesh(mqttRef.current);
       mqttRef.current = null;
     }
-    setMqttState('disconnected');
     if (statePollerRef.current) {
       clearInterval(statePollerRef.current);
       statePollerRef.current = null;
     }
+    setMqttState('disconnected');
     setTimeout(() => {
       if (identity) {
-        connect();
+        connectRef.current();
       }
     }, 300);
-  }, [identity, connect]);
+  }, [identity]);
 
   return {
     identity,

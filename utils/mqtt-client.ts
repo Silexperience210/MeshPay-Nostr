@@ -55,13 +55,11 @@ export function createMeshMqttClient(
   };
 
   const options: IClientOptions = {
-    // FIX #2: clientId stable (sans timestamp) + clean:false pour récupérer
-    // les messages QoS 1 manqués pendant une déconnexion
-    clientId: `meshcore-${nodeId}`,
-    keepalive: 60,
-    clean: false,
-    reconnectPeriod: 3000,
-    connectTimeout: 10000,
+    clientId: `meshcore-${nodeId}-${Date.now().toString(36)}`,
+    keepalive: 30,
+    clean: true,
+    reconnectPeriod: 5000,
+    connectTimeout: 15000,
     will: {
       topic: TOPICS.identity(nodeId),
       payload: JSON.stringify({ nodeId, pubkeyHex, online: false }),
