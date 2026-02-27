@@ -33,26 +33,16 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      # EAS remote build : build sur les serveurs Expo, on récupère l'URL via --json
-      - name: Build APK via EAS (remote) + Download
+      - name: Build APK via EAS (remote)
         run: |
-          echo "Starting EAS remote build..."
-          BUILD_JSON=$(EAS_SKIP_AUTO_FINGERPRINT=1 eas build \
+          EAS_SKIP_AUTO_FINGERPRINT=1 eas build \
             --platform android \
             --profile ci \
             --non-interactive \
-            --json 2>/dev/null)
-
-          echo "Build JSON:"
-          echo "$BUILD_JSON"
-
-          APK_URL=$(echo "$BUILD_JSON" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-builds = data if isinstance(data, list) else [data]
-print(builds[0]['artifacts']['buildUrl'])
-")
-          echo "APK URL: $APK_URL"
+            --json 2>/dev/null > /tmp/eas-build.json
+          cat /tmp/eas-build.json
+          APK_URL=$(jq -r 'if type == "array" then .[0].artifacts.buildUrl else .artifacts.buildUrl end' /tmp/eas-build.json)
+          echo "Downloading APK from: $APK_URL"
           curl -fL "$APK_URL" -o meshpay.apk
           echo "Downloaded: $(du -sh meshpay.apk)"
 
