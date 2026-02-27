@@ -26,14 +26,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-
-      # bun.lock conflicte avec npm ci (EAS CLI utilise npm)
-      - name: Remove bun.lock
-        run: rm -f bun.lock
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
 
       - name: Setup EAS CLI
         uses: expo/expo-github-action@v8
@@ -41,7 +33,9 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Build APK via EAS
+      # EAS remote build : les dépendances sont installées côté serveurs Expo
+      # Pas besoin de npm install localement
+      - name: Build APK via EAS (remote)
         run: |
           EAS_SKIP_AUTO_FINGERPRINT=1 eas build \
             --platform android \
