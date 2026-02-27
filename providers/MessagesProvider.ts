@@ -102,6 +102,7 @@ export interface MessagesState {
   // Actions
   connect: () => void;
   disconnect: () => void;
+  reconnectMqtt: () => void;
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
   sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
   sendImage: (convId: string, base64: string, mimeType: string) => Promise<void>;
@@ -1888,6 +1889,24 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, []);
 
+  const reconnectMqtt = useCallback(() => {
+    console.log('[Messages] Force reconnect MQTT...');
+    if (mqttRef.current) {
+      disconnectMesh(mqttRef.current);
+      mqttRef.current = null;
+    }
+    setMqttState('disconnected');
+    if (statePollerRef.current) {
+      clearInterval(statePollerRef.current);
+      statePollerRef.current = null;
+    }
+    setTimeout(() => {
+      if (identity) {
+        connect();
+      }
+    }, 300);
+  }, [identity, connect]);
+
   return {
     identity,
     mqttState,
@@ -1898,6 +1917,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     discoveredForums,
     connect,
     disconnect,
+    reconnectMqtt,
     sendMessage,
     sendAudio,
     sendImage,

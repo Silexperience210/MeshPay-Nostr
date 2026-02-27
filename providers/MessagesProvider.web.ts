@@ -78,6 +78,7 @@ export interface MessagesState {
   discoveredForums: ForumAnnouncement[];
   connect: () => void;
   disconnect: () => void;
+  reconnectMqtt: () => void;
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
   sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
   sendImage: (convId: string, base64: string, mimeType: string) => Promise<void>;
@@ -142,6 +143,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     discoveredForums: [],
     connect: () => console.log('[Messages-Web] Not available on web'),
     disconnect: () => console.log('[Messages-Web] Not available on web'),
+    reconnectMqtt: () => console.log('[Messages-Web] Not available on web'),
     sendMessage: noopAsync,
     sendAudio: noopAsync,
     sendImage: noopAsync,

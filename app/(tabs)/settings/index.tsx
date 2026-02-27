@@ -685,10 +685,12 @@ function GatewayModeCard() {
     isActivating,
     isDeactivating,
   } = useGateway();
+  const { mqttState, reconnectMqtt } = useMessages();
 
   const [mqttInput, setMqttInput] = useState<string>(gwSettings.mqttCustomBroker);
   const [testingMqtt, setTestingMqtt] = useState<boolean>(false);
   const [mqttStatus, setMqttStatus] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
   const [showRelayLog, setShowRelayLog] = useState<boolean>(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -775,6 +777,14 @@ function GatewayModeCard() {
     setMqttStatus('idle');
     Haptics.selectionAsync();
   }, [updateGwSettings]);
+
+  const handleReconnectMqtt = useCallback(() => {
+    console.log('[Settings] Force MQTT reconnect');
+    setIsReconnecting(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    reconnectMqtt();
+    setTimeout(() => setIsReconnecting(false), 3000);
+  }, [reconnectMqtt]);
 
   const pulseOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -905,21 +915,61 @@ function GatewayModeCard() {
             </Text>
           </View>
 
+          <View style={styles.mqttConnectionStatus}>
+            <View style={[styles.mqttStatusDot, {
+              backgroundColor: mqttState === 'connected' ? Colors.green
+                : mqttState === 'connecting' ? Colors.yellow
+                : mqttState === 'error' ? Colors.red
+                : Colors.textMuted
+            }]} />
+            <Text style={[styles.mqttStatusText, {
+              color: mqttState === 'connected' ? Colors.green
+                : mqttState === 'connecting' ? Colors.yellow
+                : mqttState === 'error' ? Colors.red
+                : Colors.textMuted
+            }]}>
+              {mqttState === 'connected' ? 'Connecté' : mqttState === 'connecting' ? 'Connexion...' : mqttState === 'error' ? 'Erreur' : 'Déconnecté'}
+            </Text>
+            <TouchableOpacity
+              style={[styles.reconnectBtn, isReconnecting && styles.reconnectBtnActive]}
+              onPress={handleReconnectMqtt}
+              disabled={isReconnecting}
+              activeOpacity={0.7}
+              testID="mqtt-reconnect-button"
+            >
+              {isReconnecting ? (
+                <ActivityIndicator size="small" color={Colors.purple} />
+              ) : (
+                <>
+                  <RefreshCw size={12} color={Colors.purple} />
+                  <Text style={styles.reconnectBtnText}>Reconnecter</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.brokerSelector}>
             <Text style={styles.brokerSelectorLabel}>Serveurs MQTT gratuits</Text>
             {BROKER_OPTIONS.map((broker) => {
               const isActivePreset = !gwSettings.useCustomMqttBroker && gwSettings.mqttBrokerUrl === broker.url;
               return (
                 <TouchableOpacity
-                  key={broker.name}
+                  key={broker.url}
                   style={[styles.brokerOption, isActivePreset && styles.brokerOptionActive]}
                   onPress={() => handleSelectPresetBroker(broker.url)}
-                  activeOpacity={0.7}
+                  activeOpacity={0.6}
                   testID={`mqtt-preset-${broker.name.replace(/\s+/g, '-').toLowerCase()}`}
                 >
-                  <Text style={[styles.brokerOptionName, isActivePreset && styles.brokerOptionNameActive]}>
-                    {broker.name}
-                  </Text>
+                  <View style={styles.brokerOptionRow}>
+                    <Text style={[styles.brokerOptionName, isActivePreset && styles.brokerOptionNameActive]}>
+                      {broker.name}
+                    </Text>
+                    {isActivePreset && (
+                      <View style={styles.brokerActiveCheck}>
+                        <Check size={10} color={Colors.purple} />
+                      </View>
+                    )}
+                  </View>
                   <Text style={styles.brokerOptionDesc}>{broker.description}</Text>
                 </TouchableOpacity>
               );
@@ -2068,27 +2118,42 @@ const styles = StyleSheet.create({
   // ✅ Styles pour le sélecteur de broker
   brokerSelector: {
     marginBottom: 12,
-    gap: 8,
+    gap: 6,
   },
   brokerSelectorLabel: {
     color: Colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600' as const,
-    marginBottom: 4,
+    fontSize: 11,
+    fontWeight: '700' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    marginBottom: 6,
   },
   brokerOption: {
-    backgroundColor: Colors.surface,
-    borderRadius: 8,
-    padding: 10,
-    borderWidth: 1,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1.5,
     borderColor: Colors.border,
   },
   brokerOptionActive: {
     borderColor: Colors.purple,
-    backgroundColor: Colors.purple + '20',
+    backgroundColor: Colors.purple + '18',
+  },
+  brokerOptionRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+  },
+  brokerActiveCheck: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.purple + '30',
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
   },
   brokerOptionName: {
-    color: Colors.text,
+    color: Colors.textSecondary,
     fontSize: 13,
     fontWeight: '600' as const,
   },
@@ -2098,6 +2163,45 @@ const styles = StyleSheet.create({
   brokerOptionDesc: {
     color: Colors.textMuted,
     fontSize: 10,
-    marginTop: 2,
+    marginTop: 3,
+  },
+  mqttConnectionStatus: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    paddingVertical: 10,
+    marginBottom: 10,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+  },
+  mqttStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  mqttStatusText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    flex: 1,
+  },
+  reconnectBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: Colors.purpleDim,
+    borderWidth: 1,
+    borderColor: Colors.purple + '40',
+  },
+  reconnectBtnActive: {
+    opacity: 0.6,
+  },
+  reconnectBtnText: {
+    color: Colors.purple,
+    fontSize: 11,
+    fontWeight: '600' as const,
   },
 });
