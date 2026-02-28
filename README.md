@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🌐 BitMesh V2.5
+# 🥜🌐 MeshPay 📶⚡
 
 ### Messagerie P2P Incensurable | Identité Bitcoin Proof | Wallet Cashu #1 | LoRa Mesh
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 🔥 Ce qui rend BitMesh UNIQUE
+## 🔥 Ce qui rend MeshPay UNIQUE
 
 ### 🛡️ Messagerie Incensurable
 - **Aucun serveur central** - Communication directe P2P
@@ -50,7 +50,7 @@
 
 ## 🏆 BitMesh vs Concurrence
 
-| Feature | BitMesh | Signal | Telegram | Cashu.me |
+| Feature | MeshPay | Signal | Telegram | Cashu.me |
 |---------|---------|--------|----------|----------|
 | **Sans serveur** | ✅ P2P | ❌ Centralisé | ❌ Centralisé | ✅ |
 | **Sans internet** | ✅ LoRa | ❌ | ❌ | ❌ |
@@ -98,7 +98,7 @@
 
 ---
 
-## 🌟 Pourquoi BitMesh ?
+## 🌟 Pourquoi MeshPay ?
 
 ### Communication d'urgence
 - Catastrophes naturelles (inondations, tremblements de terre)
@@ -172,7 +172,7 @@ Messages → Attacher token → ou Wallet → Melt
 
 ---
 
-## 💝 Soutenir BitMesh
+## 💝 Soutenir MeshPay 
 
 **Cashu:** `silexperience@minibits.cash`
 
@@ -190,6 +190,6 @@ MIT License - Voir [LICENSE](./LICENSE)
 
 **Fait avec ❤️ par la communauté BitMesh**
 
-[⭐ Star ce repo](https://github.com/Silexperience210/BitMesh) • [🐛 Signaler un bug](https://github.com/Silexperience210/BitMesh/issues)
+[⭐ Star ce repo](https://github.com/Silexperience210/MeshPay) • [🐛 Signaler un bug](https://github.com/Silexperience210/MeshPay/issues)
 
 </div>
