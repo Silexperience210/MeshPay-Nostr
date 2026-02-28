@@ -6,7 +6,7 @@
 const MEMPOOL_API_BASE = 'https://mempool.space/api';
 const MEMPOOL_TESTNET_API_BASE = 'https://mempool.space/testnet/api';
 const BLOCKSTREAM_API_BASE = 'https://blockstream.info/api';
-const REQUEST_TIMEOUT_MS = 10000;
+const REQUEST_TIMEOUT_MS = 5000;
 const DEFAULT_MAINNET_BASE = 'https://mempool.space';
 
 function normalizeBaseUrl(url?: string): string {
