@@ -15,9 +15,11 @@
   "jest": {
     "preset": "jest-expo/node",
     "testEnvironment": "node",
-    "testMatch": ["**/utils/__tests__/**/*.test.ts"],
+    "testMatch": [
+      "**/utils/__tests__/**/*.test.ts"
+    ],
     "transformIgnorePatterns": [
-      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|bitcoinjs-lib|@scure|@noble|secp256k1|tiny-secp256k1|typeforce|varuint-bitcoin|pushdata-bitcoin|bs58check|base-x|create-hash|hash-base|buffer)"
+      "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|bitcoinjs-lib|@scure|@noble|secp256k1|tiny-secp256k1|typeforce|varuint-bitcoin|pushdata-bitcoin|bs58check|base-x|create-hash|hash-base|buffer|nostr-tools)"
     ],
     "moduleNameMapper": {
       "^@/(.*)$": "<rootDir>/$1"
@@ -67,6 +69,7 @@
     "expo-web-browser": "~15.0.10",
     "lucide-react-native": "^0.475.0",
     "mqtt": "^5.10.1",
+    "nostr-tools": "^2.23.3",
     "process": "^0.11.10",
     "react": "19.1.0",
     "react-dom": "19.1.0",
