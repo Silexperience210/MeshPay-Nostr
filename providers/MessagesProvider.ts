@@ -44,6 +44,7 @@ import {
 } from '@/utils/messages-store';
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
 import { deriveMeshIdentity, type MeshIdentity, verifyNodeId } from '@/utils/identity';
+import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter, type MeshMessage, isValidMeshMessage } from '@/utils/mesh-routing';
 // MeshIdentity utilisé comme type de paramètre pour publishAndStore
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
@@ -1959,6 +1960,114 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         connectRef.current();
       }
     }, 300);
+  }, [identity]);
+
+  // ── Bridge Nostr → conversations ────────────────────────────────────────────
+  // S'abonne au MessagingBus et intègre les DMs Nostr entrants dans les
+  // conversations existantes, sans toucher au chemin MQTT.
+
+  useEffect(() => {
+    if (!identity) return;
+
+    const unsub = messagingBus.subscribe(async (msg) => {
+      // MQTT est déjà géré par les handlers directs — ne traiter que Nostr
+      if (msg.transport !== 'nostr') return;
+      if (msg.type !== 'dm') return;
+
+      const fromId = msg.from; // nodeId MESH-XXXX ou pubkey hex si pas de tag meshcore-from
+      const content = msg.content; // déjà déchiffré par NostrClient (NIP-04)
+
+      // Déduplication locale
+      if (recentMsgIds.current.has(msg.id)) return;
+      addToDedup(msg.id);
+
+      // Détecter les tokens Cashu inline
+      let cashuAmount: number | undefined;
+      let cashuTokenStr: string | undefined;
+      let displayText = content;
+      let msgType: StoredMessage['type'] = 'text';
+
+      if (content.startsWith('cashuA')) {
+        msgType = 'cashu';
+        const parsed = parseCashuAmount(content);
+        displayText = `[Cashu] ${parsed ?? '?'} sats`;
+        cashuTokenStr = content;
+        // Validation + stockage best-effort (async, non-bloquant)
+        verifyCashuToken(content).then(async (v) => {
+          if (v.valid && v.token) {
+            const tokenId = generateTokenId(v.token);
+            await saveCashuToken({
+              id: tokenId,
+              mintUrl: v.mintUrl || 'unknown',
+              amount: v.amount || 0,
+              token: content,
+              proofs: JSON.stringify(v.token.token[0].proofs),
+              source: fromId,
+              memo: `Reçu via Nostr de ${fromId.slice(0, 10)}`,
+              state: 'unverified',
+              unverified: true,
+              retryCount: 0,
+            });
+            console.log('[Nostr→Conv] Token Cashu stocké:', tokenId);
+          }
+        }).catch(() => {});
+      }
+
+      const stored: StoredMessage = {
+        id: msg.id,
+        conversationId: fromId,
+        fromNodeId: fromId,
+        fromPubkey: msg.fromPubkey,
+        text: displayText,
+        type: msgType,
+        timestamp: msg.ts,
+        isMine: false,
+        status: 'delivered',
+        cashuAmount,
+        cashuToken: cashuTokenStr,
+      };
+
+      await saveMessage(stored);
+      await updateConversationLastMessage(fromId, displayText.slice(0, 50), msg.ts, true);
+
+      setMessagesByConv(prev => ({
+        ...prev,
+        [fromId]: [...(prev[fromId] ?? []), stored],
+      }));
+
+      setConversations(prev => {
+        const exists = prev.find(c => c.id === fromId);
+        if (!exists) {
+          const newConv: StoredConversation = {
+            id: fromId,
+            name: fromId,
+            isForum: false,
+            peerPubkey: msg.fromPubkey,
+            lastMessage: displayText.slice(0, 50),
+            lastMessageTime: msg.ts,
+            unreadCount: 1,
+            online: true,
+          };
+          saveConversation(newConv);
+          return [newConv, ...prev];
+        }
+        return prev.map(c => {
+          if (c.id !== fromId) return c;
+          return {
+            ...c,
+            lastMessage: displayText.slice(0, 50),
+            lastMessageTime: msg.ts,
+            unreadCount: c.unreadCount + 1,
+            peerPubkey: msg.fromPubkey || c.peerPubkey,
+            online: true,
+          };
+        });
+      });
+
+      console.log('[Nostr→Conv] DM reçu de', fromId.slice(0, 16), '—', displayText.slice(0, 40));
+    });
+
+    return unsub;
   }, [identity]);
 
   return {

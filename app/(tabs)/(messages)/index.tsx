@@ -18,6 +18,7 @@ import Colors from '@/constants/colors';
 import { formatTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
+import { useNostr } from '@/providers/NostrProvider';
 import type { StoredConversation } from '@/utils/messages-store';
 import type { DBContact } from '@/utils/database';
 
@@ -397,6 +398,7 @@ export default function MessagesScreen() {
   const router = useRouter();
   const { settings, isInternetMode, isLoRaMode } = useAppSettings();
   const { conversations, mqttState, identity, startConversation, joinForum, deleteConversation, contacts } = useMessages();
+  const { isConnected: nostrConnected, isConnecting: nostrConnecting } = useNostr();
   const [modalVisible, setModalVisible] = useState(false);
 
   const modeLabel = settings.connectionMode === 'internet' ? 'Internet Mode'
@@ -462,9 +464,18 @@ export default function MessagesScreen() {
             {identity ? identity.nodeId : 'No wallet'}
           </Text>
         </View>
-        <Text style={styles.statusFreq}>
-          {mqttState === 'connected' ? 'MQTT ●' : mqttState === 'connecting' ? 'MQTT...' : 'MQTT ○'}
-        </Text>
+        <View style={styles.statusRight}>
+          <Text style={styles.statusFreq}>
+            {mqttState === 'connected' ? 'MQTT ●' : mqttState === 'connecting' ? 'MQTT...' : 'MQTT ○'}
+          </Text>
+          <View style={styles.statusDivider} />
+          <Text style={[
+            styles.statusFreq,
+            { color: nostrConnected ? Colors.purple ?? '#9b59b6' : nostrConnecting ? Colors.yellow : Colors.textMuted }
+          ]}>
+            {nostrConnected ? 'Nostr ●' : nostrConnecting ? 'Nostr...' : 'Nostr ○'}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.contactsStrip}>
@@ -539,6 +550,7 @@ const styles = StyleSheet.create({
   statusDivider: { width: 1, height: 12, backgroundColor: Colors.border, marginHorizontal: 4 },
   statusNodes: { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },
   statusFreq: { color: Colors.textMuted, fontSize: 11, fontFamily: 'monospace' },
+  statusRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   listContent: { paddingTop: 4, paddingBottom: 100 },
   emptyList: { flex: 1 },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 80, gap: 12 },

@@ -187,6 +187,13 @@ export class MessagingBus {
   setLocalIdentity(nodeId: string, nostrPubkey: string): void {
     this.localNodeId = nodeId;
     this.localNostrPubkey = nostrPubkey;
+
+    // Si des subscribers actifs et Nostr listeners pas encore démarrés
+    // (identité arrivée après la première subscription) → les démarrer maintenant
+    if (this.handlers.size > 0 && this.nostrUnsubs.length === 0) {
+      console.log('[Bus] Identité arrivée tardive — démarrage des listeners Nostr');
+      this._startNostrListeners();
+    }
   }
 
   // ── Transport routing ────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ import Colors from '@/constants/colors';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
 import { useBitcoin } from '@/providers/BitcoinProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
+import { useTxRelay } from '@/providers/TxRelayProvider';
 import { shortenAddress } from '@/utils/bitcoin';
 import { getBitcoinPrice } from '@/utils/mempool';
 import {
@@ -1333,6 +1334,7 @@ export default function WalletScreen() {
   const { walletInfo, isInitialized, receiveAddresses } = useWalletSeed();
   const { balance: bitcoinBalance, isLoading: bitcoinLoading, refreshBalance: refreshBitcoinBalance } = useBitcoin();
   const { getMempoolUrl, getCashuMintUrl, settings } = useAppSettings();
+  const { isGateway, gatewayStats, pendingRelays, clearCompletedRelays } = useTxRelay();
 
   const mempoolUrl = getMempoolUrl();
   const cashuMintUrl = getCashuMintUrl();
@@ -1495,6 +1497,32 @@ export default function WalletScreen() {
 
       {activeTab === 'bitcoin' ? (
         <>
+          {/* ── Bannière Nostr Gateway ───────────────────────────────────── */}
+          {isGateway && (
+            <View style={styles.gatewayBanner}>
+              <Zap size={12} color={Colors.purple ?? '#9b59b6'} />
+              <Text style={styles.gatewayBannerText}>
+                Gateway Nostr actif · {gatewayStats.relayedCount} relay{gatewayStats.relayedCount !== 1 ? 's' : ''}
+                {gatewayStats.errorCount > 0 ? ` · ${gatewayStats.errorCount} err` : ''}
+              </Text>
+            </View>
+          )}
+
+          {/* ── Relays en attente ─────────────────────────────────────────── */}
+          {pendingRelays.filter(r => r.status === 'pending').length > 0 && (
+            <View style={styles.pendingRelayBanner}>
+              <ActivityIndicator size="small" color={Colors.yellow} />
+              <Text style={styles.pendingRelayText}>
+                TX en attente de relay ({pendingRelays.filter(r => r.status === 'pending').length})
+              </Text>
+            </View>
+          )}
+          {pendingRelays.some(r => r.status !== 'pending') && (
+            <TouchableOpacity style={styles.clearRelayBtn} onPress={clearCompletedRelays} activeOpacity={0.7}>
+              <Text style={styles.clearRelayText}>Effacer les relays terminés</Text>
+            </TouchableOpacity>
+          )}
+
           <BitcoinBalanceCard
             balance={balanceQuery.data ?? null}
             bitcoinBalance={bitcoinBalance}
@@ -2249,6 +2277,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600' as const,
     flex: 1,
+  },
+  gatewayBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(155, 89, 182, 0.12)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(155, 89, 182, 0.4)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginHorizontal: 16,
+    marginTop: 8,
+  },
+  gatewayBannerText: {
+    color: '#9b59b6',
+    fontSize: 12,
+    fontWeight: '600' as const,
+    flex: 1,
+  },
+  pendingRelayBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(241, 196, 15, 0.1)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(241, 196, 15, 0.3)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginHorizontal: 16,
+    marginTop: 6,
+  },
+  pendingRelayText: {
+    color: Colors.yellow,
+    fontSize: 12,
+    flex: 1,
+  },
+  clearRelayBtn: {
+    alignSelf: 'flex-end',
+    marginHorizontal: 16,
+    marginTop: 4,
+    paddingVertical: 2,
+  },
+  clearRelayText: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    textDecorationLine: 'underline',
   },
   mintInfoRow: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@ import {
   type MempoolFeeEstimates,
 } from '@/utils/mempool';
 import { createTransactionWithFetch, estimateFee, validateAddress, signTransaction } from '@/utils/bitcoin-tx';
+import { sendBitcoinTxViaNostr, isTxAlreadyKnown } from '@/utils/tx-relay';
 
 export interface BitcoinTransaction {
   txid: string;
@@ -207,10 +208,42 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
       // Signer la transaction
       const signedHex = await signTransaction(unsignedTx.hex, mnemonic, utxos);
 
-      // Broadcast
-      const { txid } = await broadcastTransaction(signedHex);
-
-      console.log('[Bitcoin] Transaction broadcastée:', txid);
+      // Broadcast (direct ou via relay Nostr si hors ligne)
+      let txid: string;
+      try {
+        const result = await broadcastTransaction(signedHex);
+        txid = result.txid;
+        console.log('[Bitcoin] Transaction broadcastée:', txid);
+      } catch (broadcastErr) {
+        // TX déjà dans la mempool = succès silencieux
+        if (broadcastErr instanceof Error && isTxAlreadyKnown(broadcastErr)) {
+          console.log('[Bitcoin] TX déjà connue du réseau — succès idempotent');
+          txid = unsignedTx.txid;
+        } else {
+          // Erreur réseau → tenter le relay via Nostr (nœud hors ligne)
+          const isNetworkFailure = broadcastErr instanceof Error && (
+            broadcastErr.message.toLowerCase().includes('network') ||
+            broadcastErr.message.toLowerCase().includes('failed to fetch') ||
+            broadcastErr.message.toLowerCase().includes('fetch') ||
+            broadcastErr.message.toLowerCase().includes('enotreachable') ||
+            broadcastErr.message.toLowerCase().includes('etimedout')
+          );
+          if (isNetworkFailure) {
+            console.log('[Bitcoin] Réseau inaccessible — relay via Nostr...');
+            try {
+              const relayResult = await sendBitcoinTxViaNostr(signedHex, { timeoutMs: 90_000 });
+              txid = relayResult.txid ?? unsignedTx.txid;
+              console.log('[Bitcoin] TX relayée via Nostr gateway:', txid);
+            } catch (relayErr) {
+              // Relay aussi échoué — remonter l'erreur originale (plus parlante)
+              throw broadcastErr;
+            }
+          } else {
+            // Erreur Bitcoin (TX invalide, UTXO déjà dépensé, etc.) → pas de relay
+            throw broadcastErr;
+          }
+        }
+      }
 
       // Incrémenter l'index de change après succès
       changeIndexRef.current += 1;
