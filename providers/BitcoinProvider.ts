@@ -66,26 +66,33 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
     setError(null);
 
     try {
-      console.log('[Bitcoin] Sync', receiveAddresses.length, 'adresses...');
+      // Inclure TOUTES les adresses (receive m/84'/0'/0'/0/i + change m/84'/0'/0'/1/i)
+      const allAddresses = [...receiveAddresses, ...changeAddresses];
+      console.log('[Bitcoin] Sync', allAddresses.length, 'adresses (', receiveAddresses.length, 'receive +', changeAddresses.length, 'change)...');
 
-      const [balancesData, utxosData, feesData, rawTxs] = await Promise.all([
-        Promise.all(receiveAddresses.map(addr => getAddressBalance(addr))),
-        Promise.all(receiveAddresses.map(addr => getAddressUtxos(addr))),
+      const [balancesData, utxosData, feesData, txsPerAddr] = await Promise.all([
+        Promise.all(allAddresses.map(addr => getAddressBalance(addr))),
+        Promise.all(allAddresses.map(addr => getAddressUtxos(addr))),
         getFeeEstimates(),
-        getAddressTransactions(receiveAddresses[0]).catch(() => [] as any[]),
+        Promise.all(allAddresses.map(addr => getAddressTransactions(addr).catch(() => [] as any[]))),
       ]);
 
       const totalConfirmed = balancesData.reduce((sum, b) => sum + b.confirmed, 0);
       const totalUnconfirmed = balancesData.reduce((sum, b) => sum + b.unconfirmed, 0);
       const allUtxos = utxosData.flat();
 
+      // Dédupliquer les transactions par txid (une tx peut apparaître dans plusieurs adresses)
+      const txMap = new Map<string, any>();
+      txsPerAddr.flat().forEach(tx => { if (tx?.txid) txMap.set(tx.txid, tx); });
+      const rawTxs = Array.from(txMap.values());
+
       const mappedTxs: BitcoinTransaction[] = rawTxs.map((tx: any) => {
         const received = (tx.vout ?? []).reduce((sum: number, o: any) => {
-          if (receiveAddresses.includes(o.scriptpubkey_address)) return sum + (o.value ?? 0);
+          if (allAddresses.includes(o.scriptpubkey_address)) return sum + (o.value ?? 0);
           return sum;
         }, 0);
         const spent = (tx.vin ?? []).reduce((sum: number, inp: any) => {
-          if (receiveAddresses.includes(inp.prevout?.scriptpubkey_address)) return sum + (inp.prevout?.value ?? 0);
+          if (allAddresses.includes(inp.prevout?.scriptpubkey_address)) return sum + (inp.prevout?.value ?? 0);
           return sum;
         }, 0);
         const net = received - spent;
@@ -113,7 +120,7 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
     } finally {
       setIsLoading(false);
     }
-  }, [isInitialized, receiveAddresses]);
+  }, [isInitialized, receiveAddresses, changeAddresses]);
 
   /**
    * Estime les frais pour un envoi

@@ -459,15 +459,49 @@ function CashuBalanceCard({
       const selectedProofs = tokens
         .filter(t => selectedTokens.includes(t.id))
         .flatMap(t => JSON.parse(t.proofs) as CashuProof[]);
-      
-      const result = await meltTokens(mintUrl, selectedProofs, meltInvoice.trim());
+
+      // Récupérer le keyset actif pour NUT-05 v2 (change outputs désaveuglés)
+      let changeKeysetId: string | undefined;
+      let changeMintKeys: Record<string, string> | undefined;
+      try {
+        const allKeys = await fetchMintKeys(mintUrl);
+        const activeKeyset = allKeys.find(k => k.active && k.unit === 'sat') ?? allKeys[0];
+        if (activeKeyset) {
+          changeKeysetId = activeKeyset.id;
+          changeMintKeys = activeKeyset.keys;
+        }
+      } catch {
+        console.log('[Wallet] Keyset non disponible, melt sans change NUT-05 v2');
+      }
+
+      const result = await meltTokens(mintUrl, selectedProofs, meltInvoice.trim(), changeKeysetId, changeMintKeys);
       
       if (result.paid) {
         // Marquer les tokens comme spent
         for (const tokenId of selectedTokens) {
           await markCashuTokenSpent(tokenId);
         }
-        
+
+        // Sauvegarder les proofs de change (fee_reserve - frais réels, NUT-05)
+        if (result.change && result.change.length > 0) {
+          const changeAmount = result.change.reduce((s: number, p: CashuProof) => s + p.amount, 0);
+          const changeToken = { token: [{ mint: mintUrl, proofs: result.change }] };
+          const changeId = generateTokenId(changeToken);
+          await saveCashuToken({
+            id: changeId,
+            mintUrl,
+            amount: changeAmount,
+            token: encodeCashuToken(changeToken),
+            proofs: JSON.stringify(result.change),
+            state: 'unspent',
+            source: 'change',
+            memo: `Change melt ${changeAmount} sats`,
+            unverified: false,
+            retryCount: 0,
+          });
+          console.log('[Wallet] Sauvegardé', changeAmount, 'sats de change melt');
+        }
+
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert(
           'Success',
@@ -498,6 +532,10 @@ function CashuBalanceCard({
   // Receive : coller un token cashuA et le sauvegarder dans le wallet
   const handleReceiveToken = useCallback(async () => {
     const tokenStr = receiveInput.trim();
+    if (tokenStr.startsWith('cashuB')) {
+      Alert.alert('Format non supporté', 'Les tokens cashuB (V3/CBOR) ne sont pas encore supportés. Demandez un token cashuA au sender.');
+      return;
+    }
     if (!tokenStr.startsWith('cashuA')) {
       Alert.alert('Format invalide', 'Le token doit commencer par "cashuA"');
       return;

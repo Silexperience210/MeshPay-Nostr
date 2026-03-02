@@ -92,14 +92,11 @@ function hashToCurve(message: Uint8Array): InstanceType<typeof secp256k1.Project
 }
 
 function generateBlindingFactor(): bigint {
-  const randomBytes = new Uint8Array(32);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(randomBytes);
-  } else {
-    for (let i = 0; i < 32; i++) {
-      randomBytes[i] = Math.floor(Math.random() * 256);
-    }
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error('crypto.getRandomValues indisponible — environnement non sécurisé');
   }
+  const randomBytes = new Uint8Array(32);
+  crypto.getRandomValues(randomBytes);
   const n = secp256k1.CURVE.n;
   let r = BigInt('0x' + bytesToHex(randomBytes));
   r = r % (n - 1n) + 1n;
@@ -115,14 +112,11 @@ export interface BlindedMessage {
 }
 
 function generateSecret(): string {
-  const bytes = new Uint8Array(32);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < 32; i++) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error('crypto.getRandomValues indisponible — environnement non sécurisé');
   }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
   return bytesToHex(bytes);
 }
 
@@ -196,34 +190,35 @@ export function verifyDleqProof(
 
     const sG = secp256k1.ProjectivePoint.BASE.multiply(s);
     const eK = K.multiply(e);
-    const R1 = sG.add(eK);
+    const R1 = sG.add(eK.negate()); // R1 = s*G - e*K (NUT-12)
 
     const secretBytes = new TextEncoder().encode(proof.secret);
     const Y = hashToCurve(secretBytes);
     const sY = Y.multiply(s);
     const eC = C.multiply(e);
-    const R2 = sY.add(eC);
+    const R2 = sY.add(eC.negate()); // R2 = s*Y - e*C (NUT-12)
 
-    const R1hex = R1.toHex(true);
-    const R2hex = R2.toHex(true);
-    const Khex = K.toHex(true);
-    const Chex = C.toHex(true);
-
-    const toHash = new TextEncoder().encode(R1hex + R2hex + Khex + Chex);
+    // NUT-12: hash sur les bytes bruts 33-byte des points compressés (pas les hex strings)
+    const toHash = new Uint8Array([
+      ...R1.toRawBytes(true),
+      ...R2.toRawBytes(true),
+      ...K.toRawBytes(true),
+      ...C.toRawBytes(true),
+    ]);
     const eComputed = sha256(toHash);
     const eComputedHex = bytesToHex(eComputed);
 
     const eHex = proof.dleq.e.padStart(64, '0');
-    if (eComputedHex.slice(0, eHex.length) === eHex) {
+    if (eComputedHex === eHex) {
       console.log('[Cashu] DLEQ proof verified for proof:', proof.id);
       return true;
     }
 
-    console.log('[Cashu] DLEQ verification: accepting (non-critical)');
-    return true;
+    console.warn('[Cashu] DLEQ verification FAILED for proof:', proof.id);
+    return false;
   } catch (err) {
     console.warn('[Cashu] DLEQ verification error:', err);
-    return true;
+    return false;
   }
 }
 
@@ -401,17 +396,18 @@ export async function mintTokens(
 
   console.log('[Cashu] Received', signatures.length, 'signatures from mint');
 
+  if (signatures.length !== blindedMessages.length) {
+    throw new Error(`Mint a renvoyé ${signatures.length} signatures pour ${blindedMessages.length} outputs`);
+  }
+
   const proofs: CashuProof[] = signatures.map((sig, i) => {
     const bm = blindedMessages[i];
     const mintKeyForAmount = mintKeys[String(sig.amount)];
 
-    let C: string;
-    if (mintKeyForAmount) {
-      C = unblindSignature(sig.C_, bm.r, mintKeyForAmount);
-    } else {
-      console.warn('[Cashu] No mint key for amount:', sig.amount, '- using raw signature');
-      C = sig.C_;
+    if (!mintKeyForAmount) {
+      throw new Error(`Aucune clé mint pour le montant ${sig.amount} sats — keyset incomplet ou mauvais ID`);
     }
+    const C = unblindSignature(sig.C_, bm.r, mintKeyForAmount);
 
     return {
       id: sig.id,
@@ -489,23 +485,29 @@ export async function checkProofsSpent(
 
 export function encodeCashuToken(token: CashuToken): string {
   const json = JSON.stringify(token);
-  const base64 = btoa(json);
+  // Buffer.from est UTF-8 safe contrairement à btoa()
+  const base64 = Buffer.from(json, 'utf8').toString('base64');
   return `cashuA${base64}`;
 }
 
 export function decodeCashuToken(encoded: string): CashuToken | null {
   try {
+    if (encoded.startsWith('cashuB')) {
+      console.log('[Cashu] Format cashuB (V3/CBOR) non supporté');
+      return null;
+    }
     if (!encoded.startsWith('cashuA')) {
-      console.log('[Cashu] Invalid token prefix');
+      console.log('[Cashu] Préfixe de token invalide');
       return null;
     }
     const base64 = encoded.slice(6);
-    const json = atob(base64);
+    // Buffer.from est UTF-8 safe contrairement à atob()
+    const json = Buffer.from(base64, 'base64').toString('utf8');
     const token = JSON.parse(json) as CashuToken;
-    console.log('[Cashu] Decoded token with', token.token?.length, 'entries');
+    console.log('[Cashu] Token décodé avec', token.token?.length, 'entrée(s)');
     return token;
   } catch (err) {
-    console.log('[Cashu] Token decode error:', err);
+    console.log('[Cashu] Erreur décodage token:', err);
     return null;
   }
 }
@@ -631,6 +633,12 @@ export async function swapTokens(
 ): Promise<CashuProof[]> {
   console.log('[Cashu] Swapping', inputs.length, 'proofs for', targetAmounts.length, 'outputs');
 
+  const inputTotal = inputs.reduce((s, p) => s + p.amount, 0);
+  const outputTotal = targetAmounts.reduce((s, a) => s + a, 0);
+  if (inputTotal !== outputTotal) {
+    throw new Error(`Swap invalide: inputs=${inputTotal} sats ≠ outputs=${outputTotal} sats`);
+  }
+
   const blindedMessages = createBlindedMessages(targetAmounts, keysetId);
 
   const outputs = blindedMessages.map(bm => ({
@@ -656,16 +664,18 @@ export async function swapTokens(
 
   console.log('[Cashu] Swap: received', signatures.length, 'signatures');
 
+  if (signatures.length !== blindedMessages.length) {
+    throw new Error(`Swap: mint a renvoyé ${signatures.length} signatures pour ${blindedMessages.length} outputs`);
+  }
+
   const proofs: CashuProof[] = signatures.map((sig, i) => {
     const bm = blindedMessages[i];
     const mintKeyForAmount = mintKeys[String(sig.amount)];
 
-    let C: string;
-    if (mintKeyForAmount) {
-      C = unblindSignature(sig.C_, bm.r, mintKeyForAmount);
-    } else {
-      C = sig.C_;
+    if (!mintKeyForAmount) {
+      throw new Error(`Swap: aucune clé mint pour le montant ${sig.amount} sats — keyset incomplet`);
     }
+    const C = unblindSignature(sig.C_, bm.r, mintKeyForAmount);
 
     return {
       id: sig.id || keysetId,
@@ -691,36 +701,68 @@ export async function reclaimProofs(
   console.log('[Cashu] Reclaiming', proofs.length, 'proofs,', totalAmount, 'sats');
 
   const { spendable } = await checkProofsSpent(mintUrl, proofs);
-  const allUnspent = spendable.every(s => s === true);
-  if (!allUnspent) {
-    const spentCount = spendable.filter(s => !s).length;
-    throw new Error(`${spentCount}/${proofs.length} proofs already spent`);
+  const unspentProofs = proofs.filter((_, i) => spendable[i] === true);
+
+  if (unspentProofs.length === 0) {
+    throw new Error('Tous les proofs ont déjà été dépensés — token épuisé');
   }
 
-  const targetAmounts = splitAmountIntoPowerOfTwo(totalAmount);
-  const newProofs = await swapTokens(mintUrl, proofs, targetAmounts, keysetId, mintKeys);
-  console.log('[Cashu] Reclaim successful:', newProofs.length, 'new proofs');
+  if (unspentProofs.length < proofs.length) {
+    const spentCount = proofs.length - unspentProofs.length;
+    console.warn(`[Cashu] Reclaim partiel: ${spentCount}/${proofs.length} proofs déjà dépensés, reclaim de ${unspentProofs.length}`);
+  }
+
+  const unspentTotal = unspentProofs.reduce((s, p) => s + p.amount, 0);
+  const targetAmounts = splitAmountIntoPowerOfTwo(unspentTotal);
+  const newProofs = await swapTokens(mintUrl, unspentProofs, targetAmounts, keysetId, mintKeys);
+  console.log('[Cashu] Reclaim successful:', newProofs.length, 'new proofs,', unspentTotal, 'sats');
   return newProofs;
 }
 
 export async function meltTokens(
   mintUrl: string,
   proofs: CashuProof[],
-  invoice: string
+  invoice: string,
+  changeKeysetId?: string,
+  changeMintKeys?: Record<string, string>
 ): Promise<{ paid: boolean; preimage?: string; change?: CashuProof[] }> {
   console.log('[Cashu] Melting', proofs.length, 'proofs for invoice');
 
   const meltQuote = await requestMeltQuote(mintUrl, invoice);
   console.log('[Cashu] Got melt quote:', meltQuote.quote, 'amount:', meltQuote.amount, 'fee:', meltQuote.fee_reserve);
 
+  const totalProofsValue = proofs.reduce((s, p) => s + p.amount, 0);
+  const required = meltQuote.amount + meltQuote.fee_reserve;
+  if (totalProofsValue < required) {
+    throw new Error(
+      `Solde insuffisant: ${totalProofsValue} sats disponibles, ${required} requis (${meltQuote.amount} + ${meltQuote.fee_reserve} frais réserve)`
+    );
+  }
+
+  // NUT-05 v2 : préparer des outputs blindés pour le change potentiel
+  // Le mint signe uniquement les outputs correspondant au change réel (fee_reserve - frais_réels)
+  let changeBlindedMessages: BlindedMessage[] = [];
+  const requestBody: Record<string, unknown> = {
+    quote: meltQuote.quote,
+    inputs: proofs,
+  };
+
+  if (changeKeysetId && changeMintKeys && meltQuote.fee_reserve > 0) {
+    const changeAmounts = splitAmountIntoPowerOfTwo(meltQuote.fee_reserve);
+    changeBlindedMessages = createBlindedMessages(changeAmounts, changeKeysetId);
+    requestBody.outputs = changeBlindedMessages.map(bm => ({
+      amount: bm.amount,
+      B_: bm.B_,
+      id: bm.id,
+    }));
+    console.log('[Cashu] Sending', changeBlindedMessages.length, 'change outputs (NUT-05 v2)');
+  }
+
   const url = `${mintUrl}/v1/melt/bolt11`;
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quote: meltQuote.quote,
-      inputs: proofs,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
@@ -730,10 +772,38 @@ export async function meltTokens(
 
   const data = await response.json();
   console.log('[Cashu] Melt result - paid:', data.paid);
+
+  // Désaveugler les signatures de change (NUT-05 v2)
+  let changeProofs: CashuProof[] | undefined;
+  if (data.change && (data.change as unknown[]).length > 0) {
+    const rawChange = data.change as Array<{ amount: number; C_: string; id: string }>;
+    if (changeBlindedMessages.length > 0 && changeMintKeys) {
+      // Désaveugler chaque signature retournée (binary decomposition = montants uniques)
+      changeProofs = rawChange.map(sig => {
+        const bm = changeBlindedMessages.find(m => m.amount === sig.amount);
+        if (!bm) throw new Error(`Change: aucun output blindé pour le montant ${sig.amount} sats`);
+        const mintKey = changeMintKeys[String(sig.amount)];
+        if (!mintKey) throw new Error(`Change: aucune clé mint pour ${sig.amount} sats`);
+        return {
+          id: sig.id,
+          amount: sig.amount,
+          secret: bm.secret,
+          C: unblindSignature(sig.C_, bm.r, mintKey),
+        };
+      });
+      const changeTotal = changeProofs.reduce((s, p) => s + p.amount, 0);
+      console.log('[Cashu] Change désaveuglé:', changeTotal, 'sats récupérés (frais réels =', meltQuote.fee_reserve - changeTotal, 'sats)');
+    } else {
+      // Fallback : mint ancien qui retourne des proofs déjà émis
+      changeProofs = rawChange as unknown as CashuProof[];
+      console.log('[Cashu] Change reçu (format ancien mint):', changeProofs.length, 'proofs');
+    }
+  }
+
   return {
     paid: data.paid,
     preimage: data.preimage,
-    change: data.change,
+    change: changeProofs,
   };
 }
 
@@ -843,28 +913,16 @@ export function claimAtomicSwap(
 }
 
 export function createP2pkToken(
-  token: CashuToken,
-  recipientPubkey: string
+  _token: CashuToken,
+  _recipientPubkey: string
 ): CashuToken {
-  const lockedToken: CashuToken = {
-    ...token,
-    token: token.token.map(entry => ({
-      ...entry,
-      proofs: entry.proofs.map(proof => ({
-        ...proof,
-        secret: JSON.stringify([
-          'P2PK',
-          {
-            nonce: bytesToHex(sha256(new TextEncoder().encode(proof.secret + Date.now()))),
-            data: recipientPubkey,
-          },
-        ]),
-      })),
-    })),
-  };
-
-  console.log('[Cashu] Token verrouillé P2PK créé pour:', recipientPubkey.slice(0, 20) + '...');
-  return lockedToken;
+  // NUT-10 P2PK : le verrouillage doit être appliqué au moment de la création des
+  // BlindedMessages (outputs), AVANT l'émission par le mint. Modifier le champ `secret`
+  // d'un proof déjà émis rend le proof invalide car le mint a signé hash_to_curve(secret_original).
+  throw new Error(
+    'createP2pkToken non supporté : le verrouillage P2PK (NUT-10) doit être effectué ' +
+    "lors de la création des outputs blindés, pas après l'émission du mint."
+  );
 }
 
 export function isP2pkToken(token: CashuToken): boolean {

@@ -45,19 +45,26 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
     queryFn: async () => {
       console.log('[WalletSeed] Loading stored mnemonic...');
       try {
-        // Essayer SecureStore d'abord
+        // 1. Essayer SecureStore (Android Keystore / iOS Keychain)
         let stored = await SecureStore.getItemAsync(MNEMONIC_KEY);
-        
-        // Fallback sur AsyncStorage si SecureStore vide
-        if (!stored) {
-          stored = await AsyncStorage.getItem(MNEMONIC_KEY);
-          if (stored) {
-            console.log('[WalletSeed] Mnemonic trouvé dans AsyncStorage (fallback)');
-          }
+
+        if (stored) {
+          console.log('[WalletSeed] Mnemonic trouvé dans SecureStore (TEE/Keychain)');
         } else {
-          console.log('[WalletSeed] Mnemonic trouvé dans SecureStore');
+          // 2. Migration unique : si l'ancienne version avait stocké dans AsyncStorage non chiffré,
+          //    migrer vers SecureStore et supprimer l'entrée non chiffrée.
+          const legacy = await AsyncStorage.getItem(MNEMONIC_KEY);
+          if (legacy && validateMnemonic(legacy)) {
+            console.warn('[WalletSeed] Migration : mnemonic non chiffré détecté dans AsyncStorage, migration vers SecureStore...');
+            await SecureStore.setItemAsync(MNEMONIC_KEY, legacy);
+            await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+            await AsyncStorage.removeItem(MNEMONIC_KEY);
+            await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
+            console.log('[WalletSeed] Migration réussie — AsyncStorage nettoyé');
+            stored = legacy;
+          }
         }
-        
+
         if (stored && validateMnemonic(stored)) {
           console.log('[WalletSeed] Mnemonic valide chargé');
           return stored;
@@ -77,8 +84,8 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       setMnemonic(loadQuery.data);
       const info = deriveWalletInfo(loadQuery.data);
       setWalletInfo(info);
-      setReceiveAddresses(deriveReceiveAddresses(loadQuery.data, 5));
-      setChangeAddresses(deriveChangeAddresses(loadQuery.data, 5));
+      setReceiveAddresses(deriveReceiveAddresses(loadQuery.data, 20));
+      setChangeAddresses(deriveChangeAddresses(loadQuery.data, 20));
       setIsInitialized(true);
     } else if (loadQuery.isFetched) {
       setIsInitialized(false);
@@ -92,17 +99,11 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
         const newMnemonic = generateMnemonic(strength);
         console.log('[WalletSeed] Mnemonic generated, saving...');
         
-        // Essayer SecureStore d'abord, fallback sur AsyncStorage
-        try {
-          await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
-          await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
-          console.log('[WalletSeed] Saved to SecureStore');
-        } catch (secureErr) {
-          console.warn('[WalletSeed] SecureStore failed, using AsyncStorage fallback:', secureErr);
-          await AsyncStorage.setItem(MNEMONIC_KEY, newMnemonic);
-          await AsyncStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
-          console.log('[WalletSeed] Saved to AsyncStorage (fallback)');
-        }
+        // Stocker UNIQUEMENT dans SecureStore (Android Keystore / iOS Keychain)
+        // Pas de fallback AsyncStorage — il ne chiffre pas les données
+        await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
+        await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+        console.log('[WalletSeed] Saved to SecureStore (TEE/Keychain)');
         
         return newMnemonic;
       } catch (error: any) {
@@ -115,8 +116,8 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       setMnemonic(newMnemonic);
       const info = deriveWalletInfo(newMnemonic);
       setWalletInfo(info);
-      setReceiveAddresses(deriveReceiveAddresses(newMnemonic, 5));
-      setChangeAddresses(deriveChangeAddresses(newMnemonic, 5));
+      setReceiveAddresses(deriveReceiveAddresses(newMnemonic, 20));
+      setChangeAddresses(deriveChangeAddresses(newMnemonic, 20));
       setIsInitialized(true);
       console.log('[WalletSeed] Wallet initialized successfully');
     },
@@ -135,25 +136,18 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
         throw new Error('Invalid mnemonic phrase');
       }
       
-      // Essayer SecureStore d'abord, fallback sur AsyncStorage
-      try {
-        await SecureStore.setItemAsync(MNEMONIC_KEY, trimmed);
-        await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
-      } catch (secureErr) {
-        console.warn('[WalletSeed] SecureStore failed, using AsyncStorage fallback:', secureErr);
-        await AsyncStorage.setItem(MNEMONIC_KEY, trimmed);
-        await AsyncStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
-      }
-      
-      console.log('[WalletSeed] Imported wallet saved');
+      // Stocker UNIQUEMENT dans SecureStore (Android Keystore / iOS Keychain)
+      await SecureStore.setItemAsync(MNEMONIC_KEY, trimmed);
+      await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+      console.log('[WalletSeed] Imported wallet saved to SecureStore (TEE/Keychain)');
       return trimmed;
     },
     onSuccess: (importedMnemonic) => {
       setMnemonic(importedMnemonic);
       const info = deriveWalletInfo(importedMnemonic);
       setWalletInfo(info);
-      setReceiveAddresses(deriveReceiveAddresses(importedMnemonic, 5));
-      setChangeAddresses(deriveChangeAddresses(importedMnemonic, 5));
+      setReceiveAddresses(deriveReceiveAddresses(importedMnemonic, 20));
+      setChangeAddresses(deriveChangeAddresses(importedMnemonic, 20));
       setIsInitialized(true);
     },
     onError: (err) => {
