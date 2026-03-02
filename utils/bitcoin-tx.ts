@@ -347,21 +347,10 @@ export async function signTransaction(
       }
 
       if (!signed) {
-        console.log('[BitcoinTx] Input', i, '- trying first key as fallback');
-        const fallbackKey = derivedKeys[0];
-        if (fallbackKey) {
-          const signer = {
-            publicKey: Buffer.from(fallbackKey.publicKey),
-            sign: (hash: Buffer) => {
-              const sig = secp256k1.ecdsaSign(
-                new Uint8Array(hash),
-                fallbackKey.privateKey
-              );
-              return Buffer.from(sig.signature);
-            },
-          };
-          psbt.signInput(i, signer);
-        }
+        throw new Error(
+          `Input ${i} : aucune clé HD correspondante. scriptPubKey=${inputScript?.toString('hex') ?? 'inconnu'}. ` +
+          `Vérifiez que les UTXOs appartiennent bien à ce wallet (gap limit = ${MAX_ADDRESS_SCAN}).`
+        );
       }
     }
 

@@ -204,6 +204,21 @@ export function deriveReceiveAddresses(mnemonic: string, count: number = 5, pass
   return addresses;
 }
 
+export function deriveChangeAddresses(mnemonic: string, count: number = 5, passphrase?: string): string[] {
+  const seed = mnemonicToSeed(mnemonic, passphrase);
+  const master = HDKey.fromMasterSeed(seed);
+  const account = master.derive(BIP44_BTC_PATH);
+
+  const addresses: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const child = account.deriveChild(1).deriveChild(i); // branch interne m/84'/0'/0'/1/i
+    if (child.publicKey) {
+      addresses.push(pubkeyToSegwitAddress(child.publicKey, true));
+    }
+  }
+  return addresses;
+}
+
 export function shortenAddress(address: string): string {
   if (address.length <= 16) return address;
   return `${address.slice(0, 10)}...${address.slice(-6)}`;

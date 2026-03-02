@@ -14,7 +14,7 @@ import {
   type MempoolUtxo,
   type MempoolFeeEstimates,
 } from '@/utils/mempool';
-import { createTransaction, estimateFee, validateAddress, signTransaction } from '@/utils/bitcoin-tx';
+import { createTransactionWithFetch, estimateFee, validateAddress, signTransaction } from '@/utils/bitcoin-tx';
 
 export interface BitcoinTransaction {
   txid: string;
@@ -40,7 +40,7 @@ export interface BitcoinState {
 }
 
 export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState => {
-  const { walletInfo, receiveAddresses, isInitialized, mnemonic } = useWalletSeed();
+  const { walletInfo, receiveAddresses, changeAddresses, isInitialized, mnemonic } = useWalletSeed();
   
   const [balance, setBalance] = useState(0);
   const [unconfirmedBalance, setUnconfirmedBalance] = useState(0);
@@ -66,23 +66,47 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
     setError(null);
 
     try {
-      const primaryAddress = receiveAddresses[0];
-      
-      console.log('[Bitcoin] Sync adresse:', primaryAddress);
+      console.log('[Bitcoin] Sync', receiveAddresses.length, 'adresses...');
 
-      const [balanceData, utxosData, feesData] = await Promise.all([
-        getAddressBalance(primaryAddress),
-        getAddressUtxos(primaryAddress),
+      const [balancesData, utxosData, feesData, rawTxs] = await Promise.all([
+        Promise.all(receiveAddresses.map(addr => getAddressBalance(addr))),
+        Promise.all(receiveAddresses.map(addr => getAddressUtxos(addr))),
         getFeeEstimates(),
+        getAddressTransactions(receiveAddresses[0]).catch(() => [] as any[]),
       ]);
 
-      setBalance(balanceData.confirmed);
-      setUnconfirmedBalance(balanceData.unconfirmed);
-      setUtxos(utxosData);
+      const totalConfirmed = balancesData.reduce((sum, b) => sum + b.confirmed, 0);
+      const totalUnconfirmed = balancesData.reduce((sum, b) => sum + b.unconfirmed, 0);
+      const allUtxos = utxosData.flat();
+
+      const mappedTxs: BitcoinTransaction[] = rawTxs.map((tx: any) => {
+        const received = (tx.vout ?? []).reduce((sum: number, o: any) => {
+          if (receiveAddresses.includes(o.scriptpubkey_address)) return sum + (o.value ?? 0);
+          return sum;
+        }, 0);
+        const spent = (tx.vin ?? []).reduce((sum: number, inp: any) => {
+          if (receiveAddresses.includes(inp.prevout?.scriptpubkey_address)) return sum + (inp.prevout?.value ?? 0);
+          return sum;
+        }, 0);
+        const net = received - spent;
+        return {
+          txid: tx.txid,
+          amount: Math.abs(net),
+          type: net >= 0 ? 'incoming' : 'outgoing',
+          confirmed: tx.status?.confirmed ?? false,
+          timestamp: tx.status?.block_time,
+          fee: tx.fee,
+        };
+      });
+
+      setBalance(totalConfirmed);
+      setUnconfirmedBalance(totalUnconfirmed);
+      setUtxos(allUtxos);
+      setTransactions(mappedTxs);
       setFeeEstimates(feesData);
       setLastSync(Date.now());
 
-      console.log('[Bitcoin] Sync OK - Solde:', balanceData.confirmed, 'sats');
+      console.log('[Bitcoin] Sync OK - Solde:', totalConfirmed, 'sats -', allUtxos.length, 'UTXOs -', mappedTxs.length, 'txs');
     } catch (err) {
       console.error('[Bitcoin] Erreur sync:', err);
       setError(String(err));
@@ -138,22 +162,24 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
       throw new Error('Solde insuffisant');
     }
 
-    const primaryAddress = receiveAddresses[0];
-    
+    // Utiliser une adresse de change dédiée (branche interne m/84'/0'/0'/1/0)
+    // pour éviter la réutilisation d'adresse
+    const changeAddr = changeAddresses?.[0] ?? receiveAddresses[0];
+
     console.log('[Bitcoin] Création transaction:', {
       to: toAddress,
       amount: amountSats,
       feeRate,
+      changeAddr,
     });
 
     try {
-      const unsignedTx = createTransaction(
+      const unsignedTx = await createTransactionWithFetch(
         utxos,
         toAddress,
         amountSats,
-        primaryAddress,
+        changeAddr,
         feeRate,
-        mnemonic
       );
 
       console.log('[Bitcoin] Transaction créée:', unsignedTx.txid);

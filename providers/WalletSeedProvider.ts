@@ -8,6 +8,7 @@ import {
   validateMnemonic,
   deriveWalletInfo,
   deriveReceiveAddresses,
+  deriveChangeAddresses,
   shortenAddress,
   DerivedWalletInfo,
 } from '@/utils/bitcoin';
@@ -19,6 +20,7 @@ export interface WalletSeedState {
   mnemonic: string | null;
   walletInfo: DerivedWalletInfo | null;
   receiveAddresses: string[];
+  changeAddresses: string[];
   isInitialized: boolean;
   isLoading: boolean;
   isGenerating: boolean;
@@ -35,6 +37,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [walletInfo, setWalletInfo] = useState<DerivedWalletInfo | null>(null);
   const [receiveAddresses, setReceiveAddresses] = useState<string[]>([]);
+  const [changeAddresses, setChangeAddresses] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
 
   const loadQuery = useQuery({
@@ -75,6 +78,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       const info = deriveWalletInfo(loadQuery.data);
       setWalletInfo(info);
       setReceiveAddresses(deriveReceiveAddresses(loadQuery.data, 5));
+      setChangeAddresses(deriveChangeAddresses(loadQuery.data, 5));
       setIsInitialized(true);
     } else if (loadQuery.isFetched) {
       setIsInitialized(false);
@@ -112,6 +116,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       const info = deriveWalletInfo(newMnemonic);
       setWalletInfo(info);
       setReceiveAddresses(deriveReceiveAddresses(newMnemonic, 5));
+      setChangeAddresses(deriveChangeAddresses(newMnemonic, 5));
       setIsInitialized(true);
       console.log('[WalletSeed] Wallet initialized successfully');
     },
@@ -148,6 +153,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       const info = deriveWalletInfo(importedMnemonic);
       setWalletInfo(info);
       setReceiveAddresses(deriveReceiveAddresses(importedMnemonic, 5));
+      setChangeAddresses(deriveChangeAddresses(importedMnemonic, 5));
       setIsInitialized(true);
     },
     onError: (err) => {
@@ -168,6 +174,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       setMnemonic(null);
       setWalletInfo(null);
       setReceiveAddresses([]);
+      setChangeAddresses([]);
       setIsInitialized(false);
     },
   });
@@ -195,6 +202,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
     mnemonic,
     walletInfo,
     receiveAddresses,
+    changeAddresses,
     isInitialized,
     isLoading: loadQuery.isLoading,
     isGenerating: generateMutation.isPending,
