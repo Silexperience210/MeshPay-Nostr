@@ -52,6 +52,10 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
   const [error, setError] = useState<string | null>(null);
   
   const syncIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mutex anti double-envoi : empêche deux transactions simultanées sur les mêmes UTXOs
+  const isSendingRef = useRef(false);
+  // Index change address : incrémenter à chaque tx pour éviter la réutilisation d'adresse
+  const changeIndexRef = useRef(0);
 
   /**
    * Rafraîchit le solde et les UTXOs
@@ -157,30 +161,38 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
       throw new Error('Wallet non initialisé');
     }
 
-    if (!validateAddress(toAddress)) {
-      throw new Error('Adresse invalide');
+    // Mutex : bloque un second envoi pendant que le premier est en cours
+    if (isSendingRef.current) {
+      throw new Error('Un envoi est déjà en cours, veuillez patienter');
     }
-
-    if (amountSats <= 0) {
-      throw new Error('Montant invalide');
-    }
-
-    if (amountSats > balance) {
-      throw new Error('Solde insuffisant');
-    }
-
-    // Utiliser une adresse de change dédiée (branche interne m/84'/0'/0'/1/0)
-    // pour éviter la réutilisation d'adresse
-    const changeAddr = changeAddresses?.[0] ?? receiveAddresses[0];
-
-    console.log('[Bitcoin] Création transaction:', {
-      to: toAddress,
-      amount: amountSats,
-      feeRate,
-      changeAddr,
-    });
+    isSendingRef.current = true;
 
     try {
+      if (!validateAddress(toAddress)) {
+        throw new Error('Adresse invalide');
+      }
+
+      if (amountSats <= 0) {
+        throw new Error('Montant invalide');
+      }
+
+      // Snapshot du solde au moment du lock (évite la TOCTOU)
+      const currentBalance = balance;
+      if (amountSats > currentBalance) {
+        throw new Error('Solde insuffisant');
+      }
+
+      // Change address avec index incrémental (évite la réutilisation d'adresse)
+      const changeIdx = changeIndexRef.current % (changeAddresses?.length || 1);
+      const changeAddr = changeAddresses?.[changeIdx] ?? receiveAddresses[0];
+
+      console.log('[Bitcoin] Création transaction:', {
+        to: toAddress,
+        amount: amountSats,
+        feeRate,
+        changeAddr: `index ${changeIdx}`,
+      });
+
       const unsignedTx = await createTransactionWithFetch(
         utxos,
         toAddress,
@@ -191,25 +203,30 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
 
       console.log('[Bitcoin] Transaction créée:', unsignedTx.txid);
       console.log('[Bitcoin] Frais:', unsignedTx.fee);
-      
+
       // Signer la transaction
       const signedHex = await signTransaction(unsignedTx.hex, mnemonic, utxos);
-      
+
       // Broadcast
       const { txid } = await broadcastTransaction(signedHex);
-      
+
       console.log('[Bitcoin] Transaction broadcastée:', txid);
-      
+
+      // Incrémenter l'index de change après succès
+      changeIndexRef.current += 1;
+
       // Rafraîchir le solde
       await refreshBalance();
-      
+
       return { txid, hex: signedHex };
-      
+
     } catch (error) {
       console.error('[Bitcoin] Erreur création transaction:', error);
       throw error;
+    } finally {
+      isSendingRef.current = false;
     }
-  }, [isInitialized, receiveAddresses, mnemonic, balance, utxos]);
+  }, [isInitialized, receiveAddresses, changeAddresses, mnemonic, balance, utxos, refreshBalance]);
 
   // Sync au montage
   useEffect(() => {

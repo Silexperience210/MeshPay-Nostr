@@ -368,9 +368,9 @@ export const fetchBtcPrice = async (_mempoolUrl?: string, currency?: string): Pr
     console.log('[Price] Prix BTC:', price, currency || 'USD');
     return price;
   } catch (error) {
-    console.error('[Price] Erreur prix BTC:', error);
-    // Fallback silencieux (pas d'alerte pour pas spammer)
-    return currency === 'EUR' ? 60000 : 65000;
+    console.warn('[Price] API indisponible, prix indicatif (mars 2026)');
+    // Valeurs indicatives — rafraîchir dès que l'API répond
+    return currency === 'EUR' ? 82000 : 88000;
   }
 };
 export const formatTransactions = (raw: any[], addresses: string[]): any[] => raw;

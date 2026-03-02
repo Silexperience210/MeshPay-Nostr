@@ -95,11 +95,14 @@ function generateBlindingFactor(): bigint {
   if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
     throw new Error('crypto.getRandomValues indisponible — environnement non sécurisé');
   }
-  const randomBytes = new Uint8Array(32);
-  crypto.getRandomValues(randomBytes);
   const n = secp256k1.CURVE.n;
-  let r = BigInt('0x' + bytesToHex(randomBytes));
-  r = r % (n - 1n) + 1n;
+  const randomBytes = new Uint8Array(32);
+  // Rejection sampling — évite le biais modulo (2^256 n'est pas divisible par n)
+  let r: bigint;
+  do {
+    crypto.getRandomValues(randomBytes);
+    r = BigInt('0x' + bytesToHex(randomBytes));
+  } while (r === 0n || r >= n);
   return r;
 }
 
@@ -867,7 +870,9 @@ export function createAtomicSwap(
   secret: string,
   timelockHours: number = 24
 ): AtomicSwapRequest {
-  const id = `swap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const idBytes = new Uint8Array(6);
+  crypto.getRandomValues(idBytes);
+  const id = `swap_${Date.now()}_${bytesToHex(idBytes)}`;
   const secretBytes = new TextEncoder().encode(secret);
   const hashBytes = sha256(secretBytes);
   const hashlock = bytesToHex(hashBytes);

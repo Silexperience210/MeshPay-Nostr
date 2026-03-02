@@ -283,14 +283,14 @@ export async function signTransaction(
   mnemonic: string,
   _utxos: MempoolUtxo[]
 ): Promise<string> {
+  // Déclaré en dehors du try pour être accessible dans le finally (effacement mémoire)
+  const derivedKeys: Array<{ index: number; publicKey: Uint8Array; privateKey: Uint8Array; scriptPubKey: Buffer }> = [];
   try {
     const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: NETWORK });
 
     const seed = mnemonicToSeed(mnemonic);
     const masterKey = HDKey.fromMasterSeed(seed);
     const accountKey = masterKey.derive("m/84'/0'/0'");
-
-    const derivedKeys: Array<{ index: number; publicKey: Uint8Array; privateKey: Uint8Array; scriptPubKey: Buffer }> = [];
     for (let i = 0; i < MAX_ADDRESS_SCAN; i++) {
       const child = accountKey.deriveChild(0).deriveChild(i);
       if (child.publicKey && child.privateKey) {
@@ -364,12 +364,19 @@ export async function signTransaction(
     psbt.finalizeAllInputs();
 
     const tx = psbt.extractTransaction();
+    const txHex = tx.toHex();
     console.log('[BitcoinTx] Transaction signed, txid:', tx.getId());
-    return tx.toHex();
+    return txHex;
 
   } catch (error) {
     console.error('[BitcoinTx] Erreur signature:', error);
     throw new Error(`Signature échouée: ${error}`);
+  } finally {
+    // Effacer systématiquement les clés privées de la mémoire (succès OU erreur)
+    for (const key of derivedKeys) {
+      key.privateKey.fill(0);
+    }
+    derivedKeys.length = 0;
   }
 }
 

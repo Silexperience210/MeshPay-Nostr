@@ -40,12 +40,15 @@ export default function SendBitcoinModal({
   const [customFeeRate, setCustomFeeRate] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
 
+  const MAX_CUSTOM_FEE_RATE = 500; // sat/vB — au-delà c'est très probablement une erreur
+
   const feeRate = useMemo(() => {
     if (feeSpeed === 'custom') {
       const parsed = parseInt(customFeeRate, 10);
       const minFee = fees?.minimumFee ?? 1;
-      // Ne pas accepter un fee en dessous du minimum réseau
-      return isNaN(parsed) || parsed < minFee ? minFee : parsed;
+      if (isNaN(parsed) || parsed < minFee) return minFee;
+      // Plafonner à MAX_CUSTOM_FEE_RATE pour éviter de brûler des fonds par erreur
+      return Math.min(parsed, MAX_CUSTOM_FEE_RATE);
     }
     if (!fees) return 2;
     switch (feeSpeed) {
@@ -78,6 +81,16 @@ export default function SendBitcoinModal({
     }
     return null;
   }, [amountSats, estimatedFee, balance]);
+
+  // Avertissement frais anormalement élevés (>200 sat/vB)
+  const highFeeWarning = useMemo(() => {
+    if (feeSpeed !== 'custom') return null;
+    const parsed = parseInt(customFeeRate, 10);
+    if (!isNaN(parsed) && parsed > 200) {
+      return `⚠️ Frais très élevés : ${Math.min(parsed, MAX_CUSTOM_FEE_RATE)} sat/vB. Plafond appliqué à ${MAX_CUSTOM_FEE_RATE} sat/vB.`;
+    }
+    return null;
+  }, [feeSpeed, customFeeRate]);
 
   const currencySymbol = currency === 'USD' ? '$' : '\u20ac';
 
@@ -221,6 +234,10 @@ export default function SendBitcoinModal({
             </View>
           )}
 
+          {highFeeWarning && (
+            <Text style={styles.warningText}>{highFeeWarning}</Text>
+          )}
+
           <View style={styles.balanceRow}>
             <Text style={styles.balanceLabel}>Available</Text>
             <Text style={styles.balanceValue}>{balance.toLocaleString()} sats</Text>
@@ -319,6 +336,12 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontSize: 11,
     marginTop: 4,
+  },
+  warningText: {
+    color: '#F59E0B',
+    fontSize: 11,
+    marginTop: 6,
+    fontWeight: '600' as const,
   },
   feeSpeedGrid: {
     flexDirection: 'row' as const,
