@@ -191,6 +191,11 @@ export class NostrClient {
     this.keypair = keypair;
   }
 
+  /** Clé publique hex 64 chars de l'utilisateur courant, null si keypair non initialisée */
+  get publicKey(): string | null {
+    return this.keypair?.publicKey ?? null;
+  }
+
   setOnStatusChange(cb: (relays: RelayInfo[]) => void): void {
     this.onStatusChange = cb;
   }

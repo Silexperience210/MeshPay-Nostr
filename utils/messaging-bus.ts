@@ -221,19 +221,8 @@ export class MessagingBus {
     const { toNodeId, toNostrPubkey, content, encryptedPayload } = params;
 
     if (this.preferredTransport === 'nostr') {
+      // publishDM gère le NIP-04 (chiffrement + tag ['p', recipientPubkey])
       await this.nostr.publishDM(toNostrPubkey, content);
-      // Publier aussi les tags de routing MeshCore pour que le destinataire
-      // puisse identifier l'expéditeur même sans connaître son npub
-      await this.nostr.publish({
-        kind: Kind.EncryptedDM,
-        content: await this.nostr['keypair'] ? content : content,
-        tags: [
-          ['p', toNostrPubkey],
-          ['meshcore-from', this.localNodeId],
-          ['meshcore-to', toNodeId],
-        ],
-        created_at: Math.floor(Date.now() / 1000),
-      }).catch(() => {}); // publishDM ci-dessus suffit, cette version enrichie est best-effort
       return 'nostr';
     }
 
