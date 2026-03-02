@@ -43,7 +43,9 @@ export default function SendBitcoinModal({
   const feeRate = useMemo(() => {
     if (feeSpeed === 'custom') {
       const parsed = parseInt(customFeeRate, 10);
-      return isNaN(parsed) || parsed < 1 ? 1 : parsed;
+      const minFee = fees?.minimumFee ?? 1;
+      // Ne pas accepter un fee en dessous du minimum réseau
+      return isNaN(parsed) || parsed < minFee ? minFee : parsed;
     }
     if (!fees) return 2;
     switch (feeSpeed) {
@@ -66,6 +68,16 @@ export default function SendBitcoinModal({
   const fiatValue = useMemo(() => satsToFiat(amountSats, btcPrice), [amountSats, btcPrice]);
 
   const canSend = address.trim().length > 0 && amountSats > 0 && amountSats + estimatedFee <= balance;
+
+  // Avertissement dust : le change serait inférieur à 546 sats (serait brûlé silencieusement)
+  const dustWarning = useMemo(() => {
+    if (amountSats <= 0 || estimatedFee <= 0) return null;
+    const change = balance - amountSats - estimatedFee;
+    if (change > 0 && change < 546) {
+      return `Note : ${change} sats de change seront ajoutés aux frais (montant inférieur au dust limit de 546 sats).`;
+    }
+    return null;
+  }, [amountSats, estimatedFee, balance]);
 
   const currencySymbol = currency === 'USD' ? '$' : '\u20ac';
 
@@ -92,9 +104,10 @@ export default function SendBitcoinModal({
       return;
     }
 
+    const dustNote = dustWarning ? '\n\n⚠️ ' + dustWarning : '';
     Alert.alert(
       'Confirm Send',
-      'Send ' + amountSats.toLocaleString() + ' sats to ' + trimmedAddr.slice(0, 12) + '...?\nFee: ~' + estimatedFee + ' sats (' + feeRate + ' sat/vB)',
+      'Send ' + amountSats.toLocaleString() + ' sats to ' + trimmedAddr.slice(0, 12) + '...?\nFee: ~' + estimatedFee + ' sats (' + feeRate + ' sat/vB)' + dustNote,
       [
         { text: 'Cancel', style: 'cancel' },
         {

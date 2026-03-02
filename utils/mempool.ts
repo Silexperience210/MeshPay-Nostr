@@ -169,6 +169,7 @@ export interface MempoolUtxo {
   vout: number;
   value: number;
   status: MempoolTxStatus;
+  address?: string; // adresse propriétaire — attachée localement (non retournée par l'API)
 }
 
 export interface MempoolFeeEstimates {
@@ -178,6 +179,9 @@ export interface MempoolFeeEstimates {
   economyFee: number;
   minimumFee: number;
 }
+
+// Alias pour compatibilité (ancien nom singulier utilisé dans certains composants)
+export type MempoolFeeEstimate = MempoolFeeEstimates;
 
 /**
  * Teste la connexion à mempool.space
@@ -210,8 +214,10 @@ export async function getAddressUtxos(address: string, url?: string): Promise<Me
       undefined,
       url
     );
-    console.log(`[Mempool] ${utxos.length} UTXOs trouvés pour ${address}`);
-    return utxos;
+    // Attacher l'adresse source à chaque UTXO (l'API Mempool ne la retourne pas)
+    const withAddress = utxos.map(u => ({ ...u, address }));
+    console.log(`[Mempool] ${withAddress.length} UTXOs trouvés pour ${address}`);
+    return withAddress;
   } catch (error) {
     console.error('[Mempool] Erreur récupération UTXOs:', error);
     throw error;
@@ -387,10 +393,4 @@ export interface FormattedTransaction {
   fee?: number;
 }
 
-export interface MempoolFeeEstimate {
-  fastestFee: number;
-  halfHourFee: number;
-  hourFee: number;
-  economyFee: number;
-  minimumFee: number;
-}
+// MempoolFeeEstimate est désormais un alias de MempoolFeeEstimates (défini plus haut)

@@ -104,17 +104,26 @@ function selectUtxos(utxos: MempoolUtxo[], targetAmount: number, feeRate: number
   throw new Error('Fonds insuffisants');
 }
 
-async function fetchUtxoScriptPubKey(txid: string, vout: number, mempoolUrl: string = 'https://mempool.space/api'): Promise<string | null> {
-  try {
-    const response = await fetch(`${mempoolUrl}/tx/${txid}`);
-    if (!response.ok) return null;
-    const tx = await response.json();
-    const output = tx.vout?.[vout];
-    return output?.scriptpubkey || null;
-  } catch (err) {
-    console.error('[BitcoinTx] Failed to fetch scriptPubKey:', err);
-    return null;
+const SCRIPTPUBKEY_FALLBACK_URLS = [
+  'https://mempool.space/api',
+  'https://blockstream.info/api',
+];
+
+async function fetchUtxoScriptPubKey(txid: string, vout: number, primaryUrl: string = 'https://mempool.space/api'): Promise<string | null> {
+  const candidates = [...new Set([primaryUrl, ...SCRIPTPUBKEY_FALLBACK_URLS])];
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/tx/${txid}`);
+      if (!response.ok) continue;
+      const tx = await response.json();
+      const output = tx.vout?.[vout];
+      if (output?.scriptpubkey) return output.scriptpubkey;
+    } catch {
+      continue;
+    }
   }
+  console.error('[BitcoinTx] fetchUtxoScriptPubKey: échec sur tous les endpoints pour', txid, ':', vout);
+  return null;
 }
 
 export function createTransaction(
@@ -136,23 +145,21 @@ export function createTransaction(
   for (const utxo of selected) {
     let scriptPubKey: Buffer | null = null;
 
-    if (derivedAddresses.length > 0) {
-      for (const derived of derivedAddresses) {
-        const utxoAddressFromKey = derived.address;
+    // Chercher la clé dérivée correspondant à l'adresse de cet UTXO (fix : non plus premier blindly)
+    if (derivedAddresses.length > 0 && utxo.address) {
+      const derived = derivedAddresses.find(d => d.address === utxo.address);
+      if (derived) {
         scriptPubKey = derived.scriptPubKey;
-        break;
       }
     }
 
     if (!scriptPubKey) {
+      // Fallback : dériver le script depuis l'adresse UTXO connue ou l'adresse de change
+      const addrForScript = utxo.address ?? changeAddress;
       try {
-        scriptPubKey = bitcoin.address.toOutputScript(changeAddress, NETWORK);
+        scriptPubKey = bitcoin.address.toOutputScript(addrForScript, NETWORK);
       } catch (_err) {
-        const h160Placeholder = Buffer.alloc(20, 0);
-        scriptPubKey = Buffer.alloc(22);
-        scriptPubKey[0] = 0x00;
-        scriptPubKey[1] = 0x14;
-        h160Placeholder.copy(scriptPubKey, 2);
+        throw new Error(`Impossible de dériver le scriptPubKey pour l'UTXO ${utxo.txid}:${utxo.vout} (adresse: ${addrForScript})`);
       }
     }
 
