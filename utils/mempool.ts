@@ -125,15 +125,29 @@ function parseFeeEstimateNumber(value: unknown, fallback: number): number {
   return Math.ceil(value);
 }
 
+const MAX_REASONABLE_FEE = 1000; // sat/vB — au-delà = probablement une erreur API ou MITM
+
 function normalizeFeeEstimates(data: unknown): MempoolFeeEstimates {
   const fees = (typeof data === 'object' && data !== null ? data : {}) as Partial<MempoolFeeEstimates>;
 
+  const fastest = parseFeeEstimateNumber(fees.fastestFee, DEFAULT_FEE_ESTIMATES.fastestFee);
+  const halfHour = parseFeeEstimateNumber(fees.halfHourFee, DEFAULT_FEE_ESTIMATES.halfHourFee);
+  const hour = parseFeeEstimateNumber(fees.hourFee, DEFAULT_FEE_ESTIMATES.hourFee);
+  const economy = parseFeeEstimateNumber(fees.economyFee, DEFAULT_FEE_ESTIMATES.economyFee);
+  const minimum = parseFeeEstimateNumber(fees.minimumFee, DEFAULT_FEE_ESTIMATES.minimumFee);
+
+  // Sanity check : si l'API retourne des frais absurdes (MITM ou bug), utiliser les valeurs par défaut
+  if (fastest > MAX_REASONABLE_FEE || halfHour > MAX_REASONABLE_FEE || economy > MAX_REASONABLE_FEE) {
+    console.warn('[Mempool] Frais anormalement élevés reçus de l\'API, utilisation des valeurs par défaut');
+    return DEFAULT_FEE_ESTIMATES;
+  }
+
   return {
-    fastestFee: parseFeeEstimateNumber(fees.fastestFee, DEFAULT_FEE_ESTIMATES.fastestFee),
-    halfHourFee: parseFeeEstimateNumber(fees.halfHourFee, DEFAULT_FEE_ESTIMATES.halfHourFee),
-    hourFee: parseFeeEstimateNumber(fees.hourFee, DEFAULT_FEE_ESTIMATES.hourFee),
-    economyFee: parseFeeEstimateNumber(fees.economyFee, DEFAULT_FEE_ESTIMATES.economyFee),
-    minimumFee: parseFeeEstimateNumber(fees.minimumFee, DEFAULT_FEE_ESTIMATES.minimumFee),
+    fastestFee: fastest,
+    halfHourFee: halfHour,
+    hourFee: hour,
+    economyFee: economy,
+    minimumFee: minimum,
   };
 }
 
@@ -286,9 +300,14 @@ export async function broadcastTransaction(txHex: string, url?: string): Promise
       },
       url
     );
-    console.log('[Mempool] Transaction broadcastée:', txid);
-    
-    return { txid };
+    // Valider que le txid est bien un hash Bitcoin (64 hex chars = 32 bytes)
+    const cleanTxid = txid.trim();
+    if (!/^[a-f0-9]{64}$/i.test(cleanTxid)) {
+      throw new Error(`Format txid invalide reçu du serveur : ${cleanTxid.slice(0, 60)}`);
+    }
+
+    console.log('[Mempool] Transaction broadcastée:', cleanTxid);
+    return { txid: cleanTxid };
   } catch (error) {
     console.error('[Mempool] Erreur broadcast:', error);
     throw error;

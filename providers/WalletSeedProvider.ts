@@ -133,7 +133,15 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       console.log('[WalletSeed] Importing wallet...');
       const trimmed = importedMnemonic.trim().toLowerCase();
       if (!validateMnemonic(trimmed)) {
-        throw new Error('Invalid mnemonic phrase');
+        throw new Error('Phrase mnémonique invalide (vérifiez les mots et l\'ordre)');
+      }
+
+      const wordCount = trimmed.split(/\s+/).length;
+      if (wordCount !== 12 && wordCount !== 24) {
+        throw new Error(`Longueur invalide : ${wordCount} mots (12 ou 24 requis)`);
+      }
+      if (wordCount === 12) {
+        console.warn('[WalletSeed] Import 12 mots (128-bit) — envisagez 24 mots pour plus de sécurité');
       }
       
       // Stocker UNIQUEMENT dans SecureStore (Android Keystore / iOS Keychain)

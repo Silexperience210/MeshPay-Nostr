@@ -82,8 +82,17 @@ function selectUtxos(utxos: MempoolUtxo[], targetAmount: number, feeRate: number
   total: number;
   fee: number;
 } {
-  const sorted = [...utxos].sort((a, b) => b.value - a.value);
+  // Garde-fous : valeurs entières sûres (Bitcoin max ~2.1×10^15 sats < 2^53)
+  if (!Number.isSafeInteger(targetAmount) || targetAmount <= 0) {
+    throw new Error(`Montant invalide : ${targetAmount}`);
+  }
+  for (const utxo of utxos) {
+    if (!Number.isSafeInteger(utxo.value) || utxo.value <= 0) {
+      throw new Error(`Valeur UTXO invalide : ${utxo.txid}:${utxo.vout} = ${utxo.value}`);
+    }
+  }
 
+  const sorted = [...utxos].sort((a, b) => b.value - a.value);
   const selected: MempoolUtxo[] = [];
   let total = 0;
 
@@ -109,16 +118,25 @@ const SCRIPTPUBKEY_FALLBACK_URLS = [
   'https://blockstream.info/api',
 ];
 
+const SCRIPTPUBKEY_FETCH_TIMEOUT_MS = 5000;
+
 async function fetchUtxoScriptPubKey(txid: string, vout: number, primaryUrl: string = 'https://mempool.space/api'): Promise<string | null> {
   const candidates = [...new Set([primaryUrl, ...SCRIPTPUBKEY_FALLBACK_URLS])];
   for (const base of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SCRIPTPUBKEY_FETCH_TIMEOUT_MS);
     try {
-      const response = await fetch(`${base}/tx/${txid}`);
+      const response = await fetch(`${base}/tx/${txid}`, { signal: controller.signal });
+      clearTimeout(timer);
       if (!response.ok) continue;
       const tx = await response.json();
       const output = tx.vout?.[vout];
       if (output?.scriptpubkey) return output.scriptpubkey;
-    } catch {
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.warn(`[BitcoinTx] Timeout sur ${base} pour ${txid}:${vout}`);
+      }
       continue;
     }
   }
@@ -154,12 +172,14 @@ export function createTransaction(
     }
 
     if (!scriptPubKey) {
-      // Fallback : dériver le script depuis l'adresse UTXO connue ou l'adresse de change
-      const addrForScript = utxo.address ?? changeAddress;
+      // Fallback strict : utiliser l'adresse de l'UTXO uniquement (jamais changeAddress)
+      if (!utxo.address) {
+        throw new Error(`UTXO ${utxo.txid}:${utxo.vout} sans adresse — impossible de dériver le scriptPubKey`);
+      }
       try {
-        scriptPubKey = bitcoin.address.toOutputScript(addrForScript, NETWORK);
+        scriptPubKey = bitcoin.address.toOutputScript(utxo.address, NETWORK);
       } catch (_err) {
-        throw new Error(`Impossible de dériver le scriptPubKey pour l'UTXO ${utxo.txid}:${utxo.vout} (adresse: ${addrForScript})`);
+        throw new Error(`scriptPubKey invalide pour l'adresse ${utxo.address}`);
       }
     }
 
@@ -354,9 +374,11 @@ export async function signTransaction(
       }
 
       if (!signed) {
+        // Tronquer le scriptPubKey pour éviter la fuite de données sensibles dans les logs
+        const scriptHint = inputScript ? inputScript.toString('hex').slice(0, 16) + '…' : 'inconnu';
         throw new Error(
-          `Input ${i} : aucune clé HD correspondante. scriptPubKey=${inputScript?.toString('hex') ?? 'inconnu'}. ` +
-          `Vérifiez que les UTXOs appartiennent bien à ce wallet (gap limit = ${MAX_ADDRESS_SCAN}).`
+          `Input ${i} : aucune clé HD correspondante (script: ${scriptHint}). ` +
+          `Vérifiez que les UTXOs appartiennent à ce wallet (gap limit = ${MAX_ADDRESS_SCAN}).`
         );
       }
     }

@@ -320,7 +320,18 @@ export async function fetchMintKeys(mintUrl: string, keysetId?: string): Promise
   }
 
   const data = await response.json();
-  return (data as { keysets: CashuKeyset[] }).keysets ?? [];
+  const keysets: CashuKeyset[] = (data as { keysets: CashuKeyset[] }).keysets ?? [];
+
+  // Si un keyset spécifique était demandé, vérifier que le mint l'a bien retourné
+  if (keysetId) {
+    const match = keysets.find(k => k.id === keysetId);
+    if (!match) {
+      throw new Error(`Le mint n'a pas retourné le keyset demandé (${keysetId})`);
+    }
+    return [match];
+  }
+
+  return keysets;
 }
 
 export async function requestMintQuote(
@@ -507,6 +518,16 @@ export function decodeCashuToken(encoded: string): CashuToken | null {
     // Buffer.from est UTF-8 safe contrairement à atob()
     const json = Buffer.from(base64, 'base64').toString('utf8');
     const token = JSON.parse(json) as CashuToken;
+
+    // Sanitizer le mémo : limiter la taille et s'assurer que c'est bien une string
+    if (token.memo !== undefined) {
+      if (typeof token.memo !== 'string') {
+        token.memo = undefined;
+      } else if (token.memo.length > 1000) {
+        token.memo = token.memo.slice(0, 1000);
+      }
+    }
+
     console.log('[Cashu] Token décodé avec', token.token?.length, 'entrée(s)');
     return token;
   } catch (err) {
@@ -606,6 +627,12 @@ export function formatMintUrl(url: string): string {
   let clean = url.trim().replace(/\/$/, '');
   if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
     clean = 'https://' + clean;
+  }
+  // Forcer HTTPS sauf pour localhost (tests/dev local)
+  const isLocal = clean.includes('localhost') || clean.includes('127.0.0.1') || clean.includes('::1');
+  if (!isLocal && clean.startsWith('http://')) {
+    console.warn('[Cashu] URL mint non chiffrée (HTTP) — upgrade forcé vers HTTPS');
+    clean = 'https://' + clean.slice(7);
   }
   return clean;
 }
