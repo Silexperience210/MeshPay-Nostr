@@ -117,9 +117,9 @@
 
 ---
 
-## ⚡ État Actuel (Février 2026)
+## ⚡ État Actuel (Mars 2026)
 
-### ✅ V2.5 - PRODUCTION READY
+### ✅ V2.6 - PRODUCTION READY
 
 | Module | Status |
 |--------|--------|
@@ -131,6 +131,42 @@
 | GPS Radar | ✅ 100% |
 | Multi-hop routing | ✅ 100% |
 | Atomic swaps | ✅ 100% |
+| **Sécurité wallet (audit)** | ✅ **Renforcée** |
+| **Tests unitaires** | ✅ **84 tests** |
+
+---
+
+## 🔒 Sécurité — Audit Mars 2026
+
+### Corrections appliquées (v1.0.11)
+
+| Composant | Correction |
+|-----------|------------|
+| `cashu.ts` | Rejection sampling (blinding factor sans biais modulaire) |
+| `cashu.ts` | `crypto.getRandomValues` remplace `Math.random` (atomic swap ID) |
+| `cashu.ts` | HTTPS forcé pour toutes les URLs mint (anti MITM) |
+| `cashu.ts` | Validation keyset ID après `fetchMintKeys` |
+| `cashu.ts` | Sanitisation du champ `memo` (type + longueur max 1000) |
+| `bitcoin-tx.ts` | Clés privées effacées en mémoire (`fill(0)`) dans un bloc `finally` |
+| `bitcoin-tx.ts` | Timeout 5s par endpoint (`AbortController`) sur fetch scriptPubKey |
+| `bitcoin-tx.ts` | Fallback scriptPubKey strict — plus d'utilisation silencieuse de changeAddress |
+| `bitcoin-tx.ts` | Gardes `Number.isSafeInteger` sur tous les montants |
+| `BitcoinProvider.ts` | Mutex `isSendingRef` anti-envoi concurrent (TOCTOU) |
+| `BitcoinProvider.ts` | `changeIndexRef` incrémenté après chaque envoi (anti-réutilisation d'adresse) |
+| `mempool.ts` | Validation regex txid (`/^[a-f0-9]{64}$/i`) sur broadcast |
+| `mempool.ts` | Sanity check frais API — plafond 1 000 sat/vB (anti-MITM) |
+| `SendBitcoinModal.tsx` | Plafond frais custom à 500 sat/vB + avertissement visuel > 200 sat/vB |
+| `WalletSeedProvider.ts` | Validation stricte longueur mnémonique (12 ou 24 mots) |
+
+### 🗓️ TODO — Améliorations architecturales futures
+
+Ces points nécessitent des changements d'API ou de module natif :
+
+- **[ ] BigInt non-zéroable** (`cashu.ts`) — Le facteur aveugle `r` (BigInt) ne peut pas être mis à zéro comme un `Uint8Array`. Nécessite de refactoriser `createBlindedMessage`/`unblindSignature` pour travailler avec des tableaux d'octets et effacer la mémoire après usage.
+- **[ ] Mnémonique en React state** (`BitcoinProvider.ts`) — Le mnémonique passe par React state, visible dans les heap dumps. Solution : déverrouillage biométrique par transaction via module natif, ou signing dans un service worker isolé.
+- **[ ] Mode strict DLEQ** (`cashu.ts`) — Conformément à NUT-12, les preuves sans DLEQ sont actuellement acceptées (mints anciens). Ajouter un mode strict configurable rejetant les proofs sans DLEQ pour les mints non-fiables.
+- **[ ] Passphrase BIP39** (`WalletSeedProvider.ts`) — Ajouter support du 25e mot BIP39 (passphrase) à l'import/génération du wallet.
+- **[ ] Persistance changeIndex** (`BitcoinProvider.ts`) — `changeIndexRef` se remet à 0 au redémarrage. Persister dans SecureStore pour éviter la réutilisation d'adresses de change entre sessions.
 
 ---
 
