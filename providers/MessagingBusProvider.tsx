@@ -1,0 +1,165 @@
+/**
+ * MessagingBusProvider — Contexte React pour le bus de messagerie unifié
+ *
+ * Orchestre les deux transports :
+ *   - NostrProvider (Nostr — décentralisé)
+ *   - GatewayProvider / MessagesProvider (MQTT — existant, inchangé)
+ *
+ * Quand Nostr est connecté → messages envoyés via Nostr
+ * Quand Nostr est absent   → fallback MQTT transparent
+ * Les deux transports sont écoutés simultanément, avec déduplication.
+ *
+ * MQTT reste TOTALEMENT fonctionnel — ce provider est additif.
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import createContextHook from '@nkzw/create-context-hook';
+import { useNostr } from '@/providers/NostrProvider';
+import { useWalletSeed } from '@/providers/WalletSeedProvider';
+import { messagingBus, type BusMessage, type BusMessageHandler, type BusStatus } from '@/utils/messaging-bus';
+
+// ─── Interface publique ───────────────────────────────────────────────────────
+
+export interface MessagingBusState {
+  /** État des transports */
+  status: BusStatus;
+  /** Transport actuellement préféré */
+  preferredTransport: 'nostr' | 'mqtt' | 'none';
+
+  /**
+   * Envoie un DM via le transport préféré.
+   * - Nostr si connecté
+   * - MQTT sinon (fournir `encryptedPayload` pour MQTT)
+   */
+  sendDM: (params: {
+    toNodeId: string;
+    toNostrPubkey: string;
+    content: string;
+    encryptedPayload?: string;
+  }) => Promise<'nostr' | 'mqtt'>;
+
+  /**
+   * Envoie un message de channel.
+   */
+  sendChannelMessage: (params: {
+    channelId: string;
+    content: string;
+    nostrChannelId?: string;
+    encryptedPayload?: string;
+  }) => Promise<'nostr' | 'mqtt'>;
+
+  /**
+   * Abonne un handler aux messages entrants (tous transports confondus).
+   * Retourne une fonction de désabonnement.
+   */
+  subscribe: (handler: BusMessageHandler) => () => void;
+
+  /**
+   * Bridge explicite : republier un payload LoRa sur Nostr.
+   * Appelé par BleProvider quand un message LoRa est reçu.
+   */
+  bridgeLoraToNostr: (rawPayload: string) => Promise<void>;
+
+  /** Dernier message reçu (tous transports) — pour les composants réactifs */
+  lastMessage: BusMessage | null;
+}
+
+// ─── Provider ────────────────────────────────────────────────────────────────
+
+export const [MessagingBusContext, useMessagingBus] = createContextHook((): MessagingBusState => {
+  const { isConnected: nostrConnected, publicKey: nostrPubkey } = useNostr();
+  const { walletInfo } = useWalletSeed();
+
+  const [status, setStatus] = useState<BusStatus>({
+    nostr: 'disconnected',
+    mqtt: 'disconnected',
+    preferred: 'none',
+  });
+  const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // ── Synchroniser l'identité locale dans le bus ────────────────────────────
+
+  useEffect(() => {
+    const nodeId = walletInfo?.firstReceiveAddress
+      ? `MESH-${walletInfo.firstReceiveAddress.slice(2, 6).toUpperCase()}`
+      : '';
+
+    if (nodeId && nostrPubkey) {
+      messagingBus.setLocalIdentity(nodeId, nostrPubkey);
+      console.log('[BusProvider] Identité configurée:', nodeId, nostrPubkey.slice(0, 16) + '…');
+    }
+  }, [walletInfo, nostrPubkey]);
+
+  // ── Mettre à jour le statut du bus ────────────────────────────────────────
+
+  useEffect(() => {
+    if (!mountedRef.current) return;
+    const current = messagingBus.getStatus();
+    setStatus({
+      ...current,
+      nostr: nostrConnected ? 'connected' : 'disconnected',
+      preferred: nostrConnected ? 'nostr'
+        : current.mqtt === 'connected' ? 'mqtt'
+        : 'none',
+    });
+  }, [nostrConnected]);
+
+  // ── S'abonner aux messages entrants pour maintenir `lastMessage` ──────────
+
+  useEffect(() => {
+    const unsub = messagingBus.subscribe((msg) => {
+      if (mountedRef.current) {
+        setLastMessage(msg);
+      }
+    });
+    return unsub;
+  }, []);
+
+  // ── API publique ──────────────────────────────────────────────────────────
+
+  const sendDM = useCallback(
+    (params: {
+      toNodeId: string;
+      toNostrPubkey: string;
+      content: string;
+      encryptedPayload?: string;
+    }) => messagingBus.sendDM(params),
+    [],
+  );
+
+  const sendChannelMessage = useCallback(
+    (params: {
+      channelId: string;
+      content: string;
+      nostrChannelId?: string;
+      encryptedPayload?: string;
+    }) => messagingBus.sendChannelMessage(params),
+    [],
+  );
+
+  const subscribe = useCallback(
+    (handler: BusMessageHandler) => messagingBus.subscribe(handler),
+    [],
+  );
+
+  const bridgeLoraToNostr = useCallback(
+    (rawPayload: string) => messagingBus.bridgeLoraToNostr(rawPayload),
+    [],
+  );
+
+  return {
+    status,
+    preferredTransport: messagingBus.preferredTransport,
+    sendDM,
+    sendChannelMessage,
+    subscribe,
+    bridgeLoraToNostr,
+    lastMessage,
+  };
+});
