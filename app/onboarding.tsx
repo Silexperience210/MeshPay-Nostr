@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
+  Dimensions,
 } from 'react-native';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,6 +24,7 @@ import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useTranslation } from '@/utils/i18n';
 import type { AppLanguage } from '@/providers/AppSettingsProvider';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ONBOARDING_KEY = 'BITMESH_ONBOARDING_DONE';
 // Steps: 0=langSelect, 1-4=slides
 const TOTAL_STEPS = 5;
@@ -63,6 +65,7 @@ function LangSelectStep({ onSelect }: { onSelect: (lang: AppLanguage) => void })
           >
             <Text style={styles.langFlag}>{flag}</Text>
             <Text style={styles.langLabel}>{label}</Text>
+            <ChevronRight size={18} color={Colors.textMuted} style={{ marginLeft: 'auto' }} />
           </TouchableOpacity>
         ))}
       </View>
@@ -167,32 +170,54 @@ function Slide4({ t }: { t: (k: string) => string }) {
 }
 
 export default function OnboardingScreen() {
-  const { settings, updateSettings } = useAppSettings();
+  const { settings, updateSettings, isLoading } = useAppSettings();
   const { t } = useTranslation();
 
-  const [step, setStep] = useState(0);
-  const fadeAnim = useRef(new Animated.Value(1)).current;
+  // Determine initial step: skip lang select if user already chose a language
+  const initialStep = !isLoading && settings.onboardingLangDone ? 1 : 0;
+  const [step, setStep] = useState<number | null>(null); // null = waiting for settings to load
 
-  const animateTransition = (cb: () => void) => {
-    Animated.timing(fadeAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
-      cb();
-      Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+  // Step 0 ↔ slides transition
+  const langFadeAnim = useRef(new Animated.Value(0)).current;
+  const slidesFadeAnim = useRef(new Animated.Value(0)).current;
+
+  // Horizontal slide offset for steps 1–4 (translateX = -(step-1) * SCREEN_WIDTH)
+  const slideOffset = useRef(new Animated.Value(0)).current;
+
+  // Once settings are loaded, set the initial step
+  useEffect(() => {
+    if (!isLoading && step === null) {
+      const s = settings.onboardingLangDone ? 1 : 0;
+      setStep(s);
+      if (s === 0) {
+        Animated.timing(langFadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
+      } else {
+        Animated.timing(slidesFadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
+      }
+    }
+  }, [isLoading]);
+
+  const goToSlides = (lang: AppLanguage) => {
+    updateSettings({ language: lang, onboardingLangDone: true });
+    // Fade out lang select, fade in slides
+    Animated.timing(langFadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+      setStep(1);
+      slideOffset.setValue(0);
+      Animated.timing(slidesFadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
     });
   };
 
-  useEffect(() => {
-    // Entrance animation
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
-  }, []);
-
-  const handleSelectLang = (lang: AppLanguage) => {
-    updateSettings({ language: lang });
-    animateTransition(() => setStep(1));
-  };
-
   const handleNext = () => {
-    animateTransition(() => setStep(s => s + 1));
+    if (step === null || step >= TOTAL_STEPS - 1) return;
+    const nextStep = step + 1;
+    // Horizontal spring to next slide
+    Animated.spring(slideOffset, {
+      toValue: -(nextStep - 1) * SCREEN_WIDTH,
+      tension: 60,
+      friction: 9,
+      useNativeDriver: true,
+    }).start();
+    setStep(nextStep);
   };
 
   const handleSkip = async () => {
@@ -205,30 +230,51 @@ export default function OnboardingScreen() {
     router.replace('/(tabs)');
   };
 
+  // Still loading settings
+  if (step === null) {
+    return <View style={styles.container} />;
+  }
+
   const isLastSlide = step === TOTAL_STEPS - 1;
-  // Dots shown from step 1 onward (step 0 = lang select has no dots)
   const showDots = step > 0;
+  // "Passer" visible on slides 2 and 3 only (not slide 1 — value prop must be read)
+  const showSkip = step > 1 && step < TOTAL_STEPS - 1;
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.logo}>MeshPay</Text>
-        {step > 0 && step < TOTAL_STEPS - 1 && (
+        {showSkip && (
           <TouchableOpacity onPress={handleSkip}>
             <Text style={styles.skipButton}>{t('onboarding.skip')}</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Content */}
-      <Animated.View style={[styles.contentWrapper, { opacity: fadeAnim }]}>
-        {step === 0 && <LangSelectStep onSelect={handleSelectLang} />}
-        {step === 1 && <Slide1 t={t} />}
-        {step === 2 && <Slide2 t={t} />}
-        {step === 3 && <Slide3 t={t} />}
-        {step === 4 && <Slide4 t={t} />}
-      </Animated.View>
+      {/* Lang select (step 0) */}
+      {step === 0 && (
+        <Animated.View style={[styles.contentWrapper, { opacity: langFadeAnim }]}>
+          <LangSelectStep onSelect={goToSlides} />
+        </Animated.View>
+      )}
+
+      {/* Slides 1-4 with horizontal slide animation */}
+      {step > 0 && (
+        <Animated.View style={[styles.contentWrapper, { opacity: slidesFadeAnim, overflow: 'hidden' }]}>
+          <Animated.View
+            style={[
+              styles.slidesRow,
+              { transform: [{ translateX: slideOffset }] },
+            ]}
+          >
+            <View style={styles.slideWrapper}><Slide1 t={t} /></View>
+            <View style={styles.slideWrapper}><Slide2 t={t} /></View>
+            <View style={styles.slideWrapper}><Slide3 t={t} /></View>
+            <View style={styles.slideWrapper}><Slide4 t={t} /></View>
+          </Animated.View>
+        </Animated.View>
+      )}
 
       {/* Dots */}
       {showDots && (
@@ -239,7 +285,7 @@ export default function OnboardingScreen() {
         </View>
       )}
 
-      {/* Bottom button (not shown on step 0 — lang buttons are the CTA) */}
+      {/* Bottom button — only for slides */}
       {step > 0 && (
         <View style={styles.buttonsContainer}>
           {isLastSlide ? (
@@ -271,6 +317,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 24,
     marginBottom: 24,
+    minHeight: 32,
   },
   logo: {
     fontSize: 24,
@@ -284,6 +331,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   contentWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  // Horizontal slides container
+  slidesRow: {
+    flexDirection: 'row',
+    width: SCREEN_WIDTH * 4,
+    flex: 1,
+  },
+  slideWrapper: {
+    width: SCREEN_WIDTH,
     flex: 1,
     justifyContent: 'center',
   },
@@ -326,6 +384,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: Colors.text,
+    flex: 1,
   },
   // ---------- Slides ----------
   slideContainer: {

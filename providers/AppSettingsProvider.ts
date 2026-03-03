@@ -11,6 +11,7 @@ export type AppLanguage = 'en' | 'fr' | 'es';
 export interface AppSettings {
   connectionMode: ConnectionMode;
   language: AppLanguage;
+  onboardingLangDone: boolean;
   mempoolUrl: string;
   customMempoolUrl: string;
   useCustomMempool: boolean;
@@ -38,6 +39,7 @@ function detectLanguage(): AppLanguage {
 const DEFAULT_SETTINGS: AppSettings = {
   connectionMode: 'internet',
   language: detectLanguage(),
+  onboardingLangDone: false,
   mempoolUrl: 'https://mempool.space',
   customMempoolUrl: '',
   useCustomMempool: false,
