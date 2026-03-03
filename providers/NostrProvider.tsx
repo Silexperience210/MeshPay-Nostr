@@ -41,6 +41,14 @@ export interface NostrState {
     onDM: (from: string, content: string, event: NostrEvent) => void,
   ) => () => void;
 
+  // ── DMs scellés (NIP-17 Gift Wrap) ────────────────────────────────────────
+  /** Envoie un DM NIP-17 (expéditeur masqué, chiffrement NIP-44). */
+  publishDMSealed: (recipientPubKey: string, content: string) => Promise<NostrEvent>;
+  /** S'abonne aux DMs NIP-17 — déchiffre automatiquement les gift wraps. */
+  subscribeDMsSealed: (
+    onDM: (from: string, content: string, event: NostrEvent) => void,
+  ) => () => void;
+
   // ── Channels (NIP-28) ─────────────────────────────────────────────────────
   createChannel: (name: string, about: string, picture?: string) => Promise<NostrEvent>;
   publishChannelMessage: (channelId: string, content: string, replyToId?: string) => Promise<NostrEvent>;
@@ -147,6 +155,20 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     [],
   );
 
+  // ── DMs scellés (NIP-17) ─────────────────────────────────────────────────
+
+  const publishDMSealed = useCallback(
+    (recipientPubKey: string, content: string) =>
+      nostrClient.publishDMSealed(recipientPubKey, content),
+    [],
+  );
+
+  const subscribeDMsSealed = useCallback(
+    (onDM: (from: string, content: string, event: NostrEvent) => void) =>
+      nostrClient.subscribeDMsSealed(onDM),
+    [],
+  );
+
   // ── Channels ─────────────────────────────────────────────────────────────
 
   const createChannel = useCallback(
@@ -199,6 +221,8 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     relays,
     publishDM,
     subscribeDMs,
+    publishDMSealed,
+    subscribeDMsSealed,
     createChannel,
     publishChannelMessage,
     subscribeChannel,

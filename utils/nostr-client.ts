@@ -27,6 +27,8 @@ import {
 } from 'nostr-tools';
 import { SimplePool } from 'nostr-tools/pool';
 import { nip19 } from 'nostr-tools';
+// @ts-ignore — subpath exports
+import * as nip17 from 'nostr-tools/nip17';
 import { HDKey } from '@scure/bip32';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { cbc } from '@noble/ciphers/aes';
@@ -56,11 +58,14 @@ const CONNECT_TIMEOUT_MS = 5_000;
 export const Kind = {
   Metadata: 0,
   Text: 1,
-  EncryptedDM: 4,       // NIP-04
-  ChannelCreate: 40,    // NIP-28
-  ChannelMetadata: 41,  // NIP-28
-  ChannelMessage: 42,   // NIP-28
-  RelayList: 10002,     // NIP-65
+  EncryptedDM: 4,            // NIP-04
+  Seal: 13,                  // NIP-59 (envelope du Gift Wrap)
+  PrivateDirectMessage: 14,  // NIP-17 (rumor — message en clair à l'intérieur du Seal)
+  ChannelCreate: 40,         // NIP-28
+  ChannelMetadata: 41,       // NIP-28
+  ChannelMessage: 42,        // NIP-28
+  RelayList: 10002,          // NIP-65
+  GiftWrap: 1059,            // NIP-59 (wrapper externe publié sur les relays)
   /** Kind custom MeshPay — relay de transactions Bitcoin/Cashu */
   TxRelay: 9001,
 } as const;
@@ -388,6 +393,78 @@ export class NostrClient {
           onDM(event.pubkey, plaintext, event);
         } catch {
           console.warn('[Nostr] Déchiffrement DM échoué — ignoré:', event.id.slice(0, 12));
+        }
+      },
+    );
+  }
+
+  // ── NIP-17 : Gift Wrap DMs (sealed sender) ───────────────────────────────
+
+  /**
+   * Envoie un DM chiffré NIP-17 (Gift Wrap — sealed sender).
+   *
+   * Crée deux gift wraps (kind:1059) :
+   *   1. Pour le destinataire — chiffré avec sa clé publique
+   *   2. Pour l'expéditeur  — copie chiffrée avec sa propre clé (boîte d'envoi)
+   *
+   * Chaque wrap est signé avec une clé éphémère aléatoire → l'expéditeur
+   * ne peut pas être déduit en analysant les relays.
+   *
+   * Différence avec NIP-04 (kind:4) :
+   *   - NIP-04 : contenu chiffré mais pubkey expéditeur visible
+   *   - NIP-17 : pubkey masquée (clé éphémère), timestamp aléatoire ±2 jours
+   */
+  async publishDMSealed(recipientPubKey: string, content: string): Promise<NostrEvent> {
+    if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
+    if (!this.isConnected) throw new Error('[Nostr] Hors ligne — Gift Wrap nécessite une connexion active');
+
+    // wrapManyEvents crée automatiquement : [copy_for_sender, copy_for_recipient]
+    const wraps: NostrEvent[] = nip17.wrapManyEvents(
+      this.keypair.secretKey,
+      [{ publicKey: recipientPubKey }],
+      content,
+    );
+
+    // Publier tous les wraps en parallèle (ne pas bloquer si un relay refuse)
+    await Promise.all(
+      wraps.map(wrap =>
+        Promise.any(this.pool.publish(this.relayUrls, wrap)).catch(() => {
+          console.warn('[Nostr] Gift Wrap : relay n\'a pas accepté kind:1059');
+        }),
+      ),
+    );
+
+    console.log('[Nostr] Gift Wrap envoyé — kind:1059, destinataire:', recipientPubKey.slice(0, 12) + '…');
+    // Retourner le wrap destinataire (index 1 — index 0 est la copie expéditeur)
+    return wraps[1] ?? wraps[0];
+  }
+
+  /**
+   * S'abonne aux DMs NIP-17 (Gift Wrap kind:1059).
+   *
+   * Déchiffre automatiquement le double enrobage (Gift Wrap → Seal → Rumor).
+   * Rétrocompat : les DMs NIP-04 (kind:4) sont toujours lus via subscribeDMs().
+   */
+  subscribeDMsSealed(
+    onDM: (from: string, content: string, event: NostrEvent) => void,
+  ): () => void {
+    if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
+
+    const myPubKey = this.keypair.publicKey;
+
+    return this.subscribe(
+      [{ kinds: [Kind.GiftWrap], '#p': [myPubKey] }],
+      (event) => {
+        try {
+          const rumor = nip17.unwrapEvent(event, this.keypair!.secretKey);
+          // Vérifier que c'est bien un kind:14 (PrivateDirectMessage)
+          if (rumor.kind !== Kind.PrivateDirectMessage) {
+            console.warn('[Nostr] Gift Wrap inattendu kind:', rumor.kind, '— ignoré');
+            return;
+          }
+          onDM(rumor.pubkey, rumor.content, event);
+        } catch {
+          console.warn('[Nostr] Déchiffrement Gift Wrap échoué — ignoré:', event.id.slice(0, 12));
         }
       },
     );
