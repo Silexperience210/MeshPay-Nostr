@@ -4,7 +4,7 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 
 ## État actuel (2026-03-03)
 
-**5 phases complètes — 185 tests verts — branche `main` pushée**
+**6 phases complètes — 205 tests verts — branche `main` pushée**
 
 ### ✅ Phase 1 — Fondations Nostr
 - `utils/nostr-client.ts` : NIP-06 (dérivation `m/44'/1237'/0'/0/0`), NIP-04 (sans crypto.subtle via @noble), SimplePool, offline queue, double-validation events
@@ -30,6 +30,9 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 - `app/(tabs)/wallet/index.tsx` : bannière Gateway, indicateur pending relay
 
 ### ✅ Phase 5 — Forums/Channels Nostr (NIP-28)
+- `deriveChannelId()`, `joinForum`/`leaveForum`/`sendMessage` Nostr, `nostrChannelUnsubs`, 22 tests
+
+### ✅ Phase 6 — NIP-17 Gift Wrap DMs
 - `utils/nostr-client.ts` : `deriveChannelId(channelName)` → sha256("meshpay:forum:"+name) hex 64 chars
   - Déterministe : tous les nœuds calculent le même channelId sans coordination préalable
 - `providers/MessagesProvider.ts` :
@@ -46,15 +49,13 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 
 ## Prochaines phases (dans l'ordre)
 
-### Phase 6 — NIP-17 Gift Wrap DMs (upgrade sécurité)
-**Objectif** : remplacer NIP-04 (DMs visibles sur relays) par NIP-17 (sealed sender + gift wrap).
-
-Fichiers à modifier :
-- `utils/nostr-client.ts` : nouvelles méthodes `publishDMSealed()` + `subscribeDMsSealed()`
-  - kind:13 (Seal) + kind:1059 (Gift Wrap) selon NIP-17
-  - Rétrocompat : continuer à lire NIP-04 (kind:4) pendant la transition
-- `providers/NostrProvider.tsx` : exposer les nouvelles méthodes
-- Tests : round-trip NIP-17 Alice ↔ Bob
+### Phase 6 ✅ — NIP-17 Gift Wrap DMs — TERMINÉE
+- `utils/nostr-client.ts` : Kind.Seal=13, PrivateDirectMessage=14, GiftWrap=1059
+- `publishDMSealed()` : 2 wraps (destinataire + copie expéditeur), clés éphémères, NIP-44
+- `subscribeDMsSealed()` : kind:1059 #p=myPubKey, nip17.unwrapEvent()
+- Rétrocompat : subscribeDMs() (kind:4) actif en parallèle
+- `providers/NostrProvider.tsx` : méthodes exposées
+- 20 tests → **205 verts**
 
 ### Phase 7 — Discovery / Présence Nostr
 **Objectif** : découvrir les pairs MeshPay sur Nostr sans MQTT.
