@@ -10,7 +10,10 @@ import {
   TextInput,
   Animated,
   ActivityIndicator,
+  Modal,
+  Dimensions,
 } from 'react-native';
+import QRCode from 'react-native-qrcode-svg';
 import {
   Radio,
   Shield,
@@ -37,6 +40,8 @@ import {
   CircleCheck,
   CircleX,
   QrCode,
+  Pencil,
+  X,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -1213,6 +1218,120 @@ const nostrStyles = StyleSheet.create({
   },
 });
 
+const QR_SIZE = Dimensions.get('window').width * 0.6;
+
+function NpubQRModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const { npub } = useNostr();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    if (!npub) return;
+    await Clipboard.setStringAsync(npub);
+    setCopied(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity style={npubStyles.overlay} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity activeOpacity={1} style={npubStyles.card} onPress={() => {}}>
+          <View style={npubStyles.header}>
+            <Text style={npubStyles.title}>Clé publique (npub)</Text>
+            <TouchableOpacity onPress={onClose}>
+              <X size={20} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+
+          {npub ? (
+            <>
+              <View style={npubStyles.qrWrapper}>
+                <QRCode value={npub} size={QR_SIZE} color={Colors.text} backgroundColor={Colors.surface} />
+              </View>
+              <Text style={npubStyles.npubText} numberOfLines={2} selectable>
+                {npub}
+              </Text>
+              <TouchableOpacity style={npubStyles.copyBtn} onPress={handleCopy} activeOpacity={0.7}>
+                {copied
+                  ? <Check size={16} color={Colors.green} />
+                  : <Copy size={16} color={Colors.accent} />}
+                <Text style={[npubStyles.copyBtnText, copied && { color: Colors.green }]}>
+                  {copied ? 'Copié !' : 'Copier npub'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <Text style={npubStyles.noNpub}>Wallet non initialisé</Text>
+          )}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
+const npubStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  card: {
+    width: '100%',
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  qrWrapper: {
+    alignItems: 'center',
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 12,
+  },
+  npubText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontFamily: 'monospace',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 16,
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.accentGlow,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  copyBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.accent,
+  },
+  noNpub: {
+    color: Colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: 32,
+  },
+});
+
 function LanguageSelectorCard() {
   const { settings, updateSettings } = useAppSettings();
   const { t } = useTranslation();
@@ -1254,9 +1373,12 @@ function LanguageSelectorCard() {
 
 export default function SettingsScreen() {
   const [showSeedQRScanner, setShowSeedQRScanner] = React.useState<boolean>(false);
+  const [editingName, setEditingName] = React.useState(false);
+  const [nameInput, setNameInput] = React.useState('');
+  const [showNpubQR, setShowNpubQR] = React.useState(false);
   const { isInitialized, importWallet } = useWalletSeed();
   const { settings, updateSettings } = useAppSettings();
-  const { identity } = useMessages();
+  const { identity, setDisplayName } = useMessages();
   const { connected: btEnabled } = useBle();
 
   const autoRelay = settings.autoRelay;
@@ -1280,12 +1402,27 @@ export default function SettingsScreen() {
     Alert.alert(title, message);
   }, []);
 
+  const handleStartEditName = useCallback(() => {
+    setNameInput(identity?.displayName ?? '');
+    setEditingName(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [identity?.displayName]);
+
+  const handleSaveName = useCallback(async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed) return;
+    await setDisplayName(trimmed);
+    setEditingName(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, [nameInput, setDisplayName]);
+
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
       showsVerticalScrollIndicator={false}
     >
+      {/* Profile card */}
       <View style={styles.profileCard}>
         <View style={styles.profileAvatar}>
           <Text style={styles.profileAvatarText}>
@@ -1293,14 +1430,50 @@ export default function SettingsScreen() {
           </Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.profileName}>
-            {identity?.displayName || 'Mon Node'}
-          </Text>
+          {editingName ? (
+            <View style={styles.profileEditRow}>
+              <TextInput
+                style={styles.profileNameInput}
+                value={nameInput}
+                onChangeText={setNameInput}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={handleSaveName}
+                placeholder="Display name"
+                placeholderTextColor={Colors.textMuted}
+                maxLength={32}
+              />
+              <TouchableOpacity onPress={handleSaveName} style={styles.profileEditBtn}>
+                <Check size={18} color={Colors.green} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setEditingName(false)} style={styles.profileEditBtn}>
+                <X size={18} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity onPress={handleStartEditName} activeOpacity={0.7} style={styles.profileNameRow}>
+              <Text style={styles.profileName}>
+                {identity?.displayName || 'Mon Node'}
+              </Text>
+              <Pencil size={14} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
           <Text style={styles.profileNodeId} numberOfLines={1}>
             {identity?.nodeId || 'Non configuré'}
           </Text>
         </View>
+        {/* QR npub button */}
+        <TouchableOpacity
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowNpubQR(true); }}
+          style={styles.profileQrBtn}
+          activeOpacity={0.7}
+        >
+          <QrCode size={20} color={Colors.accent} />
+        </TouchableOpacity>
       </View>
+
+      {/* npub QR Modal */}
+      <NpubQRModal visible={showNpubQR} onClose={() => setShowNpubQR(false)} />
 
       <ConnectionModeSelector />
 
@@ -1451,6 +1624,33 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontSize: 18,
     fontWeight: '700' as const,
+  },
+  profileNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  profileEditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  profileNameInput: {
+    flex: 1,
+    color: Colors.text,
+    fontSize: 16,
+    fontWeight: '700' as const,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.accent,
+    paddingVertical: 2,
+  },
+  profileEditBtn: {
+    padding: 4,
+  },
+  profileQrBtn: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: Colors.accentGlow,
   },
   profileNodeId: {
     color: Colors.textMuted,
