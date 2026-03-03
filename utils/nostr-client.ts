@@ -65,6 +65,25 @@ export const Kind = {
   TxRelay: 9001,
 } as const;
 
+// ─── deriveChannelId ──────────────────────────────────────────────────────────
+
+/**
+ * Calcule un identifiant de canal NIP-28 déterministe depuis un nom de forum.
+ *
+ * Tous les nœuds MeshPay obtiennent le même channelId pour le même channelName
+ * sans avoir à se coordonner préalablement via un event kind:40.
+ *
+ * L'ID est un hash SHA-256 hex du nom normalisé, formaté comme un event Nostr ID.
+ * Utilisé pour filtrer les kind:42 : `{kinds:[42], '#e': [channelId]}`.
+ */
+export function deriveChannelId(channelName: string): string {
+  const input = new TextEncoder().encode(
+    `meshpay:forum:${channelName.toLowerCase().trim()}`
+  );
+  const hash = sha256(input);
+  return Array.from(hash, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface NostrKeypair {

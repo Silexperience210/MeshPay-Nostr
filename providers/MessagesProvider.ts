@@ -45,6 +45,8 @@ import {
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
 import { deriveMeshIdentity, type MeshIdentity, verifyNodeId } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
+import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
+import { useNostr } from '@/providers/NostrProvider';
 import { MeshRouter, type MeshMessage, isValidMeshMessage } from '@/utils/mesh-routing';
 // MeshIdentity utilisé comme type de paramètre pour publishAndStore
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
@@ -130,6 +132,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const { mnemonic } = useWalletSeed();
   const ble = useBle(); // Accès au BLE gateway pour LoRa
   const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu, getMqttBrokerUrl } = useGateway();
+  const { isConnected: nostrConnected } = useNostr();
   const activeBrokerUrl = getMqttBrokerUrl();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
   const [mqttState, setMqttState] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -159,6 +162,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const pendingEncryptedPackets = useRef<Map<string, MeshCorePacket[]>>(new Map());
   // FIX: Cache des handlers forum (même référence sur reconnexion → dedup fonctionne)
   const forumHandlerRefs = useRef<Map<string, MessageHandler>>(new Map());
+  // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
+  const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
   const addToDedup = (id: string) => {
     recentMsgIds.current.add(id);
     if (recentMsgIds.current.size > 200) {
@@ -1126,6 +1131,84 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return forumHandlerRefs.current.get(channelName)!;
   }, [handleIncomingForum]);
 
+  // ── Handler messages forum entrants via Nostr (kind:42) ─────────────────────
+  // Les messages NIP-28 sont en clair (forum public).
+  // Le channelId est déterministe via deriveChannelId(channelName).
+
+  const handleIncomingNostrChannelMessage = useCallback((
+    channelName: string,
+    event: { id: string; pubkey: string; content: string; created_at: number; tags: string[][] },
+  ) => {
+    if (!identity) return;
+
+    // Skip nos propres events
+    if (nostrClient.publicKey && event.pubkey === nostrClient.publicKey) return;
+
+    // Déduplication
+    if (recentMsgIds.current.has(event.id)) return;
+    addToDedup(event.id);
+
+    const convId = `forum:${channelName}`;
+    const fromId = event.tags.find(t => t[0] === 'meshcore-from')?.[1] ?? event.pubkey;
+    const ts = event.created_at * 1000;
+
+    const msg: StoredMessage = {
+      id: event.id,
+      conversationId: convId,
+      fromNodeId: fromId,
+      fromPubkey: event.pubkey,
+      text: event.content,
+      type: 'text',
+      timestamp: ts,
+      isMine: false,
+      status: 'delivered',
+    };
+
+    saveMessage(msg).catch(() => {});
+    updateConversationLastMessage(convId, `${fromId.slice(0, 8)}: ${event.content.slice(0, 40)}`, ts, true).catch(() => {});
+
+    setMessagesByConv(prev => ({
+      ...prev,
+      [convId]: [...(prev[convId] ?? []), msg],
+    }));
+
+    setConversations(prev =>
+      prev.map(c => c.id === convId
+        ? {
+            ...c,
+            lastMessage: `${fromId.slice(0, 8)}: ${event.content.slice(0, 40)}`,
+            lastMessageTime: ts,
+            unreadCount: c.unreadCount + 1,
+          }
+        : c,
+      )
+    );
+
+    console.log('[Nostr→Forum]', channelName, '—', fromId.slice(0, 12), ':', event.content.slice(0, 40));
+  }, [identity]);
+
+  // ── Réabonnement Nostr aux forums quand la connexion est rétablie ────────────
+
+  useEffect(() => {
+    if (!nostrConnected) {
+      // Déconnecter proprement les subs Nostr
+      for (const unsub of nostrChannelUnsubs.current.values()) unsub();
+      nostrChannelUnsubs.current.clear();
+      return;
+    }
+
+    // Réabonner à tous les forums déjà rejoints
+    for (const channelName of joinedForums.current) {
+      if (nostrChannelUnsubs.current.has(channelName)) continue; // déjà abonné
+      const channelId = deriveChannelId(channelName);
+      const unsub = nostrClient.subscribeChannel(channelId, (event) => {
+        handleIncomingNostrChannelMessage(channelName, event);
+      });
+      nostrChannelUnsubs.current.set(channelName, unsub);
+      console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
+    }
+  }, [nostrConnected, handleIncomingNostrChannelMessage]);
+
   // Connecter au broker MQTT
   const connect = useCallback(() => {
     if (!identity) {
@@ -1607,9 +1690,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!identity) {
       throw new Error('Identité non disponible');
     }
-    // FIX BUG 5: autoriser l'envoi via BLE même si MQTT déconnecté
-    if (!ble.connected && mqttRef.current?.state !== 'connected') {
-      throw new Error('Non connecté — activez le Bluetooth (LoRa) ou vérifiez votre connexion MQTT');
+    // Autoriser l'envoi si BLE, MQTT ou Nostr est disponible
+    const isForum_ = convId.startsWith('forum:');
+    if (!ble.connected && mqttRef.current?.state !== 'connected' && !nostrClient.isConnected) {
+      throw new Error('Non connecté — activez le Bluetooth (LoRa), vérifiez votre connexion MQTT ou Nostr');
+    }
+    // Forums accessibles uniquement si MQTT ou Nostr disponible (pas BLE seul)
+    if (isForum_ && mqttRef.current?.state !== 'connected' && !nostrClient.isConnected) {
+      throw new Error('Forums indisponibles hors ligne — connectez-vous via MQTT ou Nostr');
     }
 
     // ✅ Validation taille message
@@ -1679,6 +1767,51 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
     if (isForum) {
       const channelName = convId.slice(6);
+
+      // Nostr prioritaire (NIP-28 kind:42 — messages en clair sur channel déterministe)
+      if (nostrClient.isConnected) {
+        const channelId = deriveChannelId(channelName);
+        try {
+          await nostrClient.publishChannelMessage(channelId, text);
+        } catch (err) {
+          console.error('[Messages] Erreur publication Nostr forum:', err);
+          // Fallback MQTT si disponible
+          if (mqttRef.current?.state === 'connected') {
+            const enc = encryptForum(text, channelName);
+            publishAndStore(msgId, convId, text, enc, TOPICS.forum(channelName), ts, type, id);
+            return;
+          }
+          throw err;
+        }
+        // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
+        const msg: StoredMessage = {
+          id: msgId,
+          conversationId: convId,
+          fromNodeId: id.nodeId,
+          fromPubkey: id.pubkeyHex,
+          text,
+          type,
+          timestamp: ts,
+          isMine: true,
+          status: 'sent',
+        };
+        try {
+          await saveMessage(msg);
+          await updateConversationLastMessage(convId, text.slice(0, 50), ts, false);
+        } catch (err) {
+          console.error('[Messages] Erreur sauvegarde message forum Nostr:', err);
+        }
+        setMessagesByConv(prev => ({
+          ...prev,
+          [convId]: [...(prev[convId] ?? []), msg],
+        }));
+        setConversations(prev => prev.map(c =>
+          c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
+        ));
+        return;
+      }
+
+      // Fallback MQTT
       const enc = encryptForum(text, channelName);
       const topic = TOPICS.forum(channelName);
       publishAndStore(msgId, convId, text, enc, topic, ts, type, id);
@@ -1806,6 +1939,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       joinForumChannel(mqttRef.current, channelName, getForumHandler(channelName));
     }
 
+    // Nostr : souscrire au channel déterministe si connecté
+    if (nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {
+      const channelId = deriveChannelId(channelName);
+      const unsub = nostrClient.subscribeChannel(channelId, (event) => {
+        handleIncomingNostrChannelMessage(channelName, event);
+      });
+      nostrChannelUnsubs.current.set(channelName, unsub);
+      console.log('[Messages] Forum Nostr souscrit:', channelName, channelId.slice(0, 16) + '…');
+    }
+
     const existing = conversations.find(c => c.id === convId);
     if (!existing) {
       const conv: StoredConversation = {
@@ -1829,7 +1972,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } else {
       console.log('[Messages] Forum déjà existant:', channelName);
     }
-  }, [conversations, handleIncomingForum]);
+  }, [conversations, handleIncomingForum, handleIncomingNostrChannelMessage]);
 
   // ✅ NOUVEAU : Annoncer un forum public
   const announceForumPublic = useCallback((channelName: string, description: string): boolean => {
@@ -1875,6 +2018,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
     if (mqttRef.current) {
       leaveForumChannel(mqttRef.current, channelName);
+    }
+    // Nostr : désabonner du channel
+    const nostrUnsub = nostrChannelUnsubs.current.get(channelName);
+    if (nostrUnsub) {
+      nostrUnsub();
+      nostrChannelUnsubs.current.delete(channelName);
     }
     console.log('[Messages] Forum quitté:', channelName);
   }, []);
