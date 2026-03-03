@@ -540,7 +540,7 @@ export default function ChatScreen() {
       if (!sendIt || durationMs < 500) return; // Trop court, ignorer
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const base64 = await audioUriToBase64(uri);
-      // Audio sending not available without MQTT
+      // Audio envoi non disponible (à venir via Nostr NIP-94)
       console.log('[Chat] Audio recording done, length:', base64.length, 'duration:', durationMs);
       Alert.alert('Audio non disponible', 'L\'envoi vocal n\'est pas encore disponible via Nostr.');
     } catch (err) {

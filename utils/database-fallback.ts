@@ -326,29 +326,6 @@ export async function incrementRetryCount(id: string, error?: string): Promise<v
   }
 }
 
-// MQTT Queue (stub)
-export interface DBMqttQueueItem {
-  id: number;
-  topic: string;
-  payload: string;
-  qos: number;
-  retryCount: number;
-  maxRetries: number;
-  createdAt: number;
-  nextRetryAt: number;
-}
-
-export async function enqueueMqttMessage(topic: string, payload: string, qos: number = 1, maxRetries: number = 3): Promise<number> {
-  return 1;
-}
-
-export async function getPendingMqttMessages(): Promise<DBMqttQueueItem[]> {
-  return [];
-}
-
-export async function markMqttMessageSent(id: number): Promise<void> {}
-export async function incrementMqttRetry(id: number): Promise<void> {}
-
 // SubMesh (stub)
 export async function saveSubMeshDB(): Promise<void> {}
 export async function getSubMeshesDB(): Promise<any[]> { return []; }

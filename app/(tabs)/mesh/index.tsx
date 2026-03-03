@@ -536,7 +536,7 @@ function InternetModeBanner() {
       </View>
 
       <Text style={styles.internetBannerDesc}>
-        Messages are routed through MQTT gateways to reach LoRa mesh peers who have no internet access. Your transactions (Bitcoin, Cashu) are broadcast directly via internet.
+        Messages are routed through Nostr relays to reach LoRa mesh peers who have no internet access. Your transactions (Bitcoin, Cashu) are broadcast directly via internet.
       </Text>
 
       <View style={styles.internetFlowRow}>
@@ -546,7 +546,7 @@ function InternetModeBanner() {
           <Text style={styles.internetFlowSub}>Internet</Text>
         </View>
         <View style={styles.internetFlowArrow}>
-          <Text style={styles.internetFlowArrowText}>{'\u2192'} MQTT {'\u2192'}</Text>
+          <Text style={styles.internetFlowArrowText}>{'\u2192'} Nostr {'\u2192'}</Text>
         </View>
         <View style={styles.internetFlowNode}>
           <Text style={styles.internetFlowEmoji}>{'\ud83d\udce1'}</Text>
@@ -753,7 +753,7 @@ export default function MeshScreen() {
                     </View>
                     <View style={styles.nodeInfo}>
                       <Text style={styles.nodeName}>{peer.name || peer.nodeId}</Text>
-                      <Text style={styles.nodeDistance}>MQTT · {peer.hops} hop{peer.hops !== 1 ? 's' : ''}</Text>
+                      <Text style={styles.nodeDistance}>Nostr · {peer.hops} hop{peer.hops !== 1 ? 's' : ''}</Text>
                     </View>
                   </View>
                   <View style={[styles.pairingBadge, {

@@ -41,7 +41,7 @@ const slides: Slide[] = [
     title: 'Bienvenue sur BitMesh',
     subtitle: 'Messagerie P2P décentralisée',
     description:
-      'BitMesh est une application de messagerie décentralisée qui utilise le protocole MeshCore pour envoyer des messages chiffrés via LoRa ou MQTT, sans serveur central.',
+      'BitMesh est une application de messagerie décentralisée qui utilise le protocole MeshCore pour envoyer des messages chiffrés via LoRa ou Nostr, sans serveur central.',
     color: Colors.accent,
   },
   {
@@ -50,7 +50,7 @@ const slides: Slide[] = [
     title: 'MeshCore Protocol',
     subtitle: 'Communication longue portée',
     description:
-      'MeshCore permet de communiquer via LoRa (jusqu\'à 20 km en ligne de vue) ou MQTT (Internet). Les messages sont automatiquement routés via le réseau mesh.',
+      'MeshCore permet de communiquer via LoRa (jusqu\'à 20 km en ligne de vue) ou Nostr (Internet). Les messages sont automatiquement routés via le réseau mesh.',
     color: Colors.green,
   },
   {

@@ -107,7 +107,7 @@ function ConvItem({ conv, onPress, onLongPress }: { conv: StoredConversation; on
   );
 }
 
-// Valider le nom de forum (caractères MQTT autorisés)
+// Valider le nom de forum
 function validateForumName(name: string): string | null {
   if (!name.trim()) return 'Entrez un nom de forum';
   if (name.length > 64) return 'Nom trop long (max 64 caractères)';
@@ -500,7 +500,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface, borderBottomWidth: 0.5, borderBottomColor: Colors.border,
   },
   statusLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  mqttDot: { width: 7, height: 7, borderRadius: 3.5 },
   statusText: { fontSize: 12, fontWeight: '600' },
   statusDivider: { width: 1, height: 12, backgroundColor: Colors.border, marginHorizontal: 4 },
   statusNodes: { color: Colors.textSecondary, fontSize: 11, fontFamily: 'monospace' },

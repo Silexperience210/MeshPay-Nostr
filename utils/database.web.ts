@@ -46,14 +46,6 @@ export interface DBCashuToken {
   spentAt?: number;
 }
 
-export interface DBMqttQueueItem {
-  id: string;
-  topic: string;
-  payload: string;
-  qos: number;
-  createdAt: number;
-}
-
 export interface DBSubMesh {
   id: string;
   name: string;
