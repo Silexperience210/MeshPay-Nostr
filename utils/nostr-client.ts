@@ -537,6 +537,20 @@ export class NostrClient {
     );
   }
 
+  /**
+   * Découverte de forums publics via NIP-28 kind:40 (ChannelCreate).
+   * Récupère les 50 forums les plus récents sur les relays.
+   */
+  subscribeForums(
+    onChannel: (event: NostrEvent) => void,
+    limit = 50,
+  ): () => void {
+    return this.subscribe(
+      [{ kinds: [Kind.ChannelCreate], limit }],
+      onChannel,
+    );
+  }
+
   // ── TX Relay : Bitcoin / Cashu ─────────────────────────────────────────────
 
   /**

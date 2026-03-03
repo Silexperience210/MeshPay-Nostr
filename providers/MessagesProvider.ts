@@ -70,7 +70,7 @@ export interface MessagesState {
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
-  startConversation: (peerNodeId: string, peerName?: string) => Promise<void>;
+  startConversation: (peerNodeId: string, peerName?: string, peerPubkey?: string) => Promise<void>;
   joinForum: (channelName: string, description?: string) => Promise<void>;
   leaveForum: (channelName: string) => void;
   markRead: (convId: string) => Promise<void>;
@@ -1066,15 +1066,25 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // Démarrer une nouvelle conversation DM
   const startConversation = useCallback(async (
     peerNodeId: string,
-    peerName?: string
+    peerName?: string,
+    peerPubkey?: string,
   ): Promise<void> => {
     const existing = conversations.find(c => c.id === peerNodeId);
-    if (existing) return;
+    if (existing) {
+      // Mettre à jour la pubkey si fournie et absente
+      if (peerPubkey && !existing.peerPubkey) {
+        const updated = { ...existing, peerPubkey };
+        await saveConversation(updated);
+        setConversations(prev => prev.map(c => c.id === peerNodeId ? updated : c));
+      }
+      return;
+    }
 
     const conv: StoredConversation = {
       id: peerNodeId,
       name: peerName ?? peerNodeId,
       isForum: false,
+      peerPubkey: peerPubkey || undefined,
       lastMessage: '',
       lastMessageTime: Date.now(),
       unreadCount: 0,
@@ -1096,6 +1106,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     joinedForums.current.add(channelName);
     // FIX #4: Persister la liste des forums rejoints
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
+
+    // Nostr : publier kind:40 ChannelCreate pour annoncer le forum
+    if (nostrClient.isConnected) {
+      nostrClient.createChannel(channelName, description || `Forum ${channelName}`)
+        .then(() => console.log('[Forum] kind:40 publié:', channelName))
+        .catch((err) => console.warn('[Forum] Impossible de publier kind:40:', err));
+    }
 
     // Nostr : souscrire au channel déterministe si connecté
     if (nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {

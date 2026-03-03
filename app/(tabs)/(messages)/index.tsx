@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,8 +19,11 @@ import { formatTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useNostr } from '@/providers/NostrProvider';
+import { nostrClient } from '@/utils/nostr-client';
+import { nip19 } from 'nostr-tools';
 import type { StoredConversation } from '@/utils/messages-store';
 import type { DBContact } from '@/utils/database';
+import type { NostrEvent } from 'nostr-tools';
 
 function SignalDots({ strength }: { strength: number }) {
   const bars = strength >= 70 ? 3 : strength >= 40 ? 2 : 1;
@@ -115,11 +118,54 @@ function validateForumName(name: string): string | null {
   return null;
 }
 
+// Détecter le type d'identifiant Nostr saisi et retourner { nodeId, pubkey }
+function parseNostrInput(input: string): { nodeId: string; pubkey?: string; type: 'mesh' | 'npub' | 'hex64' | 'hex66' } {
+  const trimmed = input.trim();
+
+  // npub bech32 (ex: npub1abc...)
+  if (trimmed.startsWith('npub1')) {
+    try {
+      const decoded = nip19.decode(trimmed);
+      if (decoded.type === 'npub') {
+        const hex64 = decoded.data as string;
+        const nodeId = 'NOSTR-' + hex64.slice(0, 8).toUpperCase();
+        return { nodeId, pubkey: '02' + hex64, type: 'npub' };
+      }
+    } catch {}
+  }
+
+  // Hex 64 chars = x-only pubkey Nostr
+  if (/^[a-f0-9]{64}$/i.test(trimmed)) {
+    const hex64 = trimmed.toLowerCase();
+    const nodeId = 'NOSTR-' + hex64.slice(0, 8).toUpperCase();
+    return { nodeId, pubkey: '02' + hex64, type: 'hex64' };
+  }
+
+  // Hex 66 chars = pubkey compressée secp256k1
+  if (/^(02|03)[a-f0-9]{64}$/i.test(trimmed)) {
+    const hex66 = trimmed.toLowerCase();
+    const nodeId = 'NOSTR-' + hex66.slice(2, 10).toUpperCase();
+    return { nodeId, pubkey: hex66, type: 'hex66' };
+  }
+
+  // Défaut: MESH-XXXX ou autre nodeId local
+  return { nodeId: trimmed.toUpperCase(), type: 'mesh' };
+}
+
+// Forum découvert via NIP-28 kind:40
+interface DiscoveredForum {
+  channelId: string;
+  name: string;
+  about: string;
+  creatorPubkey: string;
+  createdAt: number;
+}
+
 // Modal pour nouvelle conversation ou rejoindre un forum
 function NewChatModal({ visible, onClose, onDM, onForum }: {
   visible: boolean;
   onClose: () => void;
-  onDM: (nodeId: string, name: string) => void;
+  onDM: (nodeId: string, name: string, pubkey?: string) => void;
   onForum: (channelName: string) => Promise<void>;
 }) {
   const { joinForum: joinForumContext } = useMessages();
@@ -132,10 +178,48 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   const [newForumDesc, setNewForumDesc] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [discoveredForums, setDiscoveredForums] = useState<DiscoveredForum[]>([]);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+
+  // Découverte de forums via kind:40 quand l'onglet est actif
+  useEffect(() => {
+    if (tab !== 'discover' || !visible || !nostrConnected) return;
+
+    setDiscoverLoading(true);
+    const found = new Map<string, DiscoveredForum>();
+
+    const unsub = nostrClient.subscribeForums((event: NostrEvent) => {
+      try {
+        const meta = JSON.parse(event.content) as { name?: string; about?: string };
+        const forumName = (meta.name ?? '').toLowerCase().trim();
+        if (!forumName) return;
+        if (!found.has(event.id)) {
+          found.set(event.id, {
+            channelId: event.id,
+            name: forumName,
+            about: meta.about ?? '',
+            creatorPubkey: event.pubkey,
+            createdAt: event.created_at,
+          });
+          setDiscoveredForums(Array.from(found.values())
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 30));
+        }
+      } catch {}
+    });
+
+    // Arrêt auto après 8 secondes (pas un stream continu)
+    const timer = setTimeout(() => {
+      setDiscoverLoading(false);
+    }, 8000);
+
+    return () => { unsub(); clearTimeout(timer); };
+  }, [tab, visible, nostrConnected]);
 
   const handleDM = () => {
     if (!nodeId.trim()) return;
-    onDM(nodeId.trim().toUpperCase(), name.trim() || nodeId.trim());
+    const parsed = parseNostrInput(nodeId);
+    onDM(parsed.nodeId, name.trim() || parsed.nodeId, parsed.pubkey);
     setNodeId(''); setName('');
     onClose();
   };
@@ -241,15 +325,27 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
 
           {tab === 'dm' ? (
             <View style={styles.modalBody}>
-              <Text style={styles.inputLabel}>Node ID du destinataire</Text>
+              <Text style={styles.inputLabel}>Identifiant du destinataire</Text>
               <TextInput
                 style={styles.modalInput}
                 value={nodeId}
                 onChangeText={setNodeId}
-                placeholder="MESH-XXXX"
+                placeholder="MESH-XXXX · npub1... · hex64"
                 placeholderTextColor={Colors.textMuted}
-                autoCapitalize="characters"
+                autoCapitalize="none"
+                autoCorrect={false}
               />
+              {nodeId.length > 0 && (() => {
+                const p = parseNostrInput(nodeId);
+                const isNostr = p.type !== 'mesh';
+                return (
+                  <Text style={[styles.inputHint, { color: isNostr ? Colors.purple ?? '#9b59b6' : Colors.textMuted }]}>
+                    {isNostr
+                      ? `⚡ Nostr — NIP-17 Gift Wrap · NodeID: ${p.nodeId}`
+                      : '🔵 MeshCore — chiffrement ECDH BLE/LoRa'}
+                  </Text>
+                );
+              })()}
               <Text style={styles.inputLabel}>Nom (optionnel)</Text>
               <TextInput
                 style={styles.modalInput}
@@ -259,7 +355,7 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
                 placeholderTextColor={Colors.textMuted}
               />
               <Text style={styles.inputHint}>
-                Le message sera chiffré E2E avec la clé publique du destinataire
+                Accepte MESH-XXXX (BLE/LoRa), npub1... ou clé hex Nostr (NIP-17).
               </Text>
               <TouchableOpacity style={styles.modalBtn} onPress={handleDM}>
                 <Lock size={14} color={Colors.black} />
@@ -279,7 +375,7 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
               />
               <Text style={styles.inputHint}>
                 Tout le monde connaissant ce nom peut rejoindre le forum.
-                Les messages sont chiffrés avec SHA256(&quot;forum:&quot;+nom).
+                Les messages sont publics sur Nostr (NIP-28).
               </Text>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: Colors.cyan, opacity: loading ? 0.6 : 1 }]}
@@ -340,16 +436,47 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
                 </View>
               )}
 
-              <Text style={[styles.inputLabel, { marginTop: 16 }]}>
-                Forums Nostr
-              </Text>
-
-              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                <Search size={32} color={Colors.textMuted} />
-                <Text style={{ color: Colors.textMuted, fontSize: 13, marginTop: 8 }}>
-                  Découverte de forums via Nostr NIP-28
-                </Text>
+              <View style={styles.discoverHeader}>
+                <Text style={styles.inputLabel}>Forums Nostr (NIP-28)</Text>
+                {discoverLoading && <ActivityIndicator size="small" color={Colors.purple ?? '#9b59b6'} />}
               </View>
+
+              {!nostrConnected ? (
+                <View style={styles.discoverEmpty}>
+                  <Text style={{ color: Colors.textMuted, fontSize: 13 }}>
+                    Nostr non connecté — impossible de chercher des forums.
+                  </Text>
+                </View>
+              ) : discoveredForums.length === 0 ? (
+                <View style={styles.discoverEmpty}>
+                  <Search size={28} color={Colors.textMuted} />
+                  <Text style={{ color: Colors.textMuted, fontSize: 13, marginTop: 8 }}>
+                    {discoverLoading ? 'Recherche sur les relays…' : 'Aucun forum trouvé.'}
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView style={styles.discoverList} showsVerticalScrollIndicator={false}>
+                  {discoveredForums.map((forum) => (
+                    <TouchableOpacity
+                      key={forum.channelId}
+                      style={styles.discoveredForumItem}
+                      onPress={() => handleJoinDiscoveredForum(forum.name, forum.about)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.forumIconSmall}>
+                        <Hash size={16} color={Colors.cyan} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.discoveredForumName}>#{forum.name}</Text>
+                        {forum.about ? (
+                          <Text style={styles.discoveredForumDesc} numberOfLines={1}>{forum.about}</Text>
+                        ) : null}
+                      </View>
+                      <Plus size={16} color={Colors.green} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
             </View>
           )}
         </View>
@@ -398,8 +525,8 @@ export default function MessagesScreen() {
     [router, handleLongPressConv]
   );
 
-  const handleDM = async (nodeId: string, name: string) => {
-    await startConversation(nodeId, name);
+  const handleDM = async (nodeId: string, name: string, pubkey?: string) => {
+    await startConversation(nodeId, name, pubkey);
     router.push(`/(messages)/${encodeURIComponent(nodeId)}` as never);
   };
 
@@ -652,6 +779,16 @@ const styles = StyleSheet.create({
   },
   modalBtnText: { color: Colors.black, fontSize: 15, fontWeight: '700' },
   // Forum discovery
+  discoverHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  discoverEmpty: {
+    paddingVertical: 32, alignItems: 'center', gap: 4,
+  },
+  discoverList: {
+    maxHeight: 220, marginTop: 8,
+  },
   createForumBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 10, paddingHorizontal: 12, borderRadius: 8,

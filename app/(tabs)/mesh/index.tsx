@@ -499,6 +499,7 @@ function GatewayStatusBanner() {
 function InternetModeBanner() {
   const { settings } = useAppSettings();
   const { gatewayState } = useGateway();
+  const { isConnected: nostrConnected } = useNostr();
   const pulseAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {

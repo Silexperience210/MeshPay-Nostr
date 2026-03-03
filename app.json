@@ -42,6 +42,7 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidKeyboard",
       [
         "expo-router",
         {
