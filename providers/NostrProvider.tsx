@@ -18,7 +18,9 @@ import {
   type RelayInfo,
   type NostrKeypair,
   type TxRelayPayload,
+  type PresencePayload,
 } from '@/utils/nostr-client';
+import { deriveMeshIdentity } from '@/utils/identity';
 import type { Event as NostrEvent } from 'nostr-tools';
 
 // ─── Interface publique ───────────────────────────────────────────────────────
@@ -60,6 +62,16 @@ export interface NostrState {
     onTx: (payload: TxRelayPayload, event: NostrEvent) => void,
   ) => () => void;
 
+  // ── Découverte / Présence ─────────────────────────────────────────────────
+  /** NodeId MeshCore dérivé du mnemonic ex: "MESH-A7F2" (null si wallet non init) */
+  nodeId: string | null;
+  /** Publie une présence kind:9001 type=presence (coordonnées GPS optionnelles). */
+  publishPresence: (nodeId: string, lat?: number, lng?: number) => Promise<NostrEvent>;
+  /** S'abonne aux présences des pairs MeshPay sur Nostr. */
+  subscribePresence: (
+    onPresence: (payload: PresencePayload, event: NostrEvent) => void,
+  ) => () => void;
+
   // ── Accès bas niveau ─────────────────────────────────────────────────────
   publish: (template: { kind: number; content: string; tags: string[][] }) => Promise<NostrEvent>;
 }
@@ -71,6 +83,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
 
   const [npub, setNpub] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [nodeId, setNodeId] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [relays, setRelays] = useState<RelayInfo[]>([]);
@@ -94,6 +107,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
           setIsConnecting(false);
           setNpub(null);
           setPublicKey(null);
+          setNodeId(null);
           setRelays([]);
         }
       }
@@ -125,6 +139,16 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
           setPublicKey(keypair.publicKey);
           setIsConnecting(false);
           console.log('[NostrProvider] Connecté —', keypair.npub.slice(0, 16) + '…');
+
+          // Publier les métadonnées kind:0 (découverte passive — NIP-01)
+          try {
+            const meshId = deriveMeshIdentity(mnemonic);
+            setNodeId(meshId.nodeId);
+            await nostrClient.publishMetadata(meshId.nodeId, meshId.displayName ?? meshId.nodeId);
+            console.log('[NostrProvider] Métadonnées kind:0 publiées — nodeId:', meshId.nodeId);
+          } catch (metaErr) {
+            console.warn('[NostrProvider] Erreur publication kind:0:', metaErr);
+          }
         }
       } catch (err) {
         console.error('[NostrProvider] Erreur initialisation:', err);
@@ -189,6 +213,20 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     [],
   );
 
+  // ── Présence / Découverte ─────────────────────────────────────────────────
+
+  const publishPresence = useCallback(
+    (nId: string, lat?: number, lng?: number) =>
+      nostrClient.publishPresence(nId, lat, lng),
+    [],
+  );
+
+  const subscribePresence = useCallback(
+    (onPresence: (payload: PresencePayload, event: NostrEvent) => void) =>
+      nostrClient.subscribePresence(onPresence),
+    [],
+  );
+
   // ── TX Relay ─────────────────────────────────────────────────────────────
 
   const publishTxRelay = useCallback(
@@ -216,6 +254,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   return {
     npub,
     publicKey,
+    nodeId,
     isConnected,
     isConnecting,
     relays,
@@ -228,6 +267,8 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     subscribeChannel,
     publishTxRelay,
     subscribeTxRelay,
+    publishPresence,
+    subscribePresence,
     publish,
   };
 });

@@ -672,6 +672,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           if (mqttRef.current && identity) {
             updatePresence(mqttRef.current, identity.nodeId, identity.pubkeyHex, p.lat, p.lng);
           }
+          // Publier la présence Nostr si connecté
+          if (nostrClient.isConnected && identity) {
+            nostrClient.publishPresence(identity.nodeId, p.lat, p.lng).catch(() => {});
+          }
         }
       );
     })();
@@ -1208,6 +1212,55 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
     }
   }, [nostrConnected, handleIncomingNostrChannelMessage]);
+
+  // ── Présence Nostr : découverte de pairs ─────────────────────────────────
+  // Quand Nostr est connecté, s'abonner aux annonces de présence des pairs.
+  // Chaque présence reçue est convertie en RadarPeer via la même logique que MQTT.
+
+  useEffect(() => {
+    if (!nostrConnected || !identity) return;
+
+    const unsub = nostrClient.subscribePresence((payload, _event) => {
+      // Ignorer notre propre présence
+      if (payload.nodeId === identity.nodeId) return;
+
+      const myPos = myLocationRef.current;
+      let distanceMeters = 0;
+      let bearingRad = 0;
+
+      if (myPos && payload.lat !== undefined && payload.lng !== undefined) {
+        distanceMeters = haversineDistance(myPos.lat, myPos.lng, payload.lat, payload.lng);
+        bearingRad = gpsBearing(myPos.lat, myPos.lng, payload.lat, payload.lng);
+      } else {
+        const hash = payload.nodeId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+        distanceMeters = 500 + (hash % 4000);
+        bearingRad = (hash % 628) / 100;
+      }
+
+      const peer: RadarPeer = {
+        nodeId: payload.nodeId,
+        name: payload.name ?? payload.nodeId,
+        distanceMeters,
+        bearingRad,
+        online: payload.online,
+        lat: payload.lat,
+        lng: payload.lng,
+        lastSeen: payload.ts,
+        signalStrength: distanceToSignal(distanceMeters),
+      };
+
+      setRadarPeers(prev => {
+        const filtered = prev.filter(p => p.nodeId !== peer.nodeId);
+        if (!peer.online && filtered.length === prev.length) return prev;
+        return peer.online ? [peer, ...filtered] : filtered;
+      });
+
+      console.log('[Nostr→Radar] Présence reçue:', peer.nodeId, peer.online ? '●' : '○',
+        peer.lat ? `${peer.lat.toFixed(3)},${peer.lng?.toFixed(3)}` : '(no GPS)');
+    });
+
+    return () => unsub();
+  }, [nostrConnected, identity]);
 
   // Connecter au broker MQTT
   const connect = useCallback(() => {

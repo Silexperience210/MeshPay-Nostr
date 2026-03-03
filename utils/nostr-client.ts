@@ -117,6 +117,23 @@ export interface TxRelayPayload {
   targetMint?: string;
 }
 
+/** Payload de présence / découverte pair (kind:9001 type=presence) */
+export interface PresencePayload {
+  type: 'presence';
+  /** Identifiant MeshCore du nœud ex: "MESH-A7F2" */
+  nodeId: string;
+  /** Nom d'affichage optionnel */
+  name?: string;
+  /** Latitude GPS (optionnel) */
+  lat?: number;
+  /** Longitude GPS (optionnel) */
+  lng?: number;
+  /** true = en ligne, false = déconnexion propre */
+  online: boolean;
+  /** Timestamp Unix ms */
+  ts: number;
+}
+
 interface PendingEvent {
   template: EventTemplate;
   resolve: (event: NostrEvent) => void;
@@ -553,6 +570,70 @@ export class NostrClient {
           }
         } catch {
           console.warn('[Nostr] TxRelay payload invalide — ignoré:', event.id.slice(0, 12));
+        }
+      },
+    );
+  }
+
+  // ── Découverte / Présence (kind:0 + kind:9001 type=presence) ────────────────
+
+  /**
+   * Publie les métadonnées NIP-01 (kind:0) du nœud MeshPay.
+   * Annonce le nodeId custom dans le champ `meshpay_node_id`.
+   */
+  async publishMetadata(nodeId: string, displayName?: string): Promise<NostrEvent> {
+    const meta = {
+      name: displayName || nodeId,
+      about: 'MeshPay node',
+      meshpay_node_id: nodeId,
+    };
+    return this.publish({
+      kind: Kind.Metadata,
+      content: JSON.stringify(meta),
+      tags: [['t', 'meshpay']],
+      created_at: Math.floor(Date.now() / 1000),
+    });
+  }
+
+  /**
+   * Publie une présence MeshPay (kind:9001 type=presence).
+   * Utilisé pour la découverte des pairs sans MQTT.
+   *
+   * Les nœuds qui souscrivent via `subscribePresence()` reçoivent
+   * ces annonces et mettent à jour leur radar de pairs.
+   */
+  async publishPresence(nodeId: string, lat?: number, lng?: number): Promise<NostrEvent> {
+    const payload: PresencePayload = {
+      type: 'presence',
+      nodeId,
+      online: true,
+      ts: Date.now(),
+      ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}),
+    };
+    return this.publish({
+      kind: Kind.TxRelay,
+      content: JSON.stringify(payload),
+      tags: [['t', 'presence']],
+      created_at: Math.floor(Date.now() / 1000),
+    });
+  }
+
+  /**
+   * S'abonne aux annonces de présence des pairs MeshPay.
+   * Filtre kind:9001 avec tag #t=presence — ne reçoit PAS les TX relay.
+   */
+  subscribePresence(
+    onPresence: (payload: PresencePayload, event: NostrEvent) => void,
+  ): () => void {
+    return this.subscribe(
+      [{ kinds: [Kind.TxRelay], '#t': ['presence'] }],
+      (event) => {
+        try {
+          const payload = JSON.parse(event.content) as PresencePayload;
+          if (payload.type !== 'presence' || !payload.nodeId) return;
+          onPresence(payload, event);
+        } catch {
+          console.warn('[Nostr] Présence invalide — ignorée:', event.id.slice(0, 12));
         }
       },
     );
