@@ -181,8 +181,12 @@ export class MessagingBus {
     const { toNostrPubkey, content } = params;
 
     if (this.nostr.isConnected) {
-      // publishDM gère le NIP-04 (chiffrement + tag ['p', recipientPubkey])
-      await this.nostr.publishDM(toNostrPubkey, content);
+      // NIP-17 Gift Wrap (expéditeur masqué, chiffrement NIP-44) — fallback NIP-04 si nécessaire
+      if (typeof this.nostr.publishDMSealed === 'function') {
+        await this.nostr.publishDMSealed(toNostrPubkey, content);
+      } else {
+        await this.nostr.publishDM(toNostrPubkey, content);
+      }
       return 'nostr';
     }
 

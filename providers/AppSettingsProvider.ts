@@ -21,6 +21,7 @@ export interface AppSettings {
   autoSyncInterval: number;
   autoRelay: boolean;
   notifications: boolean;
+  shareLocation: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -37,6 +38,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoSyncInterval: 30000,
   autoRelay: true,
   notifications: true,
+  shareLocation: false,
 };
 
 export const [AppSettingsContext, useAppSettings] = createContextHook(() => {

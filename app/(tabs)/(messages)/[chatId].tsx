@@ -184,6 +184,18 @@ function MessageBubble({ message, displayName, onLongPress, onCashuPress }: { me
           <Text style={[styles.messageTime, isMe && styles.myMessageTime]}>
             {formatMessageTime(message.timestamp)}
           </Text>
+          {message.transport && (
+            <View style={[
+              styles.transportBadge,
+              message.transport === 'nostr' ? styles.transportNostr
+              : message.transport === 'ble' ? styles.transportBle
+              : styles.transportLora,
+            ]}>
+              <Text style={styles.transportBadgeText}>
+                {message.transport === 'nostr' ? '⚡' : message.transport === 'ble' ? '🔵' : '📡'}
+              </Text>
+            </View>
+          )}
           {isMe && (
             <Text style={[styles.messageStatus, message.status === 'delivered' && styles.statusDelivered, message.status === 'failed' && styles.statusFailed]}>
               {message.status === 'delivered' ? '✓✓' : message.status === 'sent' ? '✓' : message.status === 'sending' ? '◎' : '✗'}
@@ -927,6 +939,16 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: 'monospace',
   },
+  transportBadge: {
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginHorizontal: 3,
+  },
+  transportNostr: { backgroundColor: 'rgba(160, 32, 240, 0.15)' },
+  transportBle:   { backgroundColor: 'rgba(0, 120, 255, 0.15)' },
+  transportLora:  { backgroundColor: 'rgba(0, 200, 100, 0.15)' },
+  transportBadgeText: { fontSize: 10 },
   // Visionneuse plein écran
   imageViewer: {
     flex: 1,

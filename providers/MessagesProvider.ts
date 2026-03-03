@@ -231,6 +231,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             timestamp: packet.timestamp * 1000,
             isMine: false,
             status: 'delivered',
+            transport: 'ble',
           };
           
           saveMessage(msg);
@@ -851,6 +852,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       timestamp: ts,
       isMine: true,
       status: 'sent',
+      transport: 'ble',
       cashuAmount: type === 'cashu' ? parseCashuAmount(text) : undefined,
       cashuToken: type === 'cashu' ? text : undefined,
     };
@@ -997,12 +999,47 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
     // DM normal (sans chunking)
     const conv = conversations.find(c => c.id === convId);
-    if (!conv?.peerPubkey) {
-      throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
+
+    // Envoi NIP-17 via Nostr si connecté (parallèle ou exclusif selon BLE)
+    if (nostrClient.isConnected && conv?.peerPubkey) {
+      // Convertir pubkey hex 66 chars (compressée 02/03) → 64 chars (x-only Nostr)
+      const nostrPubkey64 = conv.peerPubkey.length === 66
+        ? conv.peerPubkey.slice(2)
+        : conv.peerPubkey;
+      if (nostrPubkey64.length === 64) {
+        try {
+          await nostrClient.publishDMSealed(nostrPubkey64, text);
+          console.log('[Messages] DM NIP-17 envoyé via Nostr à:', convId);
+        } catch (nostrErr) {
+          console.warn('[Messages] NIP-17 échoué, fallback BLE si disponible:', nostrErr);
+        }
+      }
     }
 
-    const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
-    publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
+    if (ble.connected) {
+      if (!conv?.peerPubkey) {
+        throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
+      }
+      const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
+      publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
+    } else if (!nostrClient.isConnected) {
+      throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
+    } else {
+      // Nostr-only : sauvegarder localement sans BLE
+      const msg: StoredMessage = {
+        id: msgId, conversationId: convId, fromNodeId: id.nodeId,
+        fromPubkey: id.pubkeyHex, text, type, timestamp: ts,
+        isMine: true, status: 'sent', transport: 'nostr',
+        cashuAmount: type === 'cashu' ? parseCashuAmount(text) : undefined,
+        cashuToken: type === 'cashu' ? text : undefined,
+      };
+      await saveMessage(msg);
+      await updateConversationLastMessage(convId, text.slice(0, 50), ts, false);
+      setMessagesByConv(prev => ({ ...prev, [convId]: [...(prev[convId] ?? []), msg] }));
+      setConversations(prev => prev.map(c =>
+        c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
+      ));
+    }
   }, [identity, conversations, publishAndStore, ble.connected]);
 
   // Envoyer un Cashu token
@@ -1250,6 +1287,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         timestamp: msg.ts,
         isMine: false,
         status: 'delivered',
+        transport: msg.transport as 'nostr' | 'lora' | 'ble',
         cashuAmount,
         cashuToken: cashuTokenStr,
       };

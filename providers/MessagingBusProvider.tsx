@@ -12,7 +12,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import { useNostr } from '@/providers/NostrProvider';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
-import { messagingBus, type BusMessage, type BusMessageHandler, type BusStatus } from '@/utils/messaging-bus';
+import { messagingBus, type BusMessage, type BusMessageHandler, type BusStatus, type Transport } from '@/utils/messaging-bus';
 
 // ─── Interface publique ───────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ export interface MessagingBusState {
     toNodeId: string;
     toNostrPubkey: string;
     content: string;
-  }) => Promise<'nostr'>;
+  }) => Promise<Transport>;
 
   /**
    * Envoie un message de channel via Nostr (NIP-28).
@@ -38,7 +38,7 @@ export interface MessagingBusState {
     channelId: string;
     content: string;
     nostrChannelId?: string;
-  }) => Promise<'nostr'>;
+  }) => Promise<Transport>;
 
   /**
    * Abonne un handler aux messages entrants.

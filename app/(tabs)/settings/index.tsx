@@ -50,6 +50,9 @@ import { useGateway } from '@/providers/GatewayProvider';
 import { type ConnectionMode } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useBle } from '@/providers/BleProvider';
+import { useNostr } from '@/providers/NostrProvider';
+import { useTxRelay } from '@/providers/TxRelayProvider';
+import * as Location from 'expo-location';
 import { testMempoolConnection } from '@/utils/mempool';
 import { UpdateChecker } from '@/components/UpdateChecker';
 import { testMintConnection, formatMintUrl } from '@/utils/cashu';
@@ -1037,6 +1040,178 @@ function NetworkSettingsCard() {
   );
 }
 
+function NostrSettingsCard() {
+  const { npub, relays, isConnected, isConnecting } = useNostr();
+  const { gatewayStats, isGateway, pendingRelays } = useTxRelay();
+  const { settings, updateSettings } = useAppSettings();
+  const [copiedNpub, setCopiedNpub] = useState(false);
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  const handleCopyNpub = useCallback(async () => {
+    if (!npub) return;
+    await Clipboard.setStringAsync(npub);
+    setCopiedNpub(true);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setTimeout(() => setCopiedNpub(false), 2000);
+  }, [npub]);
+
+  const handleToggleLocation = useCallback(async (val: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    updateSettings({ shareLocation: val });
+    if (!val) return;
+    setLocationLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission GPS', 'Accès à la localisation refusé.');
+        updateSettings({ shareLocation: false });
+      }
+    } catch {
+      updateSettings({ shareLocation: false });
+    } finally {
+      setLocationLoading(false);
+    }
+  }, [updateSettings]);
+
+  const statusColor = isConnecting ? Colors.yellow : isConnected ? Colors.green : Colors.red;
+  const statusLabel = isConnecting ? 'Connexion...' : isConnected ? 'Connecté' : 'Déconnecté';
+  const pendingCount = pendingRelays.filter(r => r.status === 'pending').length;
+
+  const getRelayColor = (status: string) => {
+    if (status === 'connected') return Colors.green;
+    if (status === 'connecting') return Colors.yellow;
+    return Colors.red;
+  };
+
+  return (
+    <View style={styles.sectionCard}>
+      {/* Statut global */}
+      <View style={styles.settingRow}>
+        <View style={styles.settingLeft}>
+          <Globe size={18} color={statusColor} />
+          <Text style={[styles.settingLabel, { marginLeft: 10 }]}>Nostr</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: statusColor }} />
+          <Text style={[styles.settingValue, { color: statusColor }]}>{statusLabel}</Text>
+        </View>
+      </View>
+
+      {/* npub copiable */}
+      {npub && (
+        <TouchableOpacity style={styles.settingRow} onPress={handleCopyNpub} activeOpacity={0.6}>
+          <View style={styles.settingLeft}>
+            <Key size={18} color={Colors.purple} />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.settingLabel}>Clé publique (npub)</Text>
+              <Text style={[styles.settingValue, { fontSize: 10, fontFamily: 'monospace' }]} numberOfLines={1}>
+                {npub.slice(0, 12)}…{npub.slice(-6)}
+              </Text>
+            </View>
+          </View>
+          {copiedNpub
+            ? <Check size={16} color={Colors.green} />
+            : <Copy size={16} color={Colors.textMuted} />}
+        </TouchableOpacity>
+      )}
+
+      {/* Liste relays */}
+      {relays.length > 0 && (
+        <View style={nostrStyles.relayList}>
+          <Text style={nostrStyles.relayListTitle}>Relays</Text>
+          {relays.map(r => (
+            <View key={r.url} style={nostrStyles.relayRow}>
+              <View style={[nostrStyles.relayDot, { backgroundColor: getRelayColor(r.status) }]} />
+              <Text style={nostrStyles.relayUrl} numberOfLines={1}>
+                {r.url.replace('wss://', '')}
+              </Text>
+              <Text style={[nostrStyles.relayStatus, { color: getRelayColor(r.status) }]}>
+                {r.status}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Gateway stats */}
+      {isGateway && (
+        <View style={nostrStyles.gatewayStats}>
+          <Text style={nostrStyles.gatewayStatsTitle}>Gateway actif</Text>
+          <View style={{ flexDirection: 'row', gap: 16, marginTop: 4 }}>
+            <Text style={{ color: Colors.green, fontSize: 12 }}>{gatewayStats.relayedCount} relayés</Text>
+            {gatewayStats.errorCount > 0 && (
+              <Text style={{ color: Colors.red, fontSize: 12 }}>{gatewayStats.errorCount} erreurs</Text>
+            )}
+            {pendingCount > 0 && (
+              <Text style={{ color: Colors.yellow, fontSize: 12 }}>{pendingCount} en cours</Text>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Toggle GPS présence */}
+      <SettingToggle
+        icon={locationLoading
+          ? <ActivityIndicator size={16} color={Colors.blue} />
+          : <Globe size={18} color={Colors.blue} />}
+        label="Partager position (Nostr)"
+        value={settings.shareLocation ?? false}
+        onToggle={handleToggleLocation}
+      />
+    </View>
+  );
+}
+
+const nostrStyles = StyleSheet.create({
+  relayList: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+  },
+  relayListTitle: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  relayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 3,
+  },
+  relayDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  relayUrl: {
+    color: Colors.textSecondary,
+    fontSize: 11,
+    flex: 1,
+    fontFamily: 'monospace',
+  },
+  relayStatus: {
+    fontSize: 10,
+  },
+  gatewayStats: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+  },
+  gatewayStatsTitle: {
+    color: Colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+});
+
 export default function SettingsScreen() {
   const [showSeedQRScanner, setShowSeedQRScanner] = React.useState<boolean>(false);
   const { isInitialized, importWallet } = useWalletSeed();
@@ -1127,6 +1302,11 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Gateway & Relay</Text>
         <GatewayModeCard />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Nostr</Text>
+        <NostrSettingsCard />
       </View>
 
       <View style={styles.section}>
