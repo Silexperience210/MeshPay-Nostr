@@ -1,8 +1,11 @@
 import { Tabs } from "expo-router";
 import { MessageSquare, Wallet, Radio, Settings } from "lucide-react-native";
 import Colors from "@/constants/colors";
+import { useTranslation } from "@/utils/i18n";
 
 export default function TabLayout() {
+  const { t } = useTranslation();
+
   return (
     <Tabs
       screenOptions={{
@@ -24,7 +27,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="(messages)"
         options={{
-          title: "Messages",
+          title: t("tabs.messages"),
           tabBarIcon: ({ color, size }) => (
             <MessageSquare size={size} color={color} />
           ),
@@ -33,7 +36,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="wallet"
         options={{
-          title: "Wallet",
+          title: t("tabs.wallet"),
           tabBarIcon: ({ color, size }) => (
             <Wallet size={size} color={color} />
           ),
@@ -42,7 +45,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="mesh"
         options={{
-          title: "Mesh",
+          title: t("tabs.mesh"),
           tabBarIcon: ({ color, size }) => (
             <Radio size={size} color={color} />
           ),
@@ -51,7 +54,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: "Settings",
+          title: t("tabs.settings"),
           tabBarIcon: ({ color, size }) => (
             <Settings size={size} color={color} />
           ),

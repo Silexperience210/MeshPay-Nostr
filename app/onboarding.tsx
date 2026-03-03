@@ -5,73 +5,27 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
-  Dimensions,
-  ScrollView,
 } from 'react-native';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Radio,
   MessageCircle,
   Bitcoin,
-  DollarSign,
-  Wifi,
+  Globe,
+  Radio,
   Lock,
   Users,
+  DollarSign,
   ChevronRight,
 } from 'lucide-react-native';
 import Colors from '@/constants/colors';
+import { useAppSettings } from '@/providers/AppSettingsProvider';
+import { useTranslation } from '@/utils/i18n';
+import type { AppLanguage } from '@/providers/AppSettingsProvider';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ONBOARDING_KEY = 'BITMESH_ONBOARDING_DONE';
-
-interface Slide {
-  id: number;
-  icon: any;
-  title: string;
-  subtitle: string;
-  description: string;
-  color: string;
-}
-
-const slides: Slide[] = [
-  {
-    id: 1,
-    icon: MessageCircle,
-    title: 'Bienvenue sur BitMesh',
-    subtitle: 'Messagerie P2P décentralisée',
-    description:
-      'BitMesh est une application de messagerie décentralisée qui utilise le protocole MeshCore pour envoyer des messages chiffrés via LoRa ou Nostr, sans serveur central.',
-    color: Colors.accent,
-  },
-  {
-    id: 2,
-    icon: Radio,
-    title: 'MeshCore Protocol',
-    subtitle: 'Communication longue portée',
-    description:
-      'MeshCore permet de communiquer via LoRa (jusqu\'à 20 km en ligne de vue) ou Nostr (Internet). Les messages sont automatiquement routés via le réseau mesh.',
-    color: Colors.green,
-  },
-  {
-    id: 3,
-    icon: Bitcoin,
-    title: 'Bitcoin & Cashu',
-    subtitle: 'Paiements intégrés',
-    description:
-      'Envoyez des sats via Lightning ou Cashu eCash directement dans vos conversations. Votre wallet est chiffré et stocké localement sur votre appareil.',
-    color: Colors.accent,
-  },
-  {
-    id: 4,
-    icon: Wifi,
-    title: 'Connecter un device',
-    subtitle: 'En quelques clics',
-    description:
-      '1️⃣ Allumez votre gateway LoRa\n2️⃣ Ouvrez l\'onglet Mesh\n3️⃣ Appuyez sur "Scan"\n4️⃣ Votre device apparaît sur le radar GPS\n5️⃣ Tapez pour connecter et commencer à échanger !',
-    color: Colors.green,
-  },
-];
+// Steps: 0=langSelect, 1-4=slides
+const TOTAL_STEPS = 5;
 
 function SlideIndicator({ active }: { active: boolean }) {
   return (
@@ -87,46 +41,158 @@ function SlideIndicator({ active }: { active: boolean }) {
   );
 }
 
+// --- Language selector step ---
+function LangSelectStep({ onSelect }: { onSelect: (lang: AppLanguage) => void }) {
+  const langs: { code: AppLanguage; flag: string; label: string }[] = [
+    { code: 'en', flag: '🇬🇧', label: 'English' },
+    { code: 'fr', flag: '🇫🇷', label: 'Français' },
+    { code: 'es', flag: '🇪🇸', label: 'Español' },
+  ];
+
+  return (
+    <View style={styles.langContainer}>
+      <Text style={styles.langTitle}>Choose / Choisissez / Elige</Text>
+      <Text style={styles.langSubtitle}>Select your language</Text>
+      <View style={styles.langButtonsContainer}>
+        {langs.map(({ code, flag, label }) => (
+          <TouchableOpacity
+            key={code}
+            style={styles.langButton}
+            onPress={() => onSelect(code)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.langFlag}>{flag}</Text>
+            <Text style={styles.langLabel}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// --- Slide 1: Value prop ---
+function Slide1({ t }: { t: (k: string) => string }) {
+  return (
+    <View style={styles.slideContainer}>
+      <View style={[styles.iconContainer, { backgroundColor: Colors.accentGlow }]}>
+        <MessageCircle size={80} color={Colors.accent} strokeWidth={1.5} />
+      </View>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>{t('onboarding.slide1.title')}</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{t('onboarding.slide1.badge')}</Text>
+        </View>
+      </View>
+      <Text style={[styles.subtitle, { color: Colors.accent }]}>{t('onboarding.slide1.subtitle')}</Text>
+      <Text style={styles.description}>{t('onboarding.slide1.description')}</Text>
+      <View style={styles.featuresContainer}>
+        <View style={styles.featureRow}>
+          <Lock size={16} color={Colors.green} />
+          <Text style={styles.featureText}>{t('onboarding.slide1.feat1')}</Text>
+        </View>
+        <View style={styles.featureRow}>
+          <Users size={16} color={Colors.green} />
+          <Text style={styles.featureText}>{t('onboarding.slide1.feat2')}</Text>
+        </View>
+        <View style={styles.featureRow}>
+          <DollarSign size={16} color={Colors.green} />
+          <Text style={styles.featureText}>{t('onboarding.slide1.feat3')}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// --- Slide 2: Two modes ---
+function Slide2({ t }: { t: (k: string) => string }) {
+  return (
+    <View style={styles.slideContainer}>
+      <View style={[styles.iconContainer, { backgroundColor: Colors.blueDim }]}>
+        <Globe size={80} color={Colors.blue} strokeWidth={1.5} />
+      </View>
+      <Text style={styles.title}>{t('onboarding.slide2.title')}</Text>
+      <Text style={[styles.subtitle, { color: Colors.blue }]}>{t('onboarding.slide2.subtitle')}</Text>
+
+      <View style={styles.modeCard}>
+        <View style={styles.modeCardHeader}>
+          <Globe size={20} color={Colors.green} />
+          <Text style={styles.modeCardTitle}>{t('onboarding.slide2.mode1Title')}</Text>
+          <View style={[styles.modeBadge, { backgroundColor: Colors.greenDim }]}>
+            <Text style={[styles.modeBadgeText, { color: Colors.green }]}>{t('onboarding.slide2.mode1Badge')}</Text>
+          </View>
+        </View>
+        <Text style={styles.modeCardDesc}>{t('onboarding.slide2.mode1Desc')}</Text>
+      </View>
+
+      <View style={styles.modeCard}>
+        <View style={styles.modeCardHeader}>
+          <Radio size={20} color={Colors.accent} />
+          <Text style={styles.modeCardTitle}>{t('onboarding.slide2.mode2Title')}</Text>
+          <View style={[styles.modeBadge, { backgroundColor: Colors.accentGlow }]}>
+            <Text style={[styles.modeBadgeText, { color: Colors.accent }]}>{t('onboarding.slide2.mode2Badge')}</Text>
+          </View>
+        </View>
+        <Text style={styles.modeCardDesc}>{t('onboarding.slide2.mode2Desc')}</Text>
+      </View>
+    </View>
+  );
+}
+
+// --- Slide 3: Bitcoin & Cashu ---
+function Slide3({ t }: { t: (k: string) => string }) {
+  return (
+    <View style={styles.slideContainer}>
+      <View style={[styles.iconContainer, { backgroundColor: Colors.accentGlow }]}>
+        <Bitcoin size={80} color={Colors.accent} strokeWidth={1.5} />
+      </View>
+      <Text style={styles.title}>{t('onboarding.slide3.title')}</Text>
+      <Text style={[styles.subtitle, { color: Colors.accent }]}>{t('onboarding.slide3.subtitle')}</Text>
+      <Text style={styles.description}>{t('onboarding.slide3.description')}</Text>
+    </View>
+  );
+}
+
+// --- Slide 4: Ready ---
+function Slide4({ t }: { t: (k: string) => string }) {
+  return (
+    <View style={styles.slideContainer}>
+      <View style={[styles.iconContainer, { backgroundColor: Colors.greenDim }]}>
+        <Text style={styles.readyEmoji}>🚀</Text>
+      </View>
+      <Text style={styles.title}>{t('onboarding.slide4.title')}</Text>
+      <Text style={[styles.subtitle, { color: Colors.green }]}>{t('onboarding.slide4.subtitle')}</Text>
+      <Text style={styles.description}>{t('onboarding.slide4.description')}</Text>
+    </View>
+  );
+}
+
 export default function OnboardingScreen() {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
+  const { settings, updateSettings } = useAppSettings();
+  const { t } = useTranslation();
+
+  const [step, setStep] = useState(0);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  const animateTransition = (cb: () => void) => {
+    Animated.timing(fadeAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+      cb();
+      Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    });
+  };
 
   useEffect(() => {
-    // Animation d'entrée
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.spring(slideAnim, {
-        toValue: 1,
-        tension: 40,
-        friction: 7,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    // Entrance animation
+    fadeAnim.setValue(0);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 600, useNativeDriver: true }).start();
   }, []);
 
+  const handleSelectLang = (lang: AppLanguage) => {
+    updateSettings({ language: lang });
+    animateTransition(() => setStep(1));
+  };
+
   const handleNext = () => {
-    if (currentIndex < slides.length - 1) {
-      const nextIndex = currentIndex + 1;
-      setCurrentIndex(nextIndex);
-      scrollViewRef.current?.scrollTo({
-        x: nextIndex * SCREEN_WIDTH,
-        animated: true,
-      });
-      // Reset animation
-      slideAnim.setValue(0);
-      Animated.spring(slideAnim, {
-        toValue: 1,
-        tension: 40,
-        friction: 7,
-        useNativeDriver: true,
-      }).start();
-    }
+    animateTransition(() => setStep(s => s + 1));
   };
 
   const handleSkip = async () => {
@@ -139,91 +205,55 @@ export default function OnboardingScreen() {
     router.replace('/(tabs)');
   };
 
-  const currentSlide = slides[currentIndex];
-  const IconComponent = currentSlide.icon;
+  const isLastSlide = step === TOTAL_STEPS - 1;
+  // Dots shown from step 1 onward (step 0 = lang select has no dots)
+  const showDots = step > 0;
 
   return (
     <View style={styles.container}>
-      {/* Header avec Skip */}
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.logo}>BitMesh</Text>
-        {currentIndex < slides.length - 1 && (
+        <Text style={styles.logo}>MeshPay</Text>
+        {step > 0 && step < TOTAL_STEPS - 1 && (
           <TouchableOpacity onPress={handleSkip}>
-            <Text style={styles.skipButton}>Passer</Text>
+            <Text style={styles.skipButton}>{t('onboarding.skip')}</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Slides */}
-      <Animated.View
-        style={[
-          styles.contentContainer,
-          {
-            opacity: fadeAnim,
-            transform: [
-              {
-                translateY: slideAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [50, 0],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        {/* Icône animée */}
-        <View style={[styles.iconContainer, { backgroundColor: `${currentSlide.color}20` }]}>
-          <IconComponent size={80} color={currentSlide.color} strokeWidth={1.5} />
-        </View>
-
-        {/* Titre */}
-        <Text style={styles.title}>{currentSlide.title}</Text>
-        <Text style={[styles.subtitle, { color: currentSlide.color }]}>
-          {currentSlide.subtitle}
-        </Text>
-
-        {/* Description */}
-        <Text style={styles.description}>{currentSlide.description}</Text>
-
-        {/* Features (seulement slide 1) */}
-        {currentIndex === 0 && (
-          <View style={styles.featuresContainer}>
-            <View style={styles.featureRow}>
-              <Lock size={16} color={Colors.green} />
-              <Text style={styles.featureText}>Chiffrement E2E (ECDH)</Text>
-            </View>
-            <View style={styles.featureRow}>
-              <Users size={16} color={Colors.green} />
-              <Text style={styles.featureText}>Forums multi-utilisateurs</Text>
-            </View>
-            <View style={styles.featureRow}>
-              <DollarSign size={16} color={Colors.green} />
-              <Text style={styles.featureText}>Paiements Bitcoin/Cashu</Text>
-            </View>
-          </View>
-        )}
+      {/* Content */}
+      <Animated.View style={[styles.contentWrapper, { opacity: fadeAnim }]}>
+        {step === 0 && <LangSelectStep onSelect={handleSelectLang} />}
+        {step === 1 && <Slide1 t={t} />}
+        {step === 2 && <Slide2 t={t} />}
+        {step === 3 && <Slide3 t={t} />}
+        {step === 4 && <Slide4 t={t} />}
       </Animated.View>
 
-      {/* Indicateurs */}
-      <View style={styles.indicatorsContainer}>
-        {slides.map((_, index) => (
-          <SlideIndicator key={index} active={index === currentIndex} />
-        ))}
-      </View>
+      {/* Dots */}
+      {showDots && (
+        <View style={styles.indicatorsContainer}>
+          {[1, 2, 3, 4].map(i => (
+            <SlideIndicator key={i} active={i === step} />
+          ))}
+        </View>
+      )}
 
-      {/* Boutons */}
-      <View style={styles.buttonsContainer}>
-        {currentIndex < slides.length - 1 ? (
-          <TouchableOpacity style={styles.nextButton} onPress={handleNext}>
-            <Text style={styles.nextButtonText}>Suivant</Text>
-            <ChevronRight size={20} color={Colors.background} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity style={styles.finishButton} onPress={handleFinish}>
-            <Text style={styles.finishButtonText}>Commencer 🚀</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* Bottom button (not shown on step 0 — lang buttons are the CTA) */}
+      {step > 0 && (
+        <View style={styles.buttonsContainer}>
+          {isLastSlide ? (
+            <TouchableOpacity style={styles.finishButton} onPress={handleFinish}>
+              <Text style={styles.finishButtonText}>{t('onboarding.start')}</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.nextButton} onPress={handleNext}>
+              <Text style={styles.nextButtonText}>{t('onboarding.next')}</Text>
+              <ChevronRight size={20} color={Colors.background} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -240,7 +270,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 24,
-    marginBottom: 40,
+    marginBottom: 24,
   },
   logo: {
     fontSize: 24,
@@ -253,42 +283,107 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     fontWeight: '600',
   },
-  contentContainer: {
+  contentWrapper: {
     flex: 1,
+    justifyContent: 'center',
+  },
+  // ---------- Language select ----------
+  langContainer: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  langTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: Colors.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  langSubtitle: {
+    fontSize: 15,
+    color: Colors.textMuted,
+    marginBottom: 48,
+  },
+  langButtonsContainer: {
+    width: '100%',
+    gap: 16,
+  },
+  langButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+  },
+  langFlag: {
+    fontSize: 28,
+  },
+  langLabel: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  // ---------- Slides ----------
+  slideContainer: {
     alignItems: 'center',
     paddingHorizontal: 24,
   },
   iconContainer: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 28,
+  },
+  readyEmoji: {
+    fontSize: 64,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
     color: Colors.text,
     textAlign: 'center',
-    marginBottom: 8,
+  },
+  badge: {
+    backgroundColor: Colors.accentGlow,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  badgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.accent,
   },
   subtitle: {
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   description: {
-    fontSize: 16,
+    fontSize: 15,
     color: Colors.textMuted,
     textAlign: 'center',
-    lineHeight: 24,
-    paddingHorizontal: 16,
+    lineHeight: 23,
+    paddingHorizontal: 8,
   },
   featuresContainer: {
-    marginTop: 32,
-    gap: 16,
+    marginTop: 28,
+    gap: 14,
+    alignSelf: 'stretch',
+    paddingHorizontal: 16,
   },
   featureRow: {
     flexDirection: 'row',
@@ -300,11 +395,48 @@ const styles = StyleSheet.create({
     color: Colors.text,
     fontWeight: '500',
   },
+  // mode cards (slide 2)
+  modeCard: {
+    width: '100%',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 16,
+    marginTop: 12,
+  },
+  modeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  modeCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text,
+    flex: 1,
+  },
+  modeBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  modeBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  modeCardDesc: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    lineHeight: 19,
+  },
+  // ---------- Navigation ----------
   indicatorsContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 8,
-    marginVertical: 24,
+    marginVertical: 20,
   },
   indicator: {
     height: 8,

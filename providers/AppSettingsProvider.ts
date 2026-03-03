@@ -6,9 +6,11 @@ import createContextHook from '@nkzw/create-context-hook';
 const SETTINGS_KEY = 'meshcore_app_settings';
 
 export type ConnectionMode = 'internet' | 'lora' | 'bridge';
+export type AppLanguage = 'en' | 'fr' | 'es';
 
 export interface AppSettings {
   connectionMode: ConnectionMode;
+  language: AppLanguage;
   mempoolUrl: string;
   customMempoolUrl: string;
   useCustomMempool: boolean;
@@ -24,8 +26,18 @@ export interface AppSettings {
   shareLocation: boolean;
 }
 
+function detectLanguage(): AppLanguage {
+  try {
+    const locale = Intl.DateTimeFormat().resolvedOptions().locale ?? '';
+    if (locale.startsWith('fr')) return 'fr';
+    if (locale.startsWith('es')) return 'es';
+  } catch {}
+  return 'en';
+}
+
 const DEFAULT_SETTINGS: AppSettings = {
   connectionMode: 'internet',
+  language: detectLanguage(),
   mempoolUrl: 'https://mempool.space',
   customMempoolUrl: '',
   useCustomMempool: false,

@@ -47,7 +47,8 @@ import { useBitcoin } from '@/providers/BitcoinProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import SeedQRScanner from '@/components/SeedQRScanner';
 import { useGateway } from '@/providers/GatewayProvider';
-import { type ConnectionMode } from '@/providers/AppSettingsProvider';
+import { type ConnectionMode, type AppLanguage } from '@/providers/AppSettingsProvider';
+import { useTranslation } from '@/utils/i18n';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useBle } from '@/providers/BleProvider';
 import { useNostr } from '@/providers/NostrProvider';
@@ -1212,6 +1213,45 @@ const nostrStyles = StyleSheet.create({
   },
 });
 
+function LanguageSelectorCard() {
+  const { settings, updateSettings } = useAppSettings();
+  const { t } = useTranslation();
+
+  const langs: { code: AppLanguage; flag: string; label: string }[] = [
+    { code: 'en', flag: '🇬🇧', label: 'English' },
+    { code: 'fr', flag: '🇫🇷', label: 'Français' },
+    { code: 'es', flag: '🇪🇸', label: 'Español' },
+  ];
+
+  return (
+    <View style={styles.sectionCard}>
+      {langs.map(({ code, flag, label }, index) => {
+        const isActive = settings.language === code;
+        return (
+          <TouchableOpacity
+            key={code}
+            style={[
+              styles.settingRow,
+              index === langs.length - 1 && { borderBottomWidth: 0 },
+            ]}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              updateSettings({ language: code });
+            }}
+            activeOpacity={0.6}
+          >
+            <View style={styles.settingLeft}>
+              <Text style={{ fontSize: 20 }}>{flag}</Text>
+              <Text style={[styles.settingLabel, isActive && { color: Colors.accent }]}>{label}</Text>
+            </View>
+            {isActive && <Check size={16} color={Colors.accent} />}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const [showSeedQRScanner, setShowSeedQRScanner] = React.useState<boolean>(false);
   const { isInitialized, importWallet } = useWalletSeed();
@@ -1317,6 +1357,11 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Network</Text>
         <NetworkSettingsCard />
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Language / Langue</Text>
+        <LanguageSelectorCard />
       </View>
 
       <View style={styles.section}>
