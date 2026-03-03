@@ -145,37 +145,37 @@ jobs:
       - name: Rename APK
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk \
-             android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
-          echo "[OK] APK -> MeshPay-${{ steps.version.outputs.VERSION }}.apk"
+             android/app/build/outputs/apk/release/MeshPay-Nostr-${{ steps.version.outputs.VERSION }}.apk
+          echo "[OK] APK -> MeshPay-Nostr-${{ steps.version.outputs.VERSION }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MeshPay-${{ steps.version.outputs.VERSION }}
-          path: android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
+          name: MeshPay-Nostr-${{ steps.version.outputs.VERSION }}
+          path: android/app/build/outputs/apk/release/MeshPay-Nostr-${{ steps.version.outputs.VERSION }}.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
-          name: "MeshPay ${{ steps.version.outputs.VERSION }}"
+          name: "MeshPay-Nostr ${{ steps.version.outputs.VERSION }}"
           body: |
-            ## MeshPay ${{ steps.version.outputs.VERSION }}
+            ## MeshPay-Nostr ${{ steps.version.outputs.VERSION }}
 
             **Commit**: ${{ github.sha }}
-            **Tag declencheur**: ${{ github.ref_name }}
-            **Message**: ${{ github.event.head_commit.message }}
+            **Tag**: ${{ github.ref_name }}
+
+            ### Nouveautés
+            - Transport Nostr (NIP-17 Gift Wrap) — expéditeur masqué
+            - Badges ⚡ Nostr / 🔵 BLE / 📡 LoRa sur les messages
+            - Section Nostr dans Settings : npub, statut relays, gateway stats, GPS
+            - MQTT supprimé — Nostr-only
 
             ### Installation
-            1. Telecharger le fichier `.apk` ci-dessous
-            2. Sur Android : Parametres > Securite > Autoriser sources inconnues
-            3. Installer et profiter !
-
-            ### Fonctionnalites
-            - Messagerie P2P via LoRa (MeshCore) + BLE
-            - Identite Bitcoin (cle secp256k1)
-            - Portefeuille Cashu (e-cash off-chain)
-          files: android/app/build/outputs/apk/release/MeshPay-${{ steps.version.outputs.VERSION }}.apk
+            1. Télécharger le fichier `.apk` ci-dessous
+            2. Android : Paramètres > Sécurité > Sources inconnues
+            3. Installer
+          files: android/app/build/outputs/apk/release/MeshPay-Nostr-${{ steps.version.outputs.VERSION }}.apk
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
