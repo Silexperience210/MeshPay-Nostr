@@ -4,7 +4,7 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 
 ## État actuel (2026-03-03)
 
-**6 phases complètes — 205 tests verts — branche `main` pushée**
+**7 phases complètes — 228 tests verts — branche `main` pushée**
 
 ### ✅ Phase 1 — Fondations Nostr
 - `utils/nostr-client.ts` : NIP-06 (dérivation `m/44'/1237'/0'/0/0`), NIP-04 (sans crypto.subtle via @noble), SimplePool, offline queue, double-validation events
@@ -57,14 +57,11 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 - `providers/NostrProvider.tsx` : méthodes exposées
 - 20 tests → **205 verts**
 
-### Phase 7 — Discovery / Présence Nostr
-**Objectif** : découvrir les pairs MeshPay sur Nostr sans MQTT.
-
-Fichiers à modifier :
-- `providers/NostrProvider.tsx` : publier kind:0 au connect `{name, nodeId, about: "MeshPay node"}`
-- `utils/nostr-client.ts` : `publishPresence(nodeId, lat?, lng?)` → kind:9001 type=presence
-- `providers/MessagingBusProvider.tsx` ou nouveau `providers/NostrDiscoveryProvider.tsx` : subscribe aux présences Nostr, MAJ radarPeers
-- `providers/MessagesProvider.ts` : brancher les présences Nostr sur `setRadarPeers()`
+### Phase 7 ✅ — Discovery / Présence Nostr — TERMINÉE
+- `PresencePayload`, `publishMetadata` (kind:0), `publishPresence` (kind:9001 #t=presence), `subscribePresence`
+- `NostrProvider` : publie kind:0 au connect, expose nodeId, publishPresence/subscribePresence
+- `MessagesProvider` : subscribePresence → radarPeers + publishPresence sur GPS change
+- 23 tests → **228 verts**
 
 ### Phase 8 — Suppression MQTT (condition : Phases 5-7 stables en prod)
 **Objectif** : retirer MQTT complètement, ne garder que Nostr.
