@@ -1,5 +1,5 @@
 export type GatewayMode = 'client' | 'gateway';
-export type GatewayServiceType = 'mempool' | 'cashu' | 'mqtt' | 'lora';
+export type GatewayServiceType = 'mempool' | 'cashu' | 'lora';
 
 export interface GatewayRelayJob {
   id: string;
@@ -40,8 +40,6 @@ export interface GatewayStats {
 export interface GatewayState {
   mode: GatewayMode;
   isActive: boolean;
-  mqttClient: null;
-  mqttConnected: boolean;
   relayJobs: GatewayRelayJob[];
   assemblyStates: Map<string, any>;
   peers: GatewayPeer[];
@@ -55,8 +53,6 @@ export function createInitialGatewayState(): GatewayState {
   return {
     mode: 'client',
     isActive: false,
-    mqttClient: null,
-    mqttConnected: false,
     relayJobs: [],
     assemblyStates: new Map(),
     peers: [],
@@ -65,7 +61,7 @@ export function createInitialGatewayState(): GatewayState {
       messagesForwarded: 0, bytesRelayed: 0, uptime: 0,
       startedAt: 0, peersServed: 0, failedJobs: 0, lastActivityAt: 0,
     },
-    services: { mempool: true, cashu: true, mqtt: true, lora: true },
+    services: { mempool: true, cashu: true, lora: true },
     mempoolUrl: 'https://mempool.space',
     cashuMintUrl: 'https://mint.minibits.cash/Bitcoin',
   };

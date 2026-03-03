@@ -68,7 +68,6 @@
     "expo-updates": "^29.0.16",
     "expo-web-browser": "~15.0.10",
     "lucide-react-native": "^0.475.0",
-    "mqtt": "^5.10.1",
     "nostr-tools": "^2.23.3",
     "process": "^0.11.10",
     "react": "19.1.0",

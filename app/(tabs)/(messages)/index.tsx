@@ -116,14 +116,14 @@ function validateForumName(name: string): string | null {
 }
 
 // Modal pour nouvelle conversation ou rejoindre un forum
-function NewChatModal({ visible, onClose, onDM, onForum, mqttState }: {
+function NewChatModal({ visible, onClose, onDM, onForum }: {
   visible: boolean;
   onClose: () => void;
   onDM: (nodeId: string, name: string) => void;
   onForum: (channelName: string) => Promise<void>;
-  mqttState: 'disconnected' | 'connecting' | 'connected' | 'error';
 }) {
-  const { discoveredForums, announceForumPublic, joinForum: joinForumContext } = useMessages();
+  const { joinForum: joinForumContext } = useMessages();
+  const { isConnected: nostrConnected } = useNostr();
   const [tab, setTab] = useState<'dm' | 'forum' | 'discover'>('dm');
   const [nodeId, setNodeId] = useState('');
   const [name, setName] = useState('');
@@ -168,10 +168,10 @@ function NewChatModal({ visible, onClose, onDM, onForum, mqttState }: {
       return;
     }
 
-    if (mqttState !== 'connected') {
+    if (!nostrConnected) {
       Alert.alert(
         'Non connecté',
-        `La messagerie n'est pas encore connectée (status: ${mqttState}). Veuillez patienter quelques secondes et réessayer.`
+        'Nostr n\'est pas encore connecté. Veuillez patienter quelques secondes et réessayer.'
       );
       return;
     }
@@ -180,15 +180,7 @@ function NewChatModal({ visible, onClose, onDM, onForum, mqttState }: {
     try {
       setLoading(true);
       await joinForumContext(channelName, newForumDesc || `Forum ${newForumName}`);
-      const announced = announceForumPublic(channelName, newForumDesc || `Forum ${newForumName}`);
-      if (announced) {
-        Alert.alert('Forum créé!', `"#${channelName}" a été créé et annoncé sur le réseau.`);
-      } else {
-        Alert.alert(
-          'Forum créé localement',
-          `"#${channelName}" a été créé. Il ne sera annoncé sur le réseau qu'une fois connecté au MQTT.`
-        );
-      }
+      Alert.alert('Forum créé!', `"#${channelName}" a été créé et annoncé sur Nostr.`);
       setNewForumName(''); setNewForumDesc(''); setShowCreateForm(false);
       onForum(channelName);
     } catch (err) {
@@ -349,43 +341,15 @@ function NewChatModal({ visible, onClose, onDM, onForum, mqttState }: {
               )}
 
               <Text style={[styles.inputLabel, { marginTop: 16 }]}>
-                Forums découverts ({discoveredForums.length})
+                Forums Nostr
               </Text>
 
-              {discoveredForums.length === 0 ? (
-                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                  <Search size={32} color={Colors.textMuted} />
-                  <Text style={{ color: Colors.textMuted, fontSize: 13, marginTop: 8 }}>
-                    Aucun forum découvert
-                  </Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={discoveredForums}
-                  keyExtractor={(item, idx) => `${item.channelName}-${idx}`}
-                  style={{ maxHeight: 300 }}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.discoveredForumItem}
-                      onPress={() => handleJoinDiscoveredForum(item.channelName, item.description)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.forumIconSmall}>
-                        <Hash size={16} color={Colors.green} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.discoveredForumName}>#{item.channelName}</Text>
-                        <Text style={styles.discoveredForumDesc} numberOfLines={1}>
-                          {item.description}
-                        </Text>
-                        <Text style={styles.discoveredForumMeta}>
-                          Par {item.creatorNodeId}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                />
-              )}
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <Search size={32} color={Colors.textMuted} />
+                <Text style={{ color: Colors.textMuted, fontSize: 13, marginTop: 8 }}>
+                  Découverte de forums via Nostr NIP-28
+                </Text>
+              </View>
             </View>
           )}
         </View>
@@ -397,7 +361,7 @@ function NewChatModal({ visible, onClose, onDM, onForum, mqttState }: {
 export default function MessagesScreen() {
   const router = useRouter();
   const { settings, isInternetMode, isLoRaMode } = useAppSettings();
-  const { conversations, mqttState, identity, startConversation, joinForum, deleteConversation, contacts } = useMessages();
+  const { conversations, identity, startConversation, joinForum, deleteConversation, contacts } = useMessages();
   const { isConnected: nostrConnected, isConnecting: nostrConnecting } = useNostr();
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -407,9 +371,6 @@ export default function MessagesScreen() {
     : settings.connectionMode === 'bridge' ? Colors.cyan : Colors.green;
   const ModeIcon = settings.connectionMode === 'internet' ? Globe
     : settings.connectionMode === 'bridge' ? Wifi : Radio;
-
-  const mqttDot = mqttState === 'connected' ? Colors.green
-    : mqttState === 'connecting' ? Colors.yellow : Colors.red;
 
   const handleLongPressConv = useCallback((item: StoredConversation) => {
     Alert.alert(
@@ -456,7 +417,6 @@ export default function MessagesScreen() {
     <View style={styles.container}>
       <View style={styles.statusBar}>
         <View style={styles.statusLeft}>
-          <View style={[styles.mqttDot, { backgroundColor: mqttDot }]} />
           <ModeIcon size={14} color={modeColor} />
           <Text style={[styles.statusText, { color: modeColor }]}>{modeLabel}</Text>
           <View style={styles.statusDivider} />
@@ -465,10 +425,6 @@ export default function MessagesScreen() {
           </Text>
         </View>
         <View style={styles.statusRight}>
-          <Text style={styles.statusFreq}>
-            {mqttState === 'connected' ? 'MQTT ●' : mqttState === 'connecting' ? 'MQTT...' : 'MQTT ○'}
-          </Text>
-          <View style={styles.statusDivider} />
           <Text style={[
             styles.statusFreq,
             { color: nostrConnected ? Colors.purple ?? '#9b59b6' : nostrConnecting ? Colors.yellow : Colors.textMuted }
@@ -531,7 +487,6 @@ export default function MessagesScreen() {
         onClose={() => setModalVisible(false)}
         onDM={handleDM}
         onForum={handleForum}
-        mqttState={mqttState}
       />
     </View>
   );

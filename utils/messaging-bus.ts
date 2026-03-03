@@ -1,27 +1,25 @@
 /**
- * MessagingBus — Couche d'abstraction transport MQTT / Nostr
+ * MessagingBus — Couche d'abstraction transport Nostr
  *
  * Principe de fonctionnement :
  *  • Nostr connecté → messages envoyés via Nostr (décentralisé, censure-résistant)
- *  • Nostr absent   → fallback MQTT (existant, inchangé)
- *  • Les deux sont écoutés simultanément → messages dédupliqués par ID
+ *  • Nostr absent   → erreur explicite (plus de fallback MQTT)
  *
  * Bridge LoRa ↔ Nostr :
  *  • Un message LoRa/BLE entrant est republié sur Nostr si connecté
  *    → n'importe quel nœud Nostr avec internet peut le relayer
  *  • Un event kind:9001 (TxRelay) reçu de Nostr est injecté dans le flux BLE
  *
- * Format unifié BusMessage — valide pour MQTT et Nostr.
+ * Format unifié BusMessage — valide pour Nostr et LoRa.
  */
 
-import { TOPICS, type MeshMqttClient, publishMesh, subscribeMesh, unsubscribeMesh } from '@/utils/mqtt-client';
 import { nostrClient as defaultNostrClient, Kind, type NostrClient } from '@/utils/nostr-client';
 import type { Event as NostrEvent } from 'nostr-tools';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type MessageType = 'dm' | 'channel' | 'lora' | 'tx_relay';
-export type Transport = 'nostr' | 'mqtt' | 'lora';
+export type Transport = 'nostr' | 'lora';
 
 /**
  * Format unifié, indépendant du transport utilisé.
@@ -46,12 +44,11 @@ export interface BusMessage {
 
 export type BusMessageHandler = (message: BusMessage) => void;
 
-/** État de santé des deux transports */
+/** État de santé du transport Nostr */
 export interface BusStatus {
   nostr: 'connected' | 'disconnected';
-  mqtt: 'connected' | 'disconnected' | 'connecting' | 'error';
   /** Transport préféré actuellement utilisé pour l'envoi */
-  preferred: 'nostr' | 'mqtt' | 'none';
+  preferred: 'nostr' | 'none';
 }
 
 // ─── Déduplication ────────────────────────────────────────────────────────────
@@ -87,41 +84,7 @@ class DeduplicateWindow {
   get size(): number { return this.seen.size; }
 }
 
-// ─── Mappers MQTT ↔ BusMessage ────────────────────────────────────────────────
-
-/**
- * Parse un payload MQTT (WireMessage JSON) en BusMessage.
- * Retourne null si le payload n'est pas un WireMessage valide.
- */
-function mqttPayloadToBus(
-  topic: string,
-  payload: string,
-): BusMessage | null {
-  try {
-    const wire = JSON.parse(payload) as Record<string, unknown>;
-
-    // WireMessage minimum : id, from, content/enc, ts
-    if (!wire.id || typeof wire.id !== 'string') return null;
-
-    const type: MessageType = topic.includes('/forum/') ? 'channel'
-      : topic.includes('/lora/') ? 'lora'
-      : topic.includes('/tx/') || topic.includes('/cashu/') ? 'tx_relay'
-      : 'dm';
-
-    return {
-      id: wire.id as string,
-      type,
-      from: (wire.fromNodeId as string) ?? (wire.from as string) ?? 'unknown',
-      fromPubkey: (wire.fromPubkey as string) ?? '',
-      to: (wire.to as string) ?? '',
-      content: (wire.enc as string) ?? (wire.content as string) ?? '',
-      ts: typeof wire.ts === 'number' ? wire.ts : Date.now(),
-      transport: 'mqtt',
-    };
-  } catch {
-    return null;
-  }
-}
+// ─── Mapper Nostr → BusMessage ────────────────────────────────────────────────
 
 /**
  * Parse un NostrEvent en BusMessage.
@@ -162,11 +125,9 @@ function nostrEventToBus(event: NostrEvent): BusMessage | null {
 // ─── MessagingBus ─────────────────────────────────────────────────────────────
 
 export class MessagingBus {
-  private mqtt: MeshMqttClient | null = null;
   private nostr: NostrClient;
   private handlers = new Set<BusMessageHandler>();
   private dedup = new DeduplicateWindow();
-  private mqttUnsubs: Array<() => void> = [];
   private nostrUnsubs: Array<() => void> = [];
 
   /** NodeId MESH-XXXX de l'utilisateur local (pour filtrer ses propres messages) */
@@ -179,10 +140,6 @@ export class MessagingBus {
   }
 
   // ── Configuration ───────────────────────────────────────────────────────────
-
-  setMqtt(instance: MeshMqttClient): void {
-    this.mqtt = instance;
-  }
 
   setLocalIdentity(nodeId: string, nostrPubkey: string): void {
     this.localNodeId = nodeId;
@@ -198,16 +155,14 @@ export class MessagingBus {
 
   // ── Transport routing ────────────────────────────────────────────────────────
 
-  get preferredTransport(): 'nostr' | 'mqtt' | 'none' {
+  get preferredTransport(): 'nostr' | 'none' {
     if (this.nostr.isConnected) return 'nostr';
-    if (this.mqtt?.state === 'connected') return 'mqtt';
     return 'none';
   }
 
   getStatus(): BusStatus {
     return {
       nostr: this.nostr.isConnected ? 'connected' : 'disconnected',
-      mqtt: this.mqtt?.state ?? 'disconnected',
       preferred: this.preferredTransport,
     };
   }
@@ -215,53 +170,39 @@ export class MessagingBus {
   // ── Envoi ────────────────────────────────────────────────────────────────────
 
   /**
-   * Envoie un DM au transport préféré.
-   * Si Nostr : publie un kind:4 avec tag meshcore-to pour le nodeId.
-   * Si MQTT  : publie sur meshcore/dm/{toNodeId} (comportement existant inchangé).
+   * Envoie un DM via Nostr.
+   * Publie un kind:4 avec tag meshcore-to pour le nodeId.
    */
   async sendDM(params: {
     toNodeId: string;
     toNostrPubkey: string;
     content: string;
-    encryptedPayload?: string; // WireMessage déjà chiffré (existant)
   }): Promise<Transport> {
-    const { toNodeId, toNostrPubkey, content, encryptedPayload } = params;
+    const { toNostrPubkey, content } = params;
 
-    if (this.preferredTransport === 'nostr') {
+    if (this.nostr.isConnected) {
       // publishDM gère le NIP-04 (chiffrement + tag ['p', recipientPubkey])
       await this.nostr.publishDM(toNostrPubkey, content);
       return 'nostr';
-    }
-
-    if (this.mqtt?.state === 'connected' && encryptedPayload) {
-      publishMesh(this.mqtt, TOPICS.dm(toNodeId), encryptedPayload);
-      return 'mqtt';
     }
 
     throw new Error('[Bus] Aucun transport disponible pour l\'envoi DM');
   }
 
   /**
-   * Envoie un message de channel.
-   * Nostr → kind:42 (NIP-28) ; MQTT → meshcore/forum/{channelId}.
+   * Envoie un message de channel via Nostr (kind:42 NIP-28).
    */
   async sendChannelMessage(params: {
     channelId: string;
     content: string;
-    nostrChannelId?: string;  // Event ID de création du channel NIP-28
-    encryptedPayload?: string;
+    nostrChannelId?: string;
   }): Promise<Transport> {
-    const { channelId, content, nostrChannelId, encryptedPayload } = params;
+    const { channelId, content, nostrChannelId } = params;
 
-    if (this.preferredTransport === 'nostr') {
+    if (this.nostr.isConnected) {
       const ncId = nostrChannelId ?? channelId;
       await this.nostr.publishChannelMessage(ncId, content);
       return 'nostr';
-    }
-
-    if (this.mqtt?.state === 'connected' && encryptedPayload) {
-      publishMesh(this.mqtt, TOPICS.forum(channelId), encryptedPayload);
-      return 'mqtt';
     }
 
     throw new Error('[Bus] Aucun transport disponible pour le message de channel');
@@ -284,7 +225,7 @@ export class MessagingBus {
   // ── Réception ────────────────────────────────────────────────────────────────
 
   /**
-   * S'abonne aux messages des deux transports.
+   * S'abonne aux messages Nostr.
    * Les messages dupliqués (même id) sont ignorés automatiquement.
    * Retourne une fonction de désabonnement.
    */
@@ -307,39 +248,12 @@ export class MessagingBus {
   // ── Listeners internes ───────────────────────────────────────────────────────
 
   private _startListeners(): void {
-    this._startMqttListeners();
     this._startNostrListeners();
   }
 
   private _stopListeners(): void {
-    for (const unsub of this.mqttUnsubs) unsub();
     for (const unsub of this.nostrUnsubs) unsub();
-    this.mqttUnsubs = [];
     this.nostrUnsubs = [];
-  }
-
-  private _startMqttListeners(): void {
-    if (!this.mqtt || !this.localNodeId) return;
-
-    // DMs entrants
-    const dmHandler = (topic: string, payload: string) => {
-      const msg = mqttPayloadToBus(topic, payload);
-      if (msg) this._dispatch(msg);
-    };
-    subscribeMesh(this.mqtt, TOPICS.dm(this.localNodeId), dmHandler);
-    this.mqttUnsubs.push(() => unsubscribeMesh(this.mqtt!, TOPICS.dm(this.localNodeId)));
-
-    // LoRa inbound
-    const loraHandler = (topic: string, payload: string) => {
-      const msg = mqttPayloadToBus(topic, payload);
-      if (msg) {
-        // Bridge LoRa → Nostr (best effort)
-        this.bridgeLoraToNostr(payload).catch(() => {});
-        this._dispatch(msg);
-      }
-    };
-    subscribeMesh(this.mqtt, TOPICS.loraInbound, loraHandler, 0);
-    this.mqttUnsubs.push(() => unsubscribeMesh(this.mqtt!, TOPICS.loraInbound));
   }
 
   private _startNostrListeners(): void {

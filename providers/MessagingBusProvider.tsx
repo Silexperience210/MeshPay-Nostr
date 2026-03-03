@@ -1,15 +1,11 @@
 /**
  * MessagingBusProvider — Contexte React pour le bus de messagerie unifié
  *
- * Orchestre les deux transports :
- *   - NostrProvider (Nostr — décentralisé)
- *   - GatewayProvider / MessagesProvider (MQTT — existant, inchangé)
+ * Transport Nostr-only (Phase 8 — MQTT supprimé) :
+ *   - Nostr connecté → messages envoyés via Nostr (décentralisé)
+ *   - Nostr absent   → erreur explicite
  *
- * Quand Nostr est connecté → messages envoyés via Nostr
- * Quand Nostr est absent   → fallback MQTT transparent
- * Les deux transports sont écoutés simultanément, avec déduplication.
- *
- * MQTT reste TOTALEMENT fonctionnel — ce provider est additif.
+ * LoRa bridge : BleProvider peut republier un payload LoRa sur Nostr.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -24,32 +20,28 @@ export interface MessagingBusState {
   /** État des transports */
   status: BusStatus;
   /** Transport actuellement préféré */
-  preferredTransport: 'nostr' | 'mqtt' | 'none';
+  preferredTransport: 'nostr' | 'none';
 
   /**
-   * Envoie un DM via le transport préféré.
-   * - Nostr si connecté
-   * - MQTT sinon (fournir `encryptedPayload` pour MQTT)
+   * Envoie un DM via Nostr.
    */
   sendDM: (params: {
     toNodeId: string;
     toNostrPubkey: string;
     content: string;
-    encryptedPayload?: string;
-  }) => Promise<'nostr' | 'mqtt'>;
+  }) => Promise<'nostr'>;
 
   /**
-   * Envoie un message de channel.
+   * Envoie un message de channel via Nostr (NIP-28).
    */
   sendChannelMessage: (params: {
     channelId: string;
     content: string;
     nostrChannelId?: string;
-    encryptedPayload?: string;
-  }) => Promise<'nostr' | 'mqtt'>;
+  }) => Promise<'nostr'>;
 
   /**
-   * Abonne un handler aux messages entrants (tous transports confondus).
+   * Abonne un handler aux messages entrants.
    * Retourne une fonction de désabonnement.
    */
   subscribe: (handler: BusMessageHandler) => () => void;
@@ -60,7 +52,7 @@ export interface MessagingBusState {
    */
   bridgeLoraToNostr: (rawPayload: string) => Promise<void>;
 
-  /** Dernier message reçu (tous transports) — pour les composants réactifs */
+  /** Dernier message reçu — pour les composants réactifs */
   lastMessage: BusMessage | null;
 }
 
@@ -72,7 +64,6 @@ export const [MessagingBusContext, useMessagingBus] = createContextHook((): Mess
 
   const [status, setStatus] = useState<BusStatus>({
     nostr: 'disconnected',
-    mqtt: 'disconnected',
     preferred: 'none',
   });
   const [lastMessage, setLastMessage] = useState<BusMessage | null>(null);
@@ -100,13 +91,9 @@ export const [MessagingBusContext, useMessagingBus] = createContextHook((): Mess
 
   useEffect(() => {
     if (!mountedRef.current) return;
-    const current = messagingBus.getStatus();
     setStatus({
-      ...current,
       nostr: nostrConnected ? 'connected' : 'disconnected',
-      preferred: nostrConnected ? 'nostr'
-        : current.mqtt === 'connected' ? 'mqtt'
-        : 'none',
+      preferred: nostrConnected ? 'nostr' : 'none',
     });
   }, [nostrConnected]);
 
@@ -128,7 +115,6 @@ export const [MessagingBusContext, useMessagingBus] = createContextHook((): Mess
       toNodeId: string;
       toNostrPubkey: string;
       content: string;
-      encryptedPayload?: string;
     }) => messagingBus.sendDM(params),
     [],
   );
@@ -138,7 +124,6 @@ export const [MessagingBusContext, useMessagingBus] = createContextHook((): Mess
       channelId: string;
       content: string;
       nostrChannelId?: string;
-      encryptedPayload?: string;
     }) => messagingBus.sendChannelMessage(params),
     [],
   );

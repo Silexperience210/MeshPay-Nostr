@@ -1,21 +1,4 @@
 import {
-  type MqttClient,
-  type MqttMessage,
-  type MqttBrokerConfig,
-  createMqttClient,
-  connectMqtt,
-  disconnectMqtt,
-  subscribeTopic,
-  publishMessage,
-  createGatewayAnnouncement,
-  createTxBroadcastPayload,
-  createCashuRelayPayload,
-  createChunkRelayPayload,
-  parseMqttPayload,
-  MQTT_TOPICS,
-  DEFAULT_MQTT_CONFIG,
-} from './mqtt';
-import {
   type ChunkHeader,
   type ChunkAssemblyState,
   type Chunk,
@@ -30,7 +13,7 @@ import {
 
 export type GatewayMode = 'client' | 'gateway';
 
-export type GatewayServiceType = 'mempool' | 'cashu' | 'mqtt' | 'lora';
+export type GatewayServiceType = 'mempool' | 'cashu' | 'lora';
 
 export interface GatewayRelayJob {
   id: string;
@@ -71,8 +54,6 @@ export interface GatewayStats {
 export interface GatewayState {
   mode: GatewayMode;
   isActive: boolean;
-  mqttClient: MqttClient | null;
-  mqttConnected: boolean;
   relayJobs: GatewayRelayJob[];
   assemblyStates: Map<string, ChunkAssemblyState>;
   peers: GatewayPeer[];
@@ -86,8 +67,6 @@ export function createInitialGatewayState(): GatewayState {
   return {
     mode: 'client',
     isActive: false,
-    mqttClient: null,
-    mqttConnected: false,
     relayJobs: [],
     assemblyStates: new Map(),
     peers: [],
@@ -106,7 +85,6 @@ export function createInitialGatewayState(): GatewayState {
     services: {
       mempool: true,
       cashu: true,
-      mqtt: true,
       lora: true,
     },
     mempoolUrl: 'https://mempool.space',
@@ -120,50 +98,14 @@ function generateJobId(): string {
 
 export async function activateGateway(
   state: GatewayState,
-  mqttConfig?: Partial<MqttBrokerConfig>
+  _config?: Record<string, unknown>
 ): Promise<GatewayState> {
-  console.log('[Gateway] Activating gateway mode...');
-
-  const config = { ...DEFAULT_MQTT_CONFIG, ...mqttConfig };
-  let client = createMqttClient(config);
-
-  if (state.services.mqtt) {
-    client = await connectMqtt(client);
-
-    client = subscribeTopic(client, MQTT_TOPICS.txBroadcast, 1, (msg) => {
-      console.log('[Gateway] Received TX broadcast request via MQTT');
-    });
-    client = subscribeTopic(client, MQTT_TOPICS.cashuRelay, 1, (msg) => {
-      console.log('[Gateway] Received Cashu relay request via MQTT');
-    });
-    client = subscribeTopic(client, MQTT_TOPICS.chunkRelay, 1, (msg) => {
-      console.log('[Gateway] Received chunk relay via MQTT');
-    });
-    client = subscribeTopic(client, MQTT_TOPICS.paymentRequest, 1, (msg) => {
-      console.log('[Gateway] Received payment request via MQTT');
-    });
-    client = subscribeTopic(client, MQTT_TOPICS.loraInbound, 0, (msg) => {
-      console.log('[Gateway] Received LoRa inbound message via MQTT');
-    });
-
-    const announcement = createGatewayAnnouncement(
-      config.clientId,
-      Object.entries(state.services)
-        .filter(([, v]) => v)
-        .map(([k]) => k),
-      state.peers.length
-    );
-    client = publishMessage(client, MQTT_TOPICS.gatewayAnnounce, announcement, 1, true);
-  }
-
-  console.log('[Gateway] Gateway activated with services:', state.services);
+  console.log('[Gateway] Activating gateway mode with services:', state.services);
 
   return {
     ...state,
     mode: 'gateway',
     isActive: true,
-    mqttClient: client,
-    mqttConnected: client.state === 'connected',
     stats: {
       ...state.stats,
       startedAt: Date.now(),
@@ -175,16 +117,10 @@ export async function activateGateway(
 export async function deactivateGateway(state: GatewayState): Promise<GatewayState> {
   console.log('[Gateway] Deactivating gateway mode...');
 
-  if (state.mqttClient) {
-    await disconnectMqtt(state.mqttClient);
-  }
-
   return {
     ...state,
     mode: 'client',
     isActive: false,
-    mqttClient: null,
-    mqttConnected: false,
   };
 }
 
@@ -226,17 +162,6 @@ export async function broadcastTransaction(
 
     job.status = 'completed';
     job.result = txid;
-
-    if (state.mqttClient && state.services.mqtt) {
-      const payload = createTxBroadcastPayload(txHex, sourceNodeId, state.mqttClient.config.clientId);
-      publishMessage(state.mqttClient, MQTT_TOPICS.txStatus, JSON.stringify({
-        type: 'tx_status',
-        txid,
-        sourceNodeId,
-        status: 'broadcast_ok',
-        timestamp: Date.now(),
-      }), 1);
-    }
 
     return {
       state: {
@@ -294,18 +219,6 @@ export async function relayCashuToken(
   };
 
   try {
-    if (action === 'relay' && state.mqttClient && state.services.mqtt) {
-      const payload = createCashuRelayPayload(
-        token,
-        mintUrl,
-        sourceNodeId,
-        state.mqttClient.config.clientId,
-        action
-      );
-      publishMessage(state.mqttClient, MQTT_TOPICS.cashuRelay, payload, 1);
-      console.log('[Gateway] Cashu token relayed via MQTT');
-    }
-
     if (action === 'redeem') {
       console.log('[Gateway] Redeeming Cashu token at mint:', mintUrl);
       const url = `${mintUrl}/v1/checkstate`;
@@ -365,15 +278,6 @@ export function handleIncomingLoRaMessage(
   if (!isChunkedMessage(rawMessage)) {
     console.log('[Gateway] Non-chunked message, forwarding directly');
 
-    if (state.mqttClient && state.services.mqtt) {
-      publishMessage(state.mqttClient, MQTT_TOPICS.loraInbound, JSON.stringify({
-        type: 'lora_message',
-        sourceNodeId,
-        payload: rawMessage,
-        timestamp: Date.now(),
-      }), 0);
-    }
-
     return {
       ...state,
       stats: {
@@ -385,7 +289,6 @@ export function handleIncomingLoRaMessage(
     };
   }
 
-  const headerEnd = rawMessage.indexOf('|', rawMessage.lastIndexOf('|') + 1);
   const header = decodeChunkHeader(rawMessage);
   if (!header) {
     console.log('[Gateway] Invalid chunk header, ignoring');
@@ -412,18 +315,6 @@ export function handleIncomingLoRaMessage(
   assembly = addChunkToAssembly(assembly, chunk);
   newAssemblyStates.set(header.messageId, assembly);
 
-  if (state.mqttClient && state.services.mqtt) {
-    const chunkPayload = createChunkRelayPayload(
-      rawMessage,
-      header.messageId,
-      header.chunkIndex,
-      header.totalChunks,
-      header.dataType,
-      state.mqttClient.config.clientId
-    );
-    publishMessage(state.mqttClient, MQTT_TOPICS.chunkRelay, chunkPayload, 1);
-  }
-
   let newState: GatewayState = {
     ...state,
     assemblyStates: newAssemblyStates,
@@ -439,17 +330,6 @@ export function handleIncomingLoRaMessage(
     const fullMessage = assembleMessage(assembly);
     if (fullMessage) {
       console.log('[Gateway] Chunk assembly COMPLETE for:', header.messageId, 'type:', header.dataType, 'size:', fullMessage.length);
-
-      if (state.mqttClient && state.services.mqtt) {
-        publishMessage(state.mqttClient, MQTT_TOPICS.chunkAssembled, JSON.stringify({
-          type: 'chunk_assembled',
-          messageId: header.messageId,
-          dataType: header.dataType,
-          fullPayload: fullMessage,
-          totalChunks: header.totalChunks,
-          timestamp: Date.now(),
-        }), 1);
-      }
 
       newAssemblyStates.delete(header.messageId);
       newState = {
@@ -500,17 +380,6 @@ export async function forwardPaymentToGateway(
 
   for (const chunk of chunks) {
     console.log('[Gateway] Sending chunk:', chunk.header.chunkIndex + 1, '/', chunk.header.totalChunks);
-
-    if (state.mqttClient && state.services.mqtt) {
-      publishMessage(state.mqttClient, MQTT_TOPICS.loraOutbound, JSON.stringify({
-        type: 'lora_outbound',
-        destinationNodeId,
-        chunkRaw: chunk.raw,
-        chunkIndex: chunk.header.chunkIndex,
-        totalChunks: chunk.header.totalChunks,
-        timestamp: Date.now(),
-      }), 1);
-    }
   }
 
   return {

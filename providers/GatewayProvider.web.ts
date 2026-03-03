@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 
 export type GatewayMode = 'client' | 'gateway';
-export type GatewayServiceType = 'mempool' | 'cashu' | 'mqtt' | 'lora';
+export type GatewayServiceType = 'mempool' | 'cashu' | 'lora';
 
 export interface GatewayPeer {
   nodeId: string;
@@ -37,9 +37,6 @@ export interface GatewaySettings {
   mode: GatewayMode;
   autoActivate: boolean;
   services: Record<GatewayServiceType, boolean>;
-  mqttBrokerUrl: string;
-  mqttCustomBroker: string;
-  useCustomMqttBroker: boolean;
   mempoolUrl: string;
   cashuMintUrl: string;
   cleanupIntervalMs: number;
@@ -50,10 +47,7 @@ export interface GatewaySettings {
 const DEFAULT_GATEWAY_SETTINGS: GatewaySettings = {
   mode: 'client',
   autoActivate: false,
-  services: { mempool: true, cashu: true, mqtt: true, lora: true },
-  mqttBrokerUrl: 'wss://broker.emqx.io:8084/mqtt',
-  mqttCustomBroker: '',
-  useCustomMqttBroker: false,
+  services: { mempool: true, cashu: true, lora: true },
   mempoolUrl: 'https://mempool.space',
   cashuMintUrl: 'https://mint.minibits.cash/Bitcoin',
   cleanupIntervalMs: 60000,
@@ -65,7 +59,7 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   const [gatewayState] = useState<GatewayState>({
     mode: 'client',
     isActive: false,
-    services: { mempool: true, cashu: true, mqtt: true, lora: true },
+    services: { mempool: true, cashu: true, lora: true },
     peers: [],
     relayJobs: [],
     stats: {
@@ -96,13 +90,6 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     }));
   }, []);
 
-  const getMqttBrokerUrl = useCallback((): string => {
-    if (settings.useCustomMqttBroker && settings.mqttCustomBroker) {
-      return settings.mqttCustomBroker;
-    }
-    return settings.mqttBrokerUrl;
-  }, [settings]);
-
   return {
     gatewayState,
     settings,
@@ -115,7 +102,6 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     forwardPayment: async () => { console.log('[Gateway-Web] Not available on web'); },
     registerPeer: () => {},
     toggleService,
-    getMqttBrokerUrl,
     getUptime: () => '0s',
     isActivating: false,
     isDeactivating: false,

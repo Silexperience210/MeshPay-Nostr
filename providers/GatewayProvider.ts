@@ -22,17 +22,12 @@ import {
   getGatewayUptime,
   prepareLoRaChunks,
 } from '@/utils/gateway';
-import { testMqttConnection, type MqttBrokerConfig, DEFAULT_MQTT_CONFIG } from '@/utils/mqtt';
-
 const GATEWAY_SETTINGS_KEY = 'meshcore_gateway_settings';
 
 export interface GatewaySettings {
   mode: GatewayMode;
   autoActivate: boolean;
   services: Record<GatewayServiceType, boolean>;
-  mqttBrokerUrl: string;
-  mqttCustomBroker: string;
-  useCustomMqttBroker: boolean;
   mempoolUrl: string;
   cashuMintUrl: string;
   cleanupIntervalMs: number;
@@ -46,12 +41,8 @@ const DEFAULT_GATEWAY_SETTINGS: GatewaySettings = {
   services: {
     mempool: true,
     cashu: true,
-    mqtt: true,
     lora: true,
   },
-  mqttBrokerUrl: DEFAULT_MQTT_CONFIG.url,
-  mqttCustomBroker: '',
-  useCustomMqttBroker: false,
   mempoolUrl: 'https://mempool.space',
   cashuMintUrl: 'https://mint.minibits.cash/Bitcoin', // ✅ MAINNET - minibits.cash
   cleanupIntervalMs: 60000,
@@ -109,12 +100,7 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   const updateSettings = useCallback((partial: Partial<GatewaySettings>) => {
     setSettings((prev) => {
       const updated = { ...prev, ...partial };
-      console.log('[GatewayProvider] Updating settings:', {
-        partial,
-        mqttBrokerUrl: updated.mqttBrokerUrl,
-        useCustomMqttBroker: updated.useCustomMqttBroker,
-        mqttCustomBroker: updated.mqttCustomBroker,
-      });
+      console.log('[GatewayProvider] Updating settings:', partial);
       saveSettingsMutation.mutate(updated);
       return updated;
     });
@@ -123,11 +109,6 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   const activateMutation = useMutation({
     mutationFn: async () => {
       console.log('[GatewayProvider] Activating gateway...');
-      const mqttConfig: Partial<MqttBrokerConfig> = {
-        url: settings.useCustomMqttBroker && settings.mqttCustomBroker.trim()
-          ? settings.mqttCustomBroker.trim()
-          : settings.mqttBrokerUrl,
-      };
       const newState = await activateGateway(
         {
           ...gatewayState,
@@ -135,7 +116,7 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
           mempoolUrl: settings.mempoolUrl,
           cashuMintUrl: settings.cashuMintUrl,
         },
-        mqttConfig
+        {}
       );
       return newState;
     },
@@ -245,13 +226,6 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     };
   }, [gatewayState.isActive, settings.cleanupIntervalMs, settings.maxPeerAge, settings.maxRelayJobAge]);
 
-  const getMqttBrokerUrl = useCallback((): string => {
-    if (settings.useCustomMqttBroker && settings.mqttCustomBroker.trim()) {
-      return settings.mqttCustomBroker.trim();
-    }
-    return settings.mqttBrokerUrl;
-  }, [settings]);
-
   const getUptime = useCallback((): string => {
     return getGatewayUptime(gatewayState);
   }, [gatewayState]);
@@ -270,7 +244,6 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     forwardPayment,
     registerPeer,
     toggleService,
-    getMqttBrokerUrl,
     getUptime,
     isActivating: activateMutation.isPending,
     isDeactivating: deactivateMutation.isPending,

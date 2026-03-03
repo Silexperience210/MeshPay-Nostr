@@ -13,6 +13,7 @@ import Colors from '@/constants/colors';
 import { formatMessageTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
+import { useNostr } from '@/providers/NostrProvider';
 import { useBle } from '@/providers/BleProvider';
 import { decodeCashuToken, getTokenAmount, verifyCashuToken, generateTokenId, reclaimProofs, fetchMintKeys, encodeCashuToken } from '@/utils/cashu';
 import { markCashuTokenSpent, markCashuTokenPending, markCashuTokenUnspent, saveCashuToken, getCashuBalance } from '@/utils/database';
@@ -26,7 +27,6 @@ import {
   formatDuration,
   AUDIO_MAX_DURATION_MS,
 } from '@/utils/audio';
-import { pickAndResizeImage, pickGif } from '@/utils/media';
 import type { Audio } from 'expo-av';
 
 function PaymentBubble({ amount }: { amount: number }) {
@@ -334,7 +334,8 @@ export default function ChatScreen() {
   const { chatId } = useLocalSearchParams<{ chatId: string }>();
   const convId = decodeURIComponent(chatId ?? '');
   const { settings, isLoRaMode } = useAppSettings();
-  const { conversations, messagesByConv, sendMessage, sendAudio, sendImage, sendCashu, loadConversationMessages, markRead, mqttState, deleteMessage, contacts, startConversation } = useMessages();
+  const { conversations, messagesByConv, sendMessage, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
+  const { isConnected: nostrConnected } = useNostr();
   const ble = useBle();
 
   const conv = conversations.find(c => c.id === convId);
@@ -519,70 +520,10 @@ export default function ChatScreen() {
     if (isRecording || isSendingMedia) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Alert.alert(
-      'Envoyer un média',
-      'Choisissez le type de média (MQTT uniquement)',
-      [
-        {
-          text: 'Photo (galerie)',
-          onPress: async () => {
-            setIsSendingMedia(true);
-            setError(null);
-            try {
-              const picked = await pickAndResizeImage('gallery');
-              if (!picked) return;
-              await sendImage(convId, picked.base64, picked.mimeType);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : 'Erreur envoi photo';
-              setError(msg);
-              Alert.alert('Photo refusée', msg);
-            } finally {
-              setIsSendingMedia(false);
-            }
-          },
-        },
-        {
-          text: 'Photo (caméra)',
-          onPress: async () => {
-            setIsSendingMedia(true);
-            setError(null);
-            try {
-              const picked = await pickAndResizeImage('camera');
-              if (!picked) return;
-              await sendImage(convId, picked.base64, picked.mimeType);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : 'Erreur prise de vue';
-              setError(msg);
-              Alert.alert('Caméra refusée', msg);
-            } finally {
-              setIsSendingMedia(false);
-            }
-          },
-        },
-        {
-          text: 'GIF',
-          onPress: async () => {
-            setIsSendingMedia(true);
-            setError(null);
-            try {
-              const picked = await pickGif();
-              if (!picked) return;
-              await sendImage(convId, picked.base64, picked.mimeType);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : 'Erreur GIF';
-              setError(msg);
-              Alert.alert('GIF refusé', msg);
-            } finally {
-              setIsSendingMedia(false);
-            }
-          },
-        },
-        { text: 'Annuler', style: 'cancel' },
-      ]
+      'Médias non disponibles',
+      'L\'envoi de médias nécessite une connexion dédiée. Fonctionnalité à venir.'
     );
-  }, [isRecording, isSendingMedia, convId, sendImage]);
+  }, [isRecording, isSendingMedia]);
 
   const handleMicPressOut = useCallback(async (sendIt = true) => {
     if (!recordingRef.current) return;
@@ -599,22 +540,16 @@ export default function ChatScreen() {
       if (!sendIt || durationMs < 500) return; // Trop court, ignorer
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const base64 = await audioUriToBase64(uri);
-      await sendAudio(convId, base64, durationMs);
+      // Audio sending not available without MQTT
+      console.log('[Chat] Audio recording done, length:', base64.length, 'duration:', durationMs);
+      Alert.alert('Audio non disponible', 'L\'envoi vocal n\'est pas encore disponible via Nostr.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Erreur envoi audio';
       setError(msg);
     }
-  }, [convId, sendAudio]);
+  }, [convId]);
 
   const handleMicPressIn = useCallback(async () => {
-    // FIX: Vérifier MQTT AVANT l'enregistrement pour éviter d'enregistrer pour rien
-    if (mqttState !== 'connected') {
-      Alert.alert(
-        'Connexion requise',
-        'Les messages vocaux nécessitent une connexion Internet (MQTT).\nVérifiez votre connexion et réessayez.'
-      );
-      return;
-    }
     const granted = await requestAudioPermissions();
     if (!granted) {
       Alert.alert('Permission requise', 'L\'accès au microphone est nécessaire pour envoyer des messages vocaux.');
@@ -636,7 +571,7 @@ export default function ChatScreen() {
     } catch {
       Alert.alert('Erreur', 'Impossible de démarrer l\'enregistrement.');
     }
-  }, [handleMicPressOut, mqttState]);
+  }, [handleMicPressOut]);
 
   const renderMessage = useCallback(
     ({ item }: { item: StoredMessage }) => (
@@ -658,12 +593,12 @@ export default function ChatScreen() {
         options={{
           headerTitle: () => {
             const transportLabel = ble.loraActive
-              ? (mqttState === 'connected' ? 'LoRa+MQTT' : 'LoRa')
+              ? (nostrConnected ? 'LoRa+Nostr' : 'LoRa')
               : ble.connected ? 'BLE (pas de relay)'
-              : mqttState === 'connected' ? 'MQTT' : 'Offline';
+              : nostrConnected ? 'Nostr' : 'Offline';
             const transportColor = ble.loraActive ? Colors.cyan
               : ble.connected ? Colors.yellow
-              : mqttState === 'connected' ? Colors.green : Colors.textMuted;
+              : nostrConnected ? Colors.green : Colors.textMuted;
             const TransportIcon = ble.loraActive || ble.connected ? Radio : Globe;
 
             return (
@@ -717,8 +652,8 @@ export default function ChatScreen() {
             <View style={styles.emptyChat}>
               <Lock size={32} color={Colors.textMuted} />
               <Text style={styles.emptyChatText}>
-                {mqttState !== 'connected'
-                  ? 'Connexion MQTT en cours...'
+                {!nostrConnected
+                  ? 'Connexion Nostr en cours...'
                   : 'Aucun message. Dites bonjour !'}
               </Text>
             </View>

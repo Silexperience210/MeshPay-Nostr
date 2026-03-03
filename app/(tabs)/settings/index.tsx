@@ -51,10 +51,8 @@ import { type ConnectionMode } from '@/providers/AppSettingsProvider';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useBle } from '@/providers/BleProvider';
 import { testMempoolConnection } from '@/utils/mempool';
-import { BROKER_OPTIONS } from '@/utils/mqtt-client';
 import { UpdateChecker } from '@/components/UpdateChecker';
 import { testMintConnection, formatMintUrl } from '@/utils/cashu';
-import { testMqttConnection } from '@/utils/mqtt';
 import { type GatewayRelayJob } from '@/utils/gateway';
 
 interface SettingRowProps {
@@ -680,17 +678,11 @@ function GatewayModeCard() {
     activateGateway: activateGw,
     deactivateGateway: deactivateGw,
     toggleService,
-    getMqttBrokerUrl,
     getUptime,
     isActivating,
     isDeactivating,
   } = useGateway();
-  const { mqttState, reconnectMqtt } = useMessages();
 
-  const [mqttInput, setMqttInput] = useState<string>(gwSettings.mqttCustomBroker);
-  const [testingMqtt, setTestingMqtt] = useState<boolean>(false);
-  const [mqttStatus, setMqttStatus] = useState<'idle' | 'ok' | 'fail'>('idle');
-  const [isReconnecting, setIsReconnecting] = useState<boolean>(false);
   const [showRelayLog, setShowRelayLog] = useState<boolean>(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -712,15 +704,11 @@ function GatewayModeCard() {
     }
   }, [gatewayState.isActive, pulseAnim]);
 
-  useEffect(() => {
-    setMqttInput(gwSettings.mqttCustomBroker);
-  }, [gwSettings.mqttCustomBroker]);
-
   const handleToggleMode = useCallback(() => {
     if (gatewayState.isActive) {
       Alert.alert(
         'Deactivate Gateway',
-        'This will stop relaying transactions and disconnect MQTT. Continue?',
+        'This will stop relaying transactions. Continue?',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -738,53 +726,6 @@ function GatewayModeCard() {
       activateGw();
     }
   }, [gatewayState.isActive, activateGw, deactivateGw]);
-
-  const handleTestMqtt = useCallback(async () => {
-    const url = getMqttBrokerUrl();
-    setTestingMqtt(true);
-    setMqttStatus('idle');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    try {
-      const result = await testMqttConnection(url);
-      setMqttStatus(result.ok ? 'ok' : 'fail');
-      Haptics.notificationAsync(
-        result.ok ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Error
-      );
-    } catch {
-      setMqttStatus('fail');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-    } finally {
-      setTestingMqtt(false);
-    }
-  }, [getMqttBrokerUrl]);
-
-  const handleSaveMqttCustom = useCallback(() => {
-    const trimmedUrl = mqttInput.trim();
-    if (!trimmedUrl.startsWith('ws://') && !trimmedUrl.startsWith('wss://')) {
-      Alert.alert('Invalid URL', 'Use ws:// or wss:// for MQTT broker URL');
-      return;
-    }
-    console.log('[Settings] Custom MQTT broker saved:', trimmedUrl);
-    updateGwSettings({ mqttCustomBroker: trimmedUrl, useCustomMqttBroker: true });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert('Saved', 'Custom MQTT broker URL saved');
-  }, [mqttInput, updateGwSettings]);
-
-  const handleSelectPresetBroker = useCallback((url: string) => {
-    console.log('[Settings] Preset MQTT broker selected:', url);
-    updateGwSettings({ mqttBrokerUrl: url, useCustomMqttBroker: false, mqttCustomBroker: '' });
-    setMqttInput('');
-    setMqttStatus('idle');
-    Haptics.selectionAsync();
-  }, [updateGwSettings]);
-
-  const handleReconnectMqtt = useCallback(() => {
-    console.log('[Settings] Force MQTT reconnect');
-    setIsReconnecting(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    reconnectMqtt();
-    setTimeout(() => setIsReconnecting(false), 3000);
-  }, [reconnectMqtt]);
 
   const pulseOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -822,7 +763,7 @@ function GatewayModeCard() {
       <Text style={styles.gatewayDesc}>
         {gatewayState.isActive
           ? 'Relaying BTC transactions, Cashu tokens, and chunked messages for mesh peers.'
-          : 'Activate to relay LoRa messages to Mempool, Cashu mints, and MQTT brokers.'}
+          : 'Activate to relay LoRa messages to Mempool and Cashu mints.'}
       </Text>
 
       <TouchableOpacity
@@ -886,143 +827,12 @@ function GatewayModeCard() {
           onToggle={(val) => toggleService('cashu', val)}
         />
         <SettingToggle
-          icon={<Server size={16} color={Colors.purple} />}
-          label="MQTT Bridge"
-          value={gwSettings.services.mqtt}
-          onToggle={(val) => toggleService('mqtt', val)}
-        />
-        <SettingToggle
           icon={<Radio size={16} color={Colors.green} />}
           label="LoRa Forwarding"
           value={gwSettings.services.lora}
           onToggle={(val) => toggleService('lora', val)}
         />
       </View>
-
-      {gwSettings.services.mqtt && (
-        <View style={styles.mqttSection}>
-          <View style={styles.mqttHeader}>
-            <Server size={14} color={Colors.purple} />
-            <Text style={styles.mqttTitle}>MQTT Broker</Text>
-            {mqttStatus === 'ok' && <CircleCheck size={14} color={Colors.green} />}
-            {mqttStatus === 'fail' && <CircleX size={14} color={Colors.red} />}
-          </View>
-
-          <View style={styles.endpointRow}>
-            <Text style={styles.endpointLabel}>Active</Text>
-            <Text style={[styles.endpointUrl, { color: Colors.purple }]} numberOfLines={1}>
-              {getMqttBrokerUrl()}
-            </Text>
-          </View>
-
-          <View style={styles.mqttConnectionStatus}>
-            <View style={[styles.mqttStatusDot, {
-              backgroundColor: mqttState === 'connected' ? Colors.green
-                : mqttState === 'connecting' ? Colors.yellow
-                : mqttState === 'error' ? Colors.red
-                : Colors.textMuted
-            }]} />
-            <Text style={[styles.mqttStatusText, {
-              color: mqttState === 'connected' ? Colors.green
-                : mqttState === 'connecting' ? Colors.yellow
-                : mqttState === 'error' ? Colors.red
-                : Colors.textMuted
-            }]}>
-              {mqttState === 'connected' ? 'Connecté' : mqttState === 'connecting' ? 'Connexion...' : mqttState === 'error' ? 'Erreur' : 'Déconnecté'}
-            </Text>
-            <TouchableOpacity
-              style={[styles.reconnectBtn, isReconnecting && styles.reconnectBtnActive]}
-              onPress={handleReconnectMqtt}
-              disabled={isReconnecting}
-              activeOpacity={0.7}
-              testID="mqtt-reconnect-button"
-            >
-              {isReconnecting ? (
-                <ActivityIndicator size="small" color={Colors.purple} />
-              ) : (
-                <>
-                  <RefreshCw size={12} color={Colors.purple} />
-                  <Text style={styles.reconnectBtnText}>Reconnecter</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.brokerSelector}>
-            <Text style={styles.brokerSelectorLabel}>Serveurs MQTT gratuits</Text>
-            {BROKER_OPTIONS.map((broker) => {
-              const isActivePreset = !gwSettings.useCustomMqttBroker && gwSettings.mqttBrokerUrl === broker.url;
-              return (
-                <TouchableOpacity
-                  key={broker.url}
-                  style={[styles.brokerOption, isActivePreset && styles.brokerOptionActive]}
-                  onPress={() => handleSelectPresetBroker(broker.url)}
-                  activeOpacity={0.6}
-                  testID={`mqtt-preset-${broker.name.replace(/\s+/g, '-').toLowerCase()}`}
-                >
-                  <View style={styles.brokerOptionRow}>
-                    <Text style={[styles.brokerOptionName, isActivePreset && styles.brokerOptionNameActive]}>
-                      {broker.name}
-                    </Text>
-                    {isActivePreset && (
-                      <View style={styles.brokerActiveCheck}>
-                        <Check size={10} color={Colors.purple} />
-                      </View>
-                    )}
-                  </View>
-                  <Text style={styles.brokerOptionDesc}>{broker.description}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          <SettingToggle
-            icon={<Server size={14} color={Colors.purple} />}
-            label="Utiliser un broker custom"
-            value={gwSettings.useCustomMqttBroker}
-            onToggle={(val) => updateGwSettings({ useCustomMqttBroker: val })}
-          />
-
-          {gwSettings.useCustomMqttBroker && (
-            <View style={styles.customEndpointContainer}>
-              <TextInput
-                style={styles.endpointInput}
-                placeholder="wss://your-broker.com:8084/mqtt"
-                placeholderTextColor={Colors.textMuted}
-                value={mqttInput}
-                onChangeText={setMqttInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="url"
-                testID="custom-mqtt-input"
-              />
-              <TouchableOpacity
-                style={styles.saveEndpointBtn}
-                onPress={handleSaveMqttCustom}
-                activeOpacity={0.7}
-              >
-                <Check size={16} color={Colors.purple} />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          <TouchableOpacity
-            style={styles.mqttTestButton}
-            onPress={handleTestMqtt}
-            activeOpacity={0.7}
-            disabled={testingMqtt}
-          >
-            {testingMqtt ? (
-              <ActivityIndicator color={Colors.purple} size="small" />
-            ) : (
-              <>
-                <RefreshCw size={14} color={Colors.purple} />
-                <Text style={styles.mqttTestButtonText}>Test Connection</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
 
       <TouchableOpacity
         style={styles.relayLogToggle}
@@ -1101,7 +911,7 @@ function ConnectionModeSelector() {
     {
       key: 'internet',
       label: 'Internet',
-      desc: 'No LoRa needed. Route via MQTT gateways.',
+      desc: 'No LoRa needed. Route via Nostr relays.',
       color: Colors.blue,
       icon: <Globe size={18} color={Colors.blue} />,
     },

@@ -37,6 +37,7 @@ import { useRouter } from 'expo-router';
 import { type RadarPeer, formatDistance } from '@/utils/radar';
 import { useGateway } from '@/providers/GatewayProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
+import { useNostr } from '@/providers/NostrProvider';
 import { formatTime } from '@/utils/helpers';
 import MeshRadar from '@/components/MeshRadar';
 import GatewayScanModal from '@/components/GatewayScanModal';
@@ -97,7 +98,7 @@ function ScanButton({ isScanning, onPress }: { isScanning: boolean; onPress: () 
 }
 
 
-function StatsRow({ peers, mqttConnected, deviceInfo }: { peers: RadarPeer[]; mqttConnected: boolean; deviceInfo: BleDeviceInfo | null }) {
+function StatsRow({ peers, nostrConnected, deviceInfo }: { peers: RadarPeer[]; nostrConnected: boolean; deviceInfo: BleDeviceInfo | null }) {
   const onlineCount = peers.filter(p => p.online).length;
   const freqLabel = deviceInfo ? formatFreq(deviceInfo.radioFreqHz) : '868 MHz';
 
@@ -114,11 +115,11 @@ function StatsRow({ peers, mqttConnected, deviceInfo }: { peers: RadarPeer[]; mq
         <Text style={styles.statChipLabel}>Pairs</Text>
       </View>
       <View style={styles.statChip}>
-        <View style={[styles.statDot, { backgroundColor: mqttConnected ? Colors.green : Colors.red }]} />
-        <Text style={[styles.statChipValue, { color: mqttConnected ? Colors.green : Colors.red }]}>
-          {mqttConnected ? 'OK' : 'OFF'}
+        <View style={[styles.statDot, { backgroundColor: nostrConnected ? Colors.green : Colors.red }]} />
+        <Text style={[styles.statChipValue, { color: nostrConnected ? Colors.green : Colors.red }]}>
+          {nostrConnected ? 'OK' : 'OFF'}
         </Text>
-        <Text style={styles.statChipLabel}>MQTT</Text>
+        <Text style={styles.statChipLabel}>Nostr</Text>
       </View>
       <View style={styles.statChip}>
         <View style={[styles.statDot, { backgroundColor: Colors.textMuted }]} />
@@ -564,8 +565,8 @@ function InternetModeBanner() {
 
       <View style={styles.internetStatsRow}>
         <View style={styles.internetStatItem}>
-          <Text style={styles.internetStatValue}>{gatewayState.mqttConnected ? 'Yes' : 'No'}</Text>
-          <Text style={styles.internetStatLabel}>MQTT</Text>
+          <Text style={styles.internetStatValue}>{nostrConnected ? 'Yes' : 'No'}</Text>
+          <Text style={styles.internetStatLabel}>Nostr</Text>
         </View>
         <View style={styles.internetStatDivider} />
         <View style={styles.internetStatItem}>
@@ -595,7 +596,8 @@ export default function MeshScreen() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const { settings } = useAppSettings();
   const isInternetOnly = settings.connectionMode === 'internet';
-  const { radarPeers, mqttState, identity } = useMessages();
+  const { radarPeers, identity } = useMessages();
+  const { isConnected: nostrConnected } = useNostr();
   const { connected: bleConnected, device: bleDevice, deviceInfo } = useBle();
   const { gatewayState } = useGateway();
 
@@ -651,7 +653,7 @@ export default function MeshScreen() {
 
       {!isInternetOnly && (
         <>
-          <StatsRow peers={radarPeers} mqttConnected={mqttState === 'connected'} deviceInfo={deviceInfo} />
+          <StatsRow peers={radarPeers} nostrConnected={nostrConnected} deviceInfo={deviceInfo} />
           <RadioBand deviceInfo={deviceInfo} />
         </>
       )}
@@ -721,12 +723,12 @@ export default function MeshScreen() {
           <View style={styles.emptyState}>
             <ScanSearch size={32} color={Colors.textMuted} />
             <Text style={styles.emptyText}>
-              {mqttState === 'connected' ? 'Aucun pair détecté' : 'Connexion MQTT...'}
+              {nostrConnected ? 'Aucun pair détecté' : 'Connexion Nostr...'}
             </Text>
             <Text style={styles.emptySubtext}>
-              {mqttState === 'connected'
+              {nostrConnected
                 ? 'Les pairs apparaissent quand ils se connectent'
-                : 'En attente du broker MQTT'}
+                : 'En attente des relays Nostr'}
             </Text>
           </View>
         )}
@@ -771,9 +773,9 @@ export default function MeshScreen() {
               <Server size={28} color={Colors.textMuted} />
               <Text style={styles.emptyText}>Aucun gateway détecté</Text>
               <Text style={styles.emptySubtext}>
-                {mqttState === 'connected'
-                  ? 'MQTT est connecté. Vous pouvez déjà tester la messagerie internet (peer ↔ peer).'
-                  : 'Connexion MQTT en cours...'}
+                {nostrConnected
+                  ? 'Nostr est connecté. Vous pouvez déjà tester la messagerie internet (peer ↔ peer).'
+                  : 'Connexion Nostr en cours...'}
               </Text>
             </View>
           )}

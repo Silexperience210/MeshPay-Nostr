@@ -1,15 +1,14 @@
 /**
  * Tests unitaires — MessagingBus
  *
- * Coverage Phase 2 :
- *   ✅ Routing : Nostr quand connecté / MQTT sinon / erreur si aucun
- *   ✅ Déduplication : message identique arrivant des deux transports
+ * Coverage Phase 2 (mise à jour Phase 8 — MQTT supprimé) :
+ *   ✅ Routing : Nostr quand connecté / erreur si aucun
+ *   ✅ Déduplication : message identique arrivant deux fois
  *   ✅ DeduplicateWindow : TTL, overflow, comptage
- *   ✅ mqttPayloadToBus : parsing WireMessage valide / invalide
  *   ✅ nostrEventToBus : mapping event Nostr → BusMessage
  *   ✅ subscribe / unsubscribe : handlers correctement appelés et nettoyés
  *   ✅ bridgeLoraToNostr : appel si Nostr connecté, skip si non
- *   ✅ getStatus : reflet fidèle de l'état des transports
+ *   ✅ getStatus : reflet fidèle de l'état du transport Nostr
  */
 
 import { MessagingBus, type BusMessage } from '../messaging-bus';
@@ -21,9 +20,6 @@ import { deriveNostrKeypair } from '../nostr-client';
 
 const MNEMONIC =
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-
-const MNEMONIC_BOB =
-  'legal winner thank year wave sausage worth useful legal winner thank yellow';
 
 function makeNostrEvent(overrides: Partial<any> = {}) {
   const kp = deriveNostrKeypair(MNEMONIC);
@@ -41,18 +37,6 @@ function makeNostrEvent(overrides: Partial<any> = {}) {
     },
     kp.secretKey,
   );
-}
-
-function makeWireMessage(overrides: Partial<Record<string, unknown>> = {}) {
-  return JSON.stringify({
-    id: 'wire-msg-' + Math.random().toString(36).slice(2),
-    fromNodeId: 'MESH-A1B2',
-    fromPubkey: 'aabbccdd',
-    to: 'MESH-C3D4',
-    enc: 'encrypted_content',
-    ts: Date.now(),
-    ...overrides,
-  });
 }
 
 // ─── Mock NostrClient ─────────────────────────────────────────────────────────
@@ -101,26 +85,6 @@ function makeMockNostr(connected: boolean) {
   };
 }
 
-// ─── Mock MQTT Instance ───────────────────────────────────────────────────────
-
-function makeMockMqtt(state: 'connected' | 'disconnected' = 'connected') {
-  const published: Array<{ topic: string; payload: string }> = [];
-  const handlers = new Map<string, Array<(t: string, p: string) => void>>();
-
-  return {
-    get state() { return state; },
-    client: {},
-    handlers,
-    patternHandlers: new Map(),
-    nodeId: 'MESH-LOCAL',
-    _published: published,
-    _trigger: (topic: string, payload: string) => {
-      const hs = handlers.get(topic) ?? [];
-      hs.forEach(h => h(topic, payload));
-    },
-  } as any;
-}
-
 // ─── Tests : Routing ──────────────────────────────────────────────────────────
 
 describe('MessagingBus — routing transport', () => {
@@ -128,14 +92,6 @@ describe('MessagingBus — routing transport', () => {
     const nostr = makeMockNostr(true);
     const bus = new MessagingBus(nostr);
     expect(bus.preferredTransport).toBe('nostr');
-  });
-
-  it('preferredTransport = mqtt quand Nostr absent et MQTT connecté', () => {
-    const nostr = makeMockNostr(false);
-    const mqtt = makeMockMqtt('connected');
-    const bus = new MessagingBus(nostr);
-    bus.setMqtt(mqtt);
-    expect(bus.preferredTransport).toBe('mqtt');
   });
 
   it('preferredTransport = none quand aucun transport', () => {
@@ -159,33 +115,6 @@ describe('MessagingBus — routing transport', () => {
     expect(nostr.publishDM).toHaveBeenCalledWith('deadbeef'.repeat(8), 'hello via Nostr');
   });
 
-  it('sendDM utilise MQTT quand Nostr absent', async () => {
-    const nostr = makeMockNostr(false);
-    const bus = new MessagingBus(nostr);
-    bus.setLocalIdentity('MESH-LOCAL', 'aabb');
-
-    // Spy sur publishMesh — on mock le module mqtt-client
-    const publishedTopics: string[] = [];
-    jest.spyOn(require('../mqtt-client'), 'publishMesh').mockImplementation(
-      (_inst: any, topic: string, _payload: string) => { publishedTopics.push(topic); }
-    );
-
-    const mqtt = makeMockMqtt('connected');
-    bus.setMqtt(mqtt);
-
-    const transport = await bus.sendDM({
-      toNodeId: 'MESH-C3D4',
-      toNostrPubkey: '',
-      content: 'hello',
-      encryptedPayload: JSON.stringify({ id: 'x', enc: 'encrypted' }),
-    });
-
-    expect(transport).toBe('mqtt');
-    expect(publishedTopics.some(t => t.includes('MESH-C3D4'))).toBe(true);
-
-    jest.restoreAllMocks();
-  });
-
   it('sendDM throw si aucun transport disponible', async () => {
     const nostr = makeMockNostr(false);
     const bus = new MessagingBus(nostr);
@@ -195,7 +124,6 @@ describe('MessagingBus — routing transport', () => {
         toNodeId: 'MESH-X',
         toNostrPubkey: '',
         content: 'test',
-        // pas de encryptedPayload → MQTT ne peut pas envoyer non plus
       }),
     ).rejects.toThrow('Aucun transport disponible');
   });
@@ -232,12 +160,12 @@ describe('MessagingBus — déduplication multi-transport', () => {
       to: 'MESH-B',
       content: 'hello',
       ts: Date.now(),
-      transport: 'mqtt',
+      transport: 'nostr',
     };
 
-    // Simuler réception depuis deux transports différents
+    // Simuler réception deux fois (ex: deux relays Nostr)
     (bus as any)._dispatch(msg);
-    (bus as any)._dispatch({ ...msg, transport: 'nostr' });
+    (bus as any)._dispatch({ ...msg });
 
     expect(received).toHaveLength(1);
     expect(received[0].id).toBe('dup-test-123');
@@ -250,7 +178,7 @@ describe('MessagingBus — déduplication multi-transport', () => {
     bus.subscribe(msg => received.push(msg));
 
     (bus as any)._dispatch({
-      id: 'msg-001', type: 'dm', from: 'A', fromPubkey: '', to: 'B', content: 'un', ts: 0, transport: 'mqtt',
+      id: 'msg-001', type: 'dm', from: 'A', fromPubkey: '', to: 'B', content: 'un', ts: 0, transport: 'nostr',
     });
     (bus as any)._dispatch({
       id: 'msg-002', type: 'dm', from: 'A', fromPubkey: '', to: 'B', content: 'deux', ts: 0, transport: 'nostr',
@@ -298,54 +226,6 @@ describe('DeduplicateWindow', () => {
   });
 });
 
-// ─── Tests : mqttPayloadToBus ────────────────────────────────────────────────
-
-describe('mqttPayloadToBus (parsing interne)', () => {
-  function parse(topic: string, payload: string) {
-    return (MessagingBus as any).prototype._dispatch; // ce n'est pas exposé
-    // On teste via _dispatch en injectant directement
-  }
-
-  it('WireMessage DM valide → type dm', () => {
-    // Tester via bus._dispatch en overriding
-    const nostr = makeMockNostr(false);
-    const bus = new MessagingBus(nostr);
-    const { default: busModule } = require('../messaging-bus');
-
-    // Accès à la fonction via le module
-    const { messagingBus: _singleton, ...rest } = require('../messaging-bus');
-
-    // On peut tester le comportement en vérifiant le type dispatché
-    const received: BusMessage[] = [];
-    bus.subscribe(msg => received.push(msg));
-
-    // Injecter directement via _dispatch (méthode privée testée via dispatch)
-    const msg: BusMessage = {
-      id: 'test-dm',
-      type: 'dm',
-      from: 'MESH-X',
-      fromPubkey: '',
-      to: 'MESH-Y',
-      content: 'test',
-      ts: Date.now(),
-      transport: 'mqtt',
-    };
-    (bus as any)._dispatch(msg);
-    expect(received[0].type).toBe('dm');
-  });
-
-  it('payload JSON invalide → aucun dispatch', () => {
-    // Le parsing interne retourne null pour les payloads invalides
-    // Tester l'absence de message via le bus complet
-    const nostr = makeMockNostr(false);
-    const bus = new MessagingBus(nostr);
-    const received: BusMessage[] = [];
-    bus.subscribe(msg => received.push(msg));
-    // Pas de _dispatch appelé → aucun message reçu
-    expect(received).toHaveLength(0);
-  });
-});
-
 // ─── Tests : subscribe / unsubscribe ────────────────────────────────────────
 
 describe('MessagingBus — subscribe / unsubscribe', () => {
@@ -363,8 +243,8 @@ describe('MessagingBus — subscribe / unsubscribe', () => {
     const calls: string[] = [];
     bus.subscribe(msg => calls.push(msg.id));
 
-    (bus as any)._dispatch({ id: 'a', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'mqtt' });
-    (bus as any)._dispatch({ id: 'b', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'mqtt' });
+    (bus as any)._dispatch({ id: 'a', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'nostr' });
+    (bus as any)._dispatch({ id: 'b', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'nostr' });
 
     expect(calls).toEqual(['a', 'b']);
   });
@@ -375,9 +255,9 @@ describe('MessagingBus — subscribe / unsubscribe', () => {
     const calls: string[] = [];
     const unsub = bus.subscribe(msg => calls.push(msg.id));
 
-    (bus as any)._dispatch({ id: 'c', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'mqtt' });
+    (bus as any)._dispatch({ id: 'c', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'nostr' });
     unsub();
-    (bus as any)._dispatch({ id: 'd', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'mqtt' });
+    (bus as any)._dispatch({ id: 'd', type: 'dm', from: '', fromPubkey: '', to: '', content: '', ts: 0, transport: 'nostr' });
 
     expect(calls).toEqual(['c']); // 'd' ignoré après unsub
   });
@@ -432,21 +312,49 @@ describe('MessagingBus — getStatus()', () => {
     expect(status.preferred).toBe('nostr');
   });
 
-  it('preferred=mqtt quand Nostr absent + MQTT connecté', () => {
-    const nostr = makeMockNostr(false);
-    const mqtt = makeMockMqtt('connected');
-    const bus = new MessagingBus(nostr);
-    bus.setMqtt(mqtt);
-    const status = bus.getStatus();
-    expect(status.preferred).toBe('mqtt');
-    expect(status.mqtt).toBe('connected');
-  });
-
   it('preferred=none quand aucun transport', () => {
     const nostr = makeMockNostr(false);
     const bus = new MessagingBus(nostr);
     const status = bus.getStatus();
     expect(status.preferred).toBe('none');
     expect(status.nostr).toBe('disconnected');
+  });
+});
+
+// ─── Tests : Nostr listeners ──────────────────────────────────────────────────
+
+describe('MessagingBus — Nostr DM listener', () => {
+  it('reçoit les DMs Nostr entrants via subscribeDMs', () => {
+    const nostr = makeMockNostr(true) as any;
+    const bus = new MessagingBus(nostr);
+    bus.setLocalIdentity('MESH-LOCAL', 'local-pubkey-hex');
+
+    const received: BusMessage[] = [];
+    bus.subscribe(msg => received.push(msg));
+
+    // Simuler la réception d'un DM Nostr
+    const fakeEvent = { id: 'nostr-dm-001', pubkey: 'remote-pubkey', created_at: Math.floor(Date.now() / 1000), tags: [['meshcore-from', 'MESH-REMOTE']], kind: 4 };
+    nostr._triggerDM('remote-pubkey', 'hello from remote', fakeEvent as any);
+
+    expect(received).toHaveLength(1);
+    expect(received[0].transport).toBe('nostr');
+    expect(received[0].type).toBe('dm');
+    expect(received[0].from).toBe('MESH-REMOTE');
+    expect(received[0].content).toBe('hello from remote');
+  });
+
+  it('ignore ses propres DMs (localNostrPubkey)', () => {
+    const nostr = makeMockNostr(true) as any;
+    const bus = new MessagingBus(nostr);
+    bus.setLocalIdentity('MESH-LOCAL', 'my-own-pubkey');
+
+    const received: BusMessage[] = [];
+    bus.subscribe(msg => received.push(msg));
+
+    // Simuler un DM provenant de nous-mêmes
+    const fakeEvent = { id: 'own-dm', pubkey: 'my-own-pubkey', created_at: Math.floor(Date.now() / 1000), tags: [], kind: 4 };
+    nostr._triggerDM('my-own-pubkey', 'echo de mon propre message', fakeEvent as any);
+
+    expect(received).toHaveLength(0);
   });
 });

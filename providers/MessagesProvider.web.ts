@@ -1,21 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
-import { useGateway } from '@/providers/GatewayProvider';
 import { deriveMeshIdentity } from '@/utils/identity';
-import {
-  type MeshMqttClient,
-  createMeshMqttClient,
-  publishMesh,
-  subscribeMesh,
-  disconnectMesh,
-  joinForumChannel,
-  leaveForumChannel,
-  subscribeForumAnnouncements,
-  announceForumChannel,
-  TOPICS,
-  type ForumAnnouncement,
-} from '@/utils/mqtt-client';
 
 export type MessageType = 'text' | 'cashu' | 'btc_tx' | 'lora' | 'audio' | 'image' | 'gif';
 
@@ -76,25 +62,17 @@ export interface MeshIdentity {
 
 export interface MessagesState {
   identity: MeshIdentity | null;
-  mqttState: 'disconnected' | 'connecting' | 'connected' | 'error';
   conversations: StoredConversation[];
   messagesByConv: Record<string, StoredMessage[]>;
   radarPeers: RadarPeer[];
   myLocation: { lat: number; lng: number } | null;
-  discoveredForums: ForumAnnouncement[];
-  connect: () => void;
-  disconnect: () => void;
-  reconnectMqtt: () => void;
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
-  sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
-  sendImage: (convId: string, base64: string, mimeType: string) => Promise<void>;
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string) => Promise<void>;
   joinForum: (channelName: string, description?: string) => Promise<void>;
   leaveForum: (channelName: string) => void;
   markRead: (convId: string) => Promise<void>;
-  announceForumPublic: (channelName: string, description: string) => boolean;
   setDisplayName: (name: string) => Promise<void>;
   deleteMessage: (msgId: string, convId: string) => Promise<void>;
   deleteConversation: (convId: string) => Promise<void>;
@@ -116,33 +94,20 @@ function genId(): string {
 
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
   const { mnemonic } = useWalletSeed();
-  const { getMqttBrokerUrl } = useGateway();
 
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
-  const [mqttState, setMqttState] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
   const [contacts, setContacts] = useState<DBContact[]>([]);
-  const [discoveredForums, setDiscoveredForums] = useState<ForumAnnouncement[]>([]);
-  const [radarPeers, setRadarPeers] = useState<RadarPeer[]>([]);
-
-  const mqttRef = useRef<MeshMqttClient | null>(null);
-  const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const identityRef = useRef<MeshIdentity | null>(null);
-  const joinedForums = useRef<Set<string>>(new Set());
-  const brokerUrlRef = useRef<string>(getMqttBrokerUrl());
 
-  // Persist conversations
+  // Persist helpers
   const persistConversations = useCallback((convs: StoredConversation[]) => {
-    try {
-      localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convs));
-    } catch {}
+    try { localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convs)); } catch {}
   }, []);
 
   const persistMessages = useCallback((convId: string, msgs: StoredMessage[]) => {
-    try {
-      localStorage.setItem(MESSAGES_KEY_PREFIX + convId, JSON.stringify(msgs));
-    } catch {}
+    try { localStorage.setItem(MESSAGES_KEY_PREFIX + convId, JSON.stringify(msgs)); } catch {}
   }, []);
 
   // Load persisted data
@@ -182,135 +147,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [mnemonic]);
 
-  const startStatePoller = useCallback((client: MeshMqttClient) => {
-    if (pollerRef.current) clearInterval(pollerRef.current);
-    pollerRef.current = setInterval(() => {
-      const s = client.state;
-      setMqttState(s);
-    }, 500);
-  }, []);
-
-  const connect = useCallback(() => {
-    const id = identityRef.current;
-    if (!id) {
-      console.log('[Messages-Web] No identity, cannot connect');
-      return;
-    }
-    if (mqttRef.current) {
-      disconnectMesh(mqttRef.current);
-      mqttRef.current = null;
-    }
-    const brokerUrl = brokerUrlRef.current;
-    console.log('[Messages-Web] Connecting to MQTT:', brokerUrl);
-    setMqttState('connecting');
-
-    const client = createMeshMqttClient(id.nodeId, id.pubkeyHex, brokerUrl);
-    mqttRef.current = client;
-    startStatePoller(client);
-
-    // Subscribe to identity announcements to build radar
-    setTimeout(() => {
-      if (!mqttRef.current) return;
-      subscribeMesh(
-        mqttRef.current,
-        '#',
-        (topic, payload) => {
-          if (!topic.startsWith('meshcore/identity/')) return;
-          try {
-            const data = JSON.parse(payload) as {
-              nodeId?: string;
-              pubkeyHex?: string;
-              online?: boolean;
-              lat?: number;
-              lng?: number;
-            };
-            if (!data.nodeId || data.nodeId === identityRef.current?.nodeId) return;
-            const peerNodeId = data.nodeId;
-            setRadarPeers(prev => {
-              const existing = prev.find(p => p.nodeId === peerNodeId);
-              const updated: RadarPeer = {
-                nodeId: peerNodeId,
-                name: peerNodeId,
-                distance: existing?.distance ?? Math.random() * 5000,
-                bearing: existing?.bearing ?? Math.random() * 360,
-                signalStrength: data.online ? 75 : 20,
-                lat: data.lat,
-                lng: data.lng,
-                lastSeen: Date.now(),
-              };
-              if (existing) {
-                return prev.map(p => p.nodeId === peerNodeId ? updated : p);
-              }
-              return [...prev, updated];
-            });
-          } catch {}
-        },
-        0
-      );
-
-      // Subscribe to forum announcements
-      subscribeForumAnnouncements(mqttRef.current, (announcement) => {
-        console.log('[Messages-Web] Forum discovered:', announcement.channelName);
-        setDiscoveredForums(prev => {
-          const exists = prev.find(f => f.channelName === announcement.channelName);
-          if (exists) return prev;
-          return [...prev, announcement];
-        });
-      });
-    }, 1000);
-  }, [startStatePoller]);
-
-  const disconnect = useCallback(() => {
-    if (pollerRef.current) clearInterval(pollerRef.current);
-    if (mqttRef.current) {
-      disconnectMesh(mqttRef.current);
-      mqttRef.current = null;
-    }
-    setMqttState('disconnected');
-  }, []);
-
-  const reconnectMqtt = useCallback(() => {
-    console.log('[Messages-Web] Force reconnect');
-    brokerUrlRef.current = getMqttBrokerUrl();
-    disconnect();
-    setTimeout(connect, 500);
-  }, [disconnect, connect, getMqttBrokerUrl]);
-
-  // Auto-connect when identity is ready
-  useEffect(() => {
-    if (!identity) return;
-    const timer = setTimeout(connect, 300);
-    return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
-
-  // Sync broker URL ref and reconnect when it changes
-  useEffect(() => {
-    const url = getMqttBrokerUrl();
-    const prev = brokerUrlRef.current;
-    brokerUrlRef.current = url;
-    if (prev && prev !== url && identityRef.current) {
-      console.log('[Messages-Web] Broker changed, reconnecting:', url);
-      if (mqttRef.current) {
-        disconnectMesh(mqttRef.current);
-        mqttRef.current = null;
-      }
-      setTimeout(connect, 500);
-    }
-  }, [getMqttBrokerUrl, connect]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (pollerRef.current) clearInterval(pollerRef.current);
-      if (mqttRef.current) disconnectMesh(mqttRef.current);
-    };
-  }, []);
-
   const sendMessage = useCallback(async (convId: string, text: string, type: MessageType = 'text') => {
     const id = identityRef.current;
     if (!id) throw new Error('No identity');
-    const client = mqttRef.current;
 
     const msg: StoredMessage = {
       id: genId(),
@@ -321,7 +160,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       type,
       timestamp: Date.now(),
       isMine: true,
-      status: client?.state === 'connected' ? 'sent' : 'sending',
+      status: 'sending',
     };
 
     setMessagesByConv(prev => {
@@ -338,26 +177,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       persistConversations(updated);
       return updated;
     });
+  }, [persistMessages, persistConversations]);
 
-    // Publish via MQTT if connected
-    if (client && client.state === 'connected') {
-      const conv = conversations.find(c => c.id === convId);
-      const topic = conv?.isForum
-        ? TOPICS.forum(convId)
-        : TOPICS.dm(convId);
-      const payload = JSON.stringify({
-        v: 1,
-        id: msg.id,
-        fromNodeId: id.nodeId,
-        fromPubkey: id.pubkeyHex,
-        text,
-        type,
-        ts: Date.now(),
-      });
-      publishMesh(client, topic, payload);
-      console.log('[Messages-Web] Message sent via MQTT:', topic);
-    }
-  }, [conversations, persistMessages, persistConversations]);
+  const sendCashu = useCallback(async (_convId: string, _token: string, _amountSats: number) => {
+    console.log('[Messages-Web] sendCashu not available on web');
+  }, []);
 
   const startConversation = useCallback(async (peerNodeId: string, peerName?: string) => {
     const name = peerName ?? peerNodeId;
@@ -377,8 +201,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     });
   }, [persistConversations]);
 
-  const joinForum = useCallback(async (channelName: string, description?: string) => {
-    const id = identityRef.current;
+  const joinForum = useCallback(async (channelName: string, _description?: string) => {
     setConversations(prev => {
       if (prev.find(c => c.id === channelName)) return prev;
       const conv: StoredConversation = {
@@ -393,67 +216,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       persistConversations(updated);
       return updated;
     });
-
-    if (mqttRef.current && mqttRef.current.state === 'connected') {
-      joinForumChannel(mqttRef.current, channelName, (topic, payload) => {
-        try {
-          const data = JSON.parse(payload) as {
-            id?: string;
-            fromNodeId?: string;
-            fromPubkey?: string;
-            text?: string;
-            type?: MessageType;
-            ts?: number;
-          };
-          if (!data.fromNodeId || data.fromNodeId === id?.nodeId) return;
-          const msg: StoredMessage = {
-            id: data.id ?? genId(),
-            conversationId: channelName,
-            fromNodeId: data.fromNodeId,
-            fromPubkey: data.fromPubkey ?? '',
-            text: data.text ?? '',
-            type: data.type ?? 'text',
-            timestamp: data.ts ?? Date.now(),
-            isMine: false,
-            status: 'delivered',
-          };
-          setMessagesByConv(prev => {
-            const existing = prev[channelName] ?? [];
-            if (existing.find(m => m.id === msg.id)) return prev;
-            const updated = [...existing, msg];
-            persistMessages(channelName, updated);
-            return { ...prev, [channelName]: updated };
-          });
-          setConversations(prev =>
-            prev.map(c =>
-              c.id === channelName
-                ? { ...c, lastMessage: msg.text, lastMessageTime: msg.timestamp, unreadCount: c.unreadCount + 1 }
-                : c
-            )
-          );
-        } catch {}
-      });
-      joinedForums.current.add(channelName);
-    }
-  }, [persistConversations, persistMessages]);
+  }, [persistConversations]);
 
   const leaveForum = useCallback((channelName: string) => {
-    if (mqttRef.current) leaveForumChannel(mqttRef.current, channelName);
-    joinedForums.current.delete(channelName);
     setConversations(prev => {
       const updated = prev.filter(c => c.id !== channelName);
       persistConversations(updated);
       return updated;
     });
   }, [persistConversations]);
-
-  const announceForumPublic = useCallback((channelName: string, description: string): boolean => {
-    const id = identityRef.current;
-    const client = mqttRef.current;
-    if (!client || client.state !== 'connected' || !id) return false;
-    announceForumChannel(client, channelName, description, id.pubkeyHex, true);
-    return true;
-  }, []);
 
   const loadConversationMessages = useCallback(async (convId: string) => {
     try {
@@ -549,29 +320,19 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } catch {}
   }, []);
 
-  const noopAsync = async () => {};
-
   return {
     identity,
-    mqttState,
     conversations,
     messagesByConv,
-    radarPeers,
+    radarPeers: [],
     myLocation: null,
-    discoveredForums,
-    connect,
-    disconnect,
-    reconnectMqtt,
     sendMessage,
-    sendAudio: noopAsync,
-    sendImage: noopAsync,
-    sendCashu: noopAsync,
+    sendCashu,
     loadConversationMessages,
     startConversation,
     joinForum,
     leaveForum,
     markRead,
-    announceForumPublic,
     setDisplayName,
     deleteMessage,
     deleteConversation,

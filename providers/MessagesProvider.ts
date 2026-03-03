@@ -2,30 +2,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import * as Notifications from 'expo-notifications'; // ✅ NOUVEAU
-import {
-  type MeshMqttClient,
-  type MessageHandler,
-  createMeshMqttClient,
-  publishMesh,
-  subscribeMesh,
-  subscribePattern,
-  updatePresence,
-  disconnectMesh,
-  joinForumChannel,
-  leaveForumChannel,
-  fetchPeerPubkey,
-  announceForumChannel,
-  subscribeForumAnnouncements,
-  type ForumAnnouncement,
-  TOPICS,
-} from '@/utils/mqtt-client';
 import * as Location from 'expo-location';
 import { type RadarPeer, haversineDistance, gpsBearing, distanceToSignal } from '@/utils/radar';
 import {
   encryptDM,
   decryptDM,
-  encryptForum,
-  decryptForum,
   type EncryptedPayload,
 } from '@/utils/encryption';
 import { isChunkPacket } from '@/utils/meshcore-protocol';
@@ -43,11 +24,10 @@ import {
   generateMsgId,
 } from '@/utils/messages-store';
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
-import { deriveMeshIdentity, type MeshIdentity, verifyNodeId } from '@/utils/identity';
+import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { useNostr } from '@/providers/NostrProvider';
-import { MeshRouter, type MeshMessage, isValidMeshMessage } from '@/utils/mesh-routing';
 // MeshIdentity utilisé comme type de paramètre pour publishAndStore
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
 // Import BLE provider pour communication LoRa via gateway ESP32
@@ -77,45 +57,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const JOINED_FORUMS_KEY = 'bitmesh:joined_forums_v1';
 
-// Format du message sur le réseau MQTT
-interface WireMessage {
-  v: number;
-  id: string;
-  from?: string;
-  fromNodeId: string;
-  fromPubkey: string;
-  to: string;          // nodeId destinataire ou "forum:channelName"
-  enc: EncryptedPayload;
-  ts: number;
-  type: MessageType;
-}
-
 export interface MessagesState {
   identity: MeshIdentity | null;
-  mqttState: 'disconnected' | 'connecting' | 'connected' | 'error';
   conversations: StoredConversation[];
   // Messages par convId
   messagesByConv: Record<string, StoredMessage[]>;
-  // Pairs visibles sur le radar (via MQTT identity)
+  // Pairs visibles sur le radar (via Nostr presence)
   radarPeers: RadarPeer[];
   // Notre position GPS
   myLocation: { lat: number; lng: number } | null;
-  // ✅ NOUVEAU : Forums découverts via MQTT
-  discoveredForums: ForumAnnouncement[];
   // Actions
-  connect: () => void;
-  disconnect: () => void;
-  reconnectMqtt: () => void;
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
-  sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
-  sendImage: (convId: string, base64: string, mimeType: string) => Promise<void>;
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string) => Promise<void>;
   joinForum: (channelName: string, description?: string) => Promise<void>;
   leaveForum: (channelName: string) => void;
   markRead: (convId: string) => Promise<void>;
-  announceForumPublic: (channelName: string, description: string) => boolean;
   setDisplayName: (name: string) => Promise<void>;
   deleteMessage: (msgId: string, convId: string) => Promise<void>;
   deleteConversation: (convId: string) => Promise<void>;
@@ -131,37 +89,21 @@ export interface MessagesState {
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
   const { mnemonic } = useWalletSeed();
   const ble = useBle(); // Accès au BLE gateway pour LoRa
-  const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu, getMqttBrokerUrl } = useGateway();
+  const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu } = useGateway();
   const { isConnected: nostrConnected } = useNostr();
-  const activeBrokerUrl = getMqttBrokerUrl();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
-  const [mqttState, setMqttState] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
   const [radarPeers, setRadarPeers] = useState<RadarPeer[]>([]);
   const [contacts, setContacts] = useState<DBContact[]>([]);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
   const myLocationRef = useRef<{ lat: number; lng: number } | null>(null);
-  const mqttRef = useRef<MeshMqttClient | null>(null);
-  const meshRouterRef = useRef<MeshRouter | null>(null);
   const chunkManagerRef = useRef(getChunkManager());
   const joinedForums = useRef<Set<string>>(new Set());
-  // FIX: Référence vers l'interval de polling pour cleanup en cas de démontage pendant connexion
-  const statePollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const shouldAutoConnectRef = useRef<boolean>(true);
-  // Ref vers la dernière fonction connect (évite les dépendances cycliques dans les effects)
-  const connectRef = useRef<() => void>(() => {});
-  // Ref vers l'URL broker précédente (pour détecter les vrais changements)
-  const prevBrokerUrlRef = useRef<string>(activeBrokerUrl);
-  // ✅ NOUVEAU : Forums découverts
-  const [discoveredForums, setDiscoveredForums] = useState<ForumAnnouncement[]>([]);
   // FIX #1: Deduplication — Set des IDs de messages récents (max 200)
   const recentMsgIds = useRef<Set<string>>(new Set());
   // Buffer paquets chiffrés reçus avant de connaître la pubkey du sender
   const pendingEncryptedPackets = useRef<Map<string, MeshCorePacket[]>>(new Map());
-  // FIX: Cache des handlers forum (même référence sur reconnexion → dedup fonctionne)
-  const forumHandlerRefs = useRef<Map<string, MessageHandler>>(new Map());
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
   const addToDedup = (id: string) => {
@@ -191,20 +133,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         
         console.log('[Messages] Identité dérivée:', id.nodeId);
 
-        // Initialiser le MeshRouter
-        meshRouterRef.current = new MeshRouter(id.nodeId);
-        console.log('[MeshRouter] Initialisé pour:', id.nodeId);
       } catch (err) {
         console.log('[Messages] Erreur dérivation identité:', err);
       }
     }
 
-    // Cleanup du router au démontage
-    return () => {
-      if (meshRouterRef.current) {
-        meshRouterRef.current.destroy();
-      }
-    };
   }, [mnemonic, identity]);
 
   // Envoyer un PING BLE dès que la connexion BLE est établie + identité dispo
@@ -668,10 +601,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           const p = { lat: location.coords.latitude, lng: location.coords.longitude };
           setMyLocation(p);
           myLocationRef.current = p;
-          // Mettre à jour la présence MQTT avec le nouveau GPS
-          if (mqttRef.current && identity) {
-            updatePresence(mqttRef.current, identity.nodeId, identity.pubkeyHex, p.lat, p.lng);
-          }
           // Publier la présence Nostr si connecté
           if (nostrClient.isConnected && identity) {
             nostrClient.publishPresence(identity.nodeId, p.lat, p.lng).catch(() => {});
@@ -682,458 +611,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return () => { subscription?.remove(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
-
-  // Handler de présence d'un pair distant (topic: meshcore/identity/{nodeId})
-  const handlePeerPresence = useCallback((topic: string, payloadStr: string) => {
-    if (!identity) return;
-    try {
-      const data = JSON.parse(payloadStr) as {
-        nodeId?: string;
-        pubkeyHex?: string;
-        online?: boolean;
-        ts?: number;
-        lat?: number;
-        lng?: number;
-      };
-      if (!data.nodeId || data.nodeId === identity.nodeId) return;
-
-      const myPos = myLocationRef.current;
-      let distanceMeters = 0;
-      let bearingRad = 0;
-
-      if (myPos && data.lat !== undefined && data.lng !== undefined) {
-        distanceMeters = haversineDistance(myPos.lat, myPos.lng, data.lat, data.lng);
-        bearingRad = gpsBearing(myPos.lat, myPos.lng, data.lat, data.lng);
-      } else {
-        // Pas de GPS: distance inconnue, angle aléatoire stable basé sur nodeId hash
-        const hash = data.nodeId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        distanceMeters = 500 + (hash % 4000);
-        bearingRad = (hash % 628) / 100; // 0..2π
-      }
-
-      const peer: RadarPeer = {
-        nodeId: data.nodeId,
-        name: data.nodeId,
-        distanceMeters,
-        bearingRad,
-        online: data.online !== false,
-        pubkeyHex: data.pubkeyHex,
-        lat: data.lat,
-        lng: data.lng,
-        lastSeen: data.ts ?? Date.now(),
-        signalStrength: distanceToSignal(distanceMeters),
-      };
-
-      setRadarPeers(prev => {
-        const filtered = prev.filter(p => p.nodeId !== data.nodeId);
-        if (!peer.online && filtered.length === prev.length) return prev; // pair déjà absent
-        return peer.online ? [peer, ...filtered] : filtered;
-      });
-
-      // Gateway peer tracking
-      if (gatewayState.isActive && peer.online) {
-        const gatewayPeer: GatewayPeer = {
-          nodeId: peer.nodeId,
-          name: peer.name,
-          lastSeen: peer.lastSeen,
-          signalStrength: peer.signalStrength,
-          hops: 1,
-          capabilities: [],
-          isGateway: false,
-        };
-        registerPeer(gatewayPeer);
-      }
-    } catch (err) {
-      console.log('[Radar] Erreur parse présence:', err);
-    }
-  }, [identity, gatewayState.isActive, registerPeer]);
-
-  // Handler pour un message DM entrant
-  const handleIncomingDM = useCallback(async (topic: string, payloadStr: string) => {
-    if (!identity) return;
-    try {
-      const wire = JSON.parse(payloadStr) as WireMessage;
-      if (wire.from === identity.nodeId) return; // ignorer nos propres messages
-      // FIX #1: Deduplication
-      if (wire.id && recentMsgIds.current.has(wire.id)) { console.log('[Messages] DM dupliqué ignoré:', wire.id); return; }
-      if (wire.id) addToDedup(wire.id);
-
-      // ✅ NOUVEAU : Vérifier que le nodeId correspond à la clé publique
-      if (wire.from && wire.fromPubkey) {
-        const isValid = verifyNodeId(wire.from, wire.fromPubkey);
-        if (!isValid) {
-          console.log('[Messages] ALERTE : Usurpation d\'identité détectée !', {
-            claimedNodeId: wire.from,
-            pubkey: wire.fromPubkey,
-          });
-          return; // Rejeter le message
-        }
-      }
-
-      const plaintext = decryptDM(wire.enc, identity.privkeyBytes, wire.fromPubkey);
-      
-      const fromNodeIdValue = wire.from || wire.fromNodeId || 'unknown';
-
-      // Décoder payload audio/image si nécessaire
-      let audioData: string | undefined;
-      let audioDuration: number | undefined;
-      let imageData: string | undefined;
-      let imageMime: string | undefined;
-      let displayText = plaintext;
-
-      if (wire.type === 'audio') {
-        try {
-          const audioPayload = JSON.parse(plaintext) as { dur: number; data: string };
-          audioData = audioPayload.data;
-          audioDuration = audioPayload.dur;
-          displayText = `[Audio ${Math.round(audioDuration / 1000)}s]`;
-        } catch {
-          displayText = '[Audio]';
-        }
-      } else if (wire.type === 'image' || wire.type === 'gif') {
-        try {
-          const imagePayload = JSON.parse(plaintext) as { mime: string; data: string };
-          imageData = imagePayload.data;
-          imageMime = imagePayload.mime;
-          displayText = wire.type === 'gif' ? '[GIF]' : '[Photo]';
-        } catch {
-          displayText = wire.type === 'gif' ? '[GIF]' : '[Photo]';
-        }
-      }
-
-      // ✅ NOUVEAU : Validation et stockage des tokens Cashu
-      let cashuAmount: number | undefined;
-      let cashuTokenStr: string | undefined;
-
-      if (wire.type === 'cashu') {
-        try {
-          const verification = await verifyCashuToken(plaintext);
-          if (verification.valid && verification.token) {
-            cashuAmount = verification.amount;
-            cashuTokenStr = plaintext;
-            
-            // Stocker dans le wallet Cashu
-            const tokenId = generateTokenId(verification.token);
-            await saveCashuToken({
-              id: tokenId,
-              mintUrl: verification.mintUrl || 'unknown',
-              amount: verification.amount || 0,
-              token: plaintext,
-              proofs: JSON.stringify(verification.token.token[0].proofs),
-              source: fromNodeIdValue,
-              memo: `Reçu de ${fromNodeIdValue}`,
-              state: verification.unverified ? 'unverified' : 'unspent',
-              unverified: verification.unverified,
-              retryCount: 0,
-            });
-            console.log('[Cashu] Token validé et stocké:', tokenId, verification.amount, 'sats', verification.unverified ? '(unverified)' : '');
-            
-            // ✅ NOUVEAU : Notification locale
-            try {
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title: '💰 Token Cashu reçu !',
-                  body: `${verification.amount} sats de ${fromNodeIdValue.slice(0, 10)}...`,
-                  data: { type: 'cashu_received', amount: verification.amount },
-                },
-                trigger: null, // Immédiat
-              });
-            } catch (notifErr) {
-              console.log('[Cashu] Erreur notification:', notifErr);
-            }
-          } else {
-            console.log('[Cashu] Token invalide reçu:', verification.error);
-            // On garde le message mais on marque comme invalide
-            cashuAmount = 0;
-            cashuTokenStr = plaintext;
-          }
-        } catch (err) {
-          console.log('[Cashu] Erreur validation token:', err);
-          cashuAmount = parseCashuAmount(plaintext);
-          cashuTokenStr = plaintext;
-        }
-      }
-
-      // Gateway Cashu relay
-      if (wire.type === 'cashu' && cashuTokenStr && gatewayState.isActive && gatewayState.services.cashu) {
-        relayCashu(cashuTokenStr, gatewayState.cashuMintUrl, fromNodeIdValue, 'relay');
-      }
-
-      const msg: StoredMessage = {
-        id: wire.id,
-        conversationId: fromNodeIdValue,
-        fromNodeId: fromNodeIdValue,
-        fromPubkey: wire.fromPubkey,
-        text: displayText,
-        type: wire.type,
-        timestamp: wire.ts,
-        isMine: false,
-        status: 'delivered',
-        cashuAmount,
-        cashuToken: cashuTokenStr,
-        audioData,
-        audioDuration,
-        imageData,
-        imageMime,
-      };
-
-      saveMessage(msg);
-      updateConversationLastMessage(fromNodeIdValue, displayText.slice(0, 50), wire.ts, true);
-
-      setMessagesByConv(prev => ({
-        ...prev,
-        [fromNodeIdValue]: [...(prev[fromNodeIdValue] ?? []), msg],
-      }));
-
-      // Créer la conversation si elle n'existe pas encore
-      setConversations(prev => {
-        const exists = prev.find(c => c.id === fromNodeIdValue);
-        if (!exists) {
-          const newConv: StoredConversation = {
-            id: fromNodeIdValue,
-            name: fromNodeIdValue,
-            isForum: false,
-            peerPubkey: wire.fromPubkey,
-            lastMessage: displayText.slice(0, 50),
-            lastMessageTime: wire.ts,
-            unreadCount: 1,
-            online: true,
-          };
-          saveConversation(newConv);
-          return [newConv, ...prev];
-        }
-        return prev.map(c => {
-          if (c.id !== fromNodeIdValue) return c;
-          const updated = { ...c, lastMessage: plaintext.slice(0, 50), lastMessageTime: wire.ts, unreadCount: c.unreadCount + 1, peerPubkey: wire.fromPubkey, online: true };
-          // Persister la pubkey du pair pour les envois futurs
-          if (!c.peerPubkey) saveConversation(updated);
-          return updated;
-        });
-      });
-    } catch (err) {
-      console.log('[Messages] Erreur déchiffrement DM:', err);
-    }
-  }, [identity, gatewayState.isActive, gatewayState.services.cashu, gatewayState.cashuMintUrl, relayCashu]);
-
-  // Handler pour les messages multi-hop routés (meshcore/route/{nodeId})
-  const handleIncomingRouteMessage = useCallback((topic: string, payloadStr: string) => {
-    if (!identity || !meshRouterRef.current) return;
-
-    try {
-      const meshMsg = JSON.parse(payloadStr) as MeshMessage;
-
-      // Valider le format du message
-      if (!isValidMeshMessage(meshMsg)) {
-        console.log('[MeshRouter] Message invalide ignoré');
-        return;
-      }
-      // FIX #1: Deduplication route
-      if (meshMsg.msgId && recentMsgIds.current.has(meshMsg.msgId)) { console.log('[MeshRouter] Message dupliqué ignoré:', meshMsg.msgId); return; }
-      if (meshMsg.msgId) addToDedup(meshMsg.msgId);
-
-      // Traiter via MeshRouter (deliver/relay/drop)
-      const action = meshRouterRef.current.processIncomingMessage(meshMsg);
-
-      if (action === 'drop') {
-        // Message dupliqué ou TTL expiré → ignorer
-        return;
-      }
-
-      if (action === 'deliver') {
-        // Message pour nous → déchiffrer et afficher
-        const plaintext = decryptDM(meshMsg.enc as any, identity.privkeyBytes, meshMsg.fromPubkey || '');
-        
-        const fromNodeIdValue = meshMsg.from || 'unknown';
-
-        const msg: StoredMessage = {
-          id: meshMsg.msgId,
-          conversationId: fromNodeIdValue,
-          fromNodeId: fromNodeIdValue,
-          fromPubkey: meshMsg.fromPubkey,
-          text: plaintext,
-          type: meshMsg.type,
-          timestamp: meshMsg.ts,
-          isMine: false,
-          status: 'delivered',
-          cashuAmount: meshMsg.type === 'cashu' ? parseCashuAmount(plaintext) : undefined,
-          cashuToken: meshMsg.type === 'cashu' ? plaintext : undefined,
-        };
-
-        saveMessage(msg);
-        updateConversationLastMessage(fromNodeIdValue, plaintext.slice(0, 50), meshMsg.ts, true);
-
-        setMessagesByConv(prev => ({
-          ...prev,
-          [fromNodeIdValue]: [...(prev[fromNodeIdValue] ?? []), msg],
-        }));
-
-        // Créer conversation si nécessaire
-        setConversations(prev => {
-          const exists = prev.find(c => c.id === fromNodeIdValue);
-          if (!exists) {
-            const newConv: StoredConversation = {
-              id: fromNodeIdValue,
-              name: fromNodeIdValue,
-              isForum: false,
-              peerPubkey: meshMsg.fromPubkey,
-              lastMessage: plaintext.slice(0, 50),
-              lastMessageTime: meshMsg.ts,
-              unreadCount: 1,
-              online: true,
-            };
-            saveConversation(newConv);
-            return [newConv, ...prev];
-          }
-          return prev.map(c => {
-            if (c.id !== fromNodeIdValue) return c;
-            return {
-              ...c,
-              lastMessage: plaintext.slice(0, 50),
-              lastMessageTime: meshMsg.ts,
-              unreadCount: c.unreadCount + 1,
-              peerPubkey: meshMsg.fromPubkey,
-              online: true,
-            };
-          });
-        });
-
-        console.log(`[MeshRouter] Message livré (${meshMsg.hopCount} hops)`);
-      }
-
-      if (action === 'relay') {
-        // Message pour quelqu'un d'autre → relay
-        if (!mqttRef.current?.client) return;
-
-        const relayMsg = meshRouterRef.current.prepareRelay(meshMsg);
-        const relayTopic = TOPICS.route(meshMsg.to);
-
-        mqttRef.current.client.publish(
-          relayTopic,
-          JSON.stringify(relayMsg),
-          { qos: 0 },
-          (err) => {
-            if (err) {
-              console.log('[MeshRouter] Erreur relay:', err);
-            } else {
-              console.log(`[MeshRouter] Message relayé → ${meshMsg.to} (TTL=${relayMsg.ttl}, hops=${relayMsg.hopCount})`);
-            }
-          }
-        );
-      }
-    } catch (err) {
-      console.log('[MeshRouter] Erreur traitement message:', err);
-    }
-  }, [identity]);
-
-  // ✅ NOUVEAU : Handler pour les annonces de forums
-  const handleForumAnnouncement = useCallback((announcement: ForumAnnouncement) => {
-    console.log('[Forums] Nouveau forum découvert:', announcement.channelName, 'par', announcement.creatorNodeId);
-
-    setDiscoveredForums(prev => {
-      // Éviter les doublons
-      const exists = prev.find(f =>
-        f.channelName === announcement.channelName &&
-        f.creatorNodeId === announcement.creatorNodeId
-      );
-
-      if (exists) return prev;
-
-      // Nouveau forum découvert - afficher notification
-      // Note: On utilise setTimeout pour éviter d'afficher pendant le rendu
-      setTimeout(() => {
-        // Notification simple (peut être remplacée par un toast custom)
-        console.log(`[Forums] 🔔 Nouveau forum: #${announcement.channelName} - ${announcement.description}`);
-      }, 100);
-
-      // Garder seulement les 50 dernières annonces
-      const updated = [announcement, ...prev].slice(0, 50);
-      return updated;
-    });
-  }, []);
-
-  // Handler pour un message forum entrant
-  const handleIncomingForum = useCallback((channelName: string) => (topic: string, payloadStr: string) => {
-    if (!identity) return;
-    try {
-      const wire = JSON.parse(payloadStr) as WireMessage;
-      const convId = `forum:${channelName}`;
-
-      // FIX #1: Deduplication forum
-      if (wire.id && recentMsgIds.current.has(wire.id)) { console.log('[Messages] Forum msg dupliqué ignoré:', wire.id); return; }
-      if (wire.id) addToDedup(wire.id);
-
-      // ✅ NOUVEAU : Vérifier que le nodeId correspond à la clé publique
-      if (wire.from && wire.fromPubkey) {
-        const isValid = verifyNodeId(wire.from, wire.fromPubkey);
-        if (!isValid) {
-          console.log('[Messages] ALERTE : Usurpation d\'identité dans le forum !', {
-            claimedNodeId: wire.from,
-            pubkey: wire.fromPubkey,
-            channel: channelName,
-          });
-          return; // Rejeter le message
-        }
-      }
-
-      let plaintext: string;
-      try {
-        plaintext = decryptForum(wire.enc, channelName);
-      } catch {
-        // Déchiffrement impossible — ignorer le message
-        console.warn('[Forum] Message non déchiffrable, ignoré');
-        return;
-      }
-
-      const isMine = wire.from === identity.nodeId;
-      // Si le message vient de nous-mêmes, publishAndStore l'a déjà sauvegardé → ignorer l'écho
-      if (isMine) return;
-
-      const fromNodeIdValue = wire.from || wire.fromNodeId || 'unknown';
-
-      const msg: StoredMessage = {
-        id: wire.id,
-        conversationId: convId,
-        fromNodeId: fromNodeIdValue,
-        fromPubkey: wire.fromPubkey,
-        text: plaintext,
-        type: wire.type,
-        timestamp: wire.ts,
-        isMine: false,
-        status: 'delivered',
-      };
-
-      saveMessage(msg);
-      updateConversationLastMessage(convId, plaintext.slice(0, 50), wire.ts, true);
-
-      setMessagesByConv(prev => ({
-        ...prev,
-        [convId]: [...(prev[convId] ?? []), msg],
-      }));
-
-      setConversations(prev =>
-        prev.map(c => c.id === convId
-          ? { ...c, lastMessage: `${wire.from}: ${plaintext.slice(0, 40)}`, lastMessageTime: wire.ts, unreadCount: c.unreadCount + 1 }
-          : c
-        )
-      );
-    } catch (err) {
-      console.log('[Messages] Erreur message forum:', channelName, err);
-    }
-  }, [identity]);
-
-  // FIX BUG 1: Vider le cache des handlers forum quand l'identité change
-  useEffect(() => {
-    forumHandlerRefs.current.clear();
-  }, [handleIncomingForum]);
-
-  // FIX BUG 1: Helper qui retourne TOUJOURS la même référence de handler pour un channel
-  // Essentiel pour que subscribeMesh puisse dédupliquer correctement par référence
-  const getForumHandler = useCallback((channelName: string): MessageHandler => {
-    if (!forumHandlerRefs.current.has(channelName)) {
-      forumHandlerRefs.current.set(channelName, handleIncomingForum(channelName));
-    }
-    return forumHandlerRefs.current.get(channelName)!;
-  }, [handleIncomingForum]);
 
   // ── Handler messages forum entrants via Nostr (kind:42) ─────────────────────
   // Les messages NIP-28 sont en clair (forum public).
@@ -1262,148 +739,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return () => unsub();
   }, [nostrConnected, identity]);
 
-  // Connecter au broker MQTT
-  const connect = useCallback(() => {
-    if (!identity) {
-      console.log('[Messages] Identité non disponible, connexion impossible');
-      return;
-    }
-    if (mqttRef.current?.state === 'connected' || mqttRef.current?.state === 'connecting') {
-      return;
-    }
-
-    const brokerUrl = getMqttBrokerUrl();
-    console.log('[Messages] Connexion MQTT nodeId:', identity.nodeId, 'broker:', brokerUrl);
-    setMqttState('connecting');
-
-    const client = createMeshMqttClient(identity.nodeId, identity.pubkeyHex, brokerUrl);
-    mqttRef.current = client;
-
-    // FIX: Fonction de setup des subscriptions (appelée à chaque reconnexion)
-    const setupSubscriptions = () => {
-      subscribeMesh(client, TOPICS.dm(identity.nodeId), handleIncomingDM, 1);
-      subscribeMesh(client, TOPICS.route(identity.nodeId), handleIncomingRouteMessage, 0);
-      subscribePattern(client, 'meshcore/identity/+', handlePeerPresence, 0);
-      subscribeForumAnnouncements(client, handleForumAnnouncement);
-      const pos = myLocationRef.current;
-      updatePresence(client, identity.nodeId, identity.pubkeyHex, pos?.lat, pos?.lng);
-      joinedForums.current.forEach(ch => {
-        joinForumChannel(client, ch, getForumHandler(ch));
-      });
-    };
-
-    // FIX: Utiliser l'événement 'connect' du client MQTT.js directement
-    // → Se déclenche à CHAQUE connexion (initiale ET reconnexions)
-    // → subscribeMesh a maintenant une protection anti-doublons
-    client.client?.on('connect', () => {
-      console.log('[Messages] MQTT (re)connecté — setup subscriptions');
-      setMqttState('connected');
-      setupSubscriptions();
-    });
-
-    client.client?.on('disconnect', () => setMqttState('disconnected'));
-    client.client?.on('offline', () => setMqttState('disconnected'));
-    client.client?.on('error', () => setMqttState('error'));
-    client.client?.on('reconnect', () => setMqttState('connecting'));
-
-    // Polling léger uniquement pour détecter la connexion initiale si l'événement arrive avant l'enregistrement
-    const statePoller = setInterval(() => {
-      if (!mqttRef.current) { clearInterval(statePoller); statePollerRef.current = null; return; }
-      const s = mqttRef.current.state;
-      setMqttState(s);
-      if (s !== 'connecting') {
-        clearInterval(statePoller);
-        statePollerRef.current = null;
-      }
-    }, 1000);
-    statePollerRef.current = statePoller;
-  }, [identity, getMqttBrokerUrl, handleIncomingDM, handleIncomingForum, handleIncomingRouteMessage, handlePeerPresence, handleForumAnnouncement, getForumHandler]);
-
-  // Maintenir connectRef à jour avec la dernière version de connect
-  useEffect(() => {
-    connectRef.current = connect;
-  }, [connect]);
-
-  // Reconnexion MQTT quand le broker URL change réellement
-  useEffect(() => {
-    const prevUrl = prevBrokerUrlRef.current;
-    prevBrokerUrlRef.current = activeBrokerUrl;
-
-    // Ne rien faire si l'URL n'a pas réellement changé
-    if (prevUrl === activeBrokerUrl) return;
-    if (!identity) return;
-
-    console.log('[Messages] Broker URL changed:', prevUrl, '->', activeBrokerUrl);
-
-    if (mqttRef.current) {
-      disconnectMesh(mqttRef.current);
-      mqttRef.current = null;
-    }
-    if (statePollerRef.current) {
-      clearInterval(statePollerRef.current);
-      statePollerRef.current = null;
-    }
-    setMqttState('disconnected');
-
-    const reconnectTimer = setTimeout(() => {
-      connectRef.current();
-    }, 200);
-
-    return () => clearTimeout(reconnectTimer);
-  }, [activeBrokerUrl, identity]);
-
-  // Auto-connexion dès que l'identité est disponible
-  useEffect(() => {
-    if (identity && mqttRef.current === null && shouldAutoConnectRef.current) {
-      connectRef.current();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
-
-  // Watchdog: si MQTT tombe, tenter une reconnexion automatique
-  useEffect(() => {
-    if (!identity) return;
-
-    if (watchdogRef.current) {
-      clearInterval(watchdogRef.current);
-      watchdogRef.current = null;
-    }
-
-    watchdogRef.current = setInterval(() => {
-      if (!shouldAutoConnectRef.current || !identity) return;
-      const currentState = mqttRef.current?.state ?? 'disconnected';
-      if (currentState === 'disconnected' || currentState === 'error') {
-        console.log('[Messages] MQTT watchdog: reconnexion automatique, état=', currentState);
-        connectRef.current();
-      }
-    }, 5000);
-
-    return () => {
-      if (watchdogRef.current) {
-        clearInterval(watchdogRef.current);
-        watchdogRef.current = null;
-      }
-    };
-  }, [identity]);
-
-  // Cleanup au démontage
-  useEffect(() => {
-    return () => {
-      shouldAutoConnectRef.current = false;
-      if (watchdogRef.current) {
-        clearInterval(watchdogRef.current);
-        watchdogRef.current = null;
-      }
-      if (statePollerRef.current) {
-        clearInterval(statePollerRef.current);
-        statePollerRef.current = null;
-      }
-      if (mqttRef.current) {
-        disconnectMesh(mqttRef.current);
-        mqttRef.current = null;
-      }
-    };
-  }, []);
 
   // ✅ NOUVEAU : Cleanup automatique des messages > 24h toutes les heures
   useEffect(() => {
@@ -1461,15 +796,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return () => clearInterval(interval);
   }, []);
 
-  const disconnect = useCallback(() => {
-    shouldAutoConnectRef.current = false;
-    if (mqttRef.current) {
-      disconnectMesh(mqttRef.current);
-      mqttRef.current = null;
-      setMqttState('disconnected');
-    }
-  }, []);
-
   // Publier un message sur le réseau + le sauvegarder localement (déclaré avant sendMessage)
   const publishAndStore = useCallback(async (
     msgId: string,
@@ -1484,17 +810,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const isDM = topic.startsWith('meshcore/dm/');
     const isForum = convId.startsWith('forum:');
 
-    // **Transport hybride : BLE (LoRa) prioritaire, fallback MQTT**
-    // Si BLE connecté ET c'est un DM (pas un forum) → utiliser protocole MeshCore binaire
+    // Transport BLE (LoRa) — uniquement pour les DMs (pas les forums)
     if (ble.connected && isDM && !isForum) {
       try {
         // ✅ FIX: Encoder le payload chiffré au lieu du texte en clair
         const encryptedPayload = encodeEncryptedPayload(enc);
 
         // Créer paquet MeshCore TEXT binaire avec payload chiffré
-        // Utiliser un ID unique basé sur timestamp + compteur
         const messageId = (Date.now() % 0xFFFFFFFF);
-        
+
         const packet: MeshCorePacket = {
           version: 0x01,
           type: MeshCoreMessageType.TEXT,
@@ -1511,35 +835,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         await ble.sendPacket(packet);
         console.log('[MeshCore] Paquet chiffré envoyé via BLE → LoRa:', convId);
       } catch (err) {
-        console.error('[MeshCore] Erreur envoi BLE, fallback MQTT:', err);
-        // Fallback MQTT si BLE échoue
-        if (mqttRef.current && meshRouterRef.current) {
-          const meshMsg = meshRouterRef.current.createMessage(convId, enc, id.pubkeyHex, type as 'text' | 'cashu' | 'btc_tx');
-          publishMesh(mqttRef.current, TOPICS.route(convId), JSON.stringify(meshMsg), 0);
-        }
-      }
-    } else if (mqttRef.current) {
-      // Transport MQTT classique (forums, ou pas de BLE)
-      if (isDM && meshRouterRef.current) {
-        // DM via MQTT multi-hop routing
-        const meshMsg = meshRouterRef.current.createMessage(convId, enc, id.pubkeyHex, type as 'text' | 'cashu' | 'btc_tx');
-        publishMesh(mqttRef.current, TOPICS.route(convId), JSON.stringify(meshMsg), 0);
-        console.log(`[MeshRouter] Message MQTT envoyé → ${convId} (TTL=${meshMsg.ttl})`);
-      } else {
-        // Forum : utiliser WireMessage classique
-        const wire: WireMessage = {
-          v: 1,
-          id: msgId,
-          from: id.nodeId, // FIX BUG 6: nécessaire pour filtrer l'écho dans handleIncomingForum
-          fromNodeId: id.nodeId,
-          fromPubkey: id.pubkeyHex,
-          to: convId,
-          enc,
-          ts,
-          type,
-        };
-        publishMesh(mqttRef.current, topic, JSON.stringify(wire), 1);
-        console.log('[MQTT] Message forum envoyé:', convId);
+        console.error('[MeshCore] Erreur envoi BLE:', err);
+        throw err;
       }
     }
 
@@ -1580,160 +877,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     ));
   }, [ble]);
 
-  // Envoyer un message vocal (MQTT uniquement - trop volumineux pour LoRa)
-  const sendAudio = useCallback(async (
-    convId: string,
-    base64: string,
-    durationMs: number
-  ): Promise<void> => {
-    if (!identity || mqttRef.current?.state !== 'connected') {
-      throw new Error('Non connecté au réseau MQTT');
-    }
-
-    const id = identity;
-    const isForum = convId.startsWith('forum:');
-    const msgId = generateMsgId();
-    const ts = Date.now();
-
-    // Chiffrer le payload audio (on encode durée + base64 ensemble)
-    const audioPayload = JSON.stringify({ dur: durationMs, data: base64 });
-
-    let enc: EncryptedPayload;
-    let topic: string;
-    if (isForum) {
-      const channelName = convId.slice(6);
-      enc = encryptForum(audioPayload, channelName);
-      topic = TOPICS.forum(channelName);
-    } else {
-      const conv = conversations.find(c => c.id === convId);
-      if (!conv?.peerPubkey) throw new Error('Clé publique du pair inconnue');
-      enc = encryptDM(audioPayload, id.privkeyBytes, conv.peerPubkey);
-      // FIX BUG 4: audio DM → topic DM direct (WireMessage), pas route (MeshMessage)
-      topic = TOPICS.dm(convId);
-    }
-
-    // Publier via MQTT uniquement (audio trop volumineux pour LoRa)
-    if (mqttRef.current) {
-      const wire: WireMessage = {
-        v: 1,
-        id: msgId,
-        from: id.nodeId, // FIX BUG 6: filtre écho dans handleIncomingForum/handleIncomingDM
-        fromNodeId: id.nodeId,
-        fromPubkey: id.pubkeyHex,
-        to: convId,
-        enc,
-        ts,
-        type: 'audio',
-      };
-      publishMesh(mqttRef.current, topic, JSON.stringify(wire), 1);
-    }
-
-    const msg: StoredMessage = {
-      id: msgId,
-      conversationId: convId,
-      fromNodeId: id.nodeId,
-      fromPubkey: id.pubkeyHex,
-      text: `[Audio ${Math.round(durationMs / 1000)}s]`,
-      type: 'audio',
-      timestamp: ts,
-      isMine: true,
-      status: 'sent',
-      audioData: base64,
-      audioDuration: durationMs,
-    };
-
-    try {
-      await saveMessage(msg);
-      await updateConversationLastMessage(convId, `[Audio ${Math.round(durationMs / 1000)}s]`, ts, false);
-    } catch (err) {
-      console.error('[Messages] Erreur sauvegarde message audio:', err);
-    }
-
-    setMessagesByConv(prev => ({
-      ...prev,
-      [convId]: [...(prev[convId] ?? []), msg],
-    }));
-
-    setConversations(prev => prev.map(c =>
-      c.id === convId
-        ? { ...c, lastMessage: `[Audio ${Math.round(durationMs / 1000)}s]`, lastMessageTime: ts }
-        : c
-    ));
-  }, [identity, conversations]);
-
-  // Envoyer une image ou GIF via MQTT (trop volumieux pour LoRa)
-  const sendImage = useCallback(async (convId: string, base64: string, mimeType: string): Promise<void> => {
-    if (!identity || mqttRef.current?.state !== 'connected') {
-      throw new Error('Non connecté au réseau MQTT');
-    }
-
-    const id = identity;
-    const isForum = convId.startsWith('forum:');
-    const msgId = generateMsgId();
-    const ts = Date.now();
-    const isGif = mimeType === 'image/gif';
-    const label = isGif ? '[GIF]' : '[Photo]';
-
-    // Payload = JSON { mime, data }
-    const imagePayload = JSON.stringify({ mime: mimeType, data: base64 });
-
-    let enc: EncryptedPayload;
-    let topic: string;
-    if (isForum) {
-      const channelName = convId.slice(6);
-      enc = encryptForum(imagePayload, channelName);
-      topic = TOPICS.forum(channelName);
-    } else {
-      const conv = conversations.find(c => c.id === convId);
-      if (!conv?.peerPubkey) throw new Error('Clé publique du pair inconnue');
-      enc = encryptDM(imagePayload, id.privkeyBytes, conv.peerPubkey);
-      topic = TOPICS.route(convId);
-    }
-
-    const wire: WireMessage = {
-      v: 1,
-      id: msgId,
-      from: id.nodeId, // FIX BUG 6: filtre écho forum
-      fromNodeId: id.nodeId,
-      fromPubkey: id.pubkeyHex,
-      to: convId,
-      enc,
-      ts,
-      type: isGif ? 'gif' : 'image',
-    };
-    publishMesh(mqttRef.current, topic, JSON.stringify(wire), 1);
-
-    const msg: StoredMessage = {
-      id: msgId,
-      conversationId: convId,
-      fromNodeId: id.nodeId,
-      fromPubkey: id.pubkeyHex,
-      text: label,
-      type: isGif ? 'gif' : 'image',
-      timestamp: ts,
-      isMine: true,
-      status: 'sent',
-      imageData: base64,
-      imageMime: mimeType,
-    };
-
-    try {
-      await saveMessage(msg);
-      await updateConversationLastMessage(convId, label, ts, false);
-    } catch (err) {
-      console.error('[Messages] Erreur sauvegarde image:', err);
-    }
-
-    setMessagesByConv(prev => ({
-      ...prev,
-      [convId]: [...(prev[convId] ?? []), msg],
-    }));
-
-    setConversations(prev => prev.map(c =>
-      c.id === convId ? { ...c, lastMessage: label, lastMessageTime: ts } : c
-    ));
-  }, [identity, conversations]);
-
   // Envoyer un message (DM ou forum)
   const sendMessage = useCallback(async (
     convId: string,
@@ -1743,14 +886,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!identity) {
       throw new Error('Identité non disponible');
     }
-    // Autoriser l'envoi si BLE, MQTT ou Nostr est disponible
+    // Autoriser l'envoi si BLE ou Nostr est disponible
     const isForum_ = convId.startsWith('forum:');
-    if (!ble.connected && mqttRef.current?.state !== 'connected' && !nostrClient.isConnected) {
-      throw new Error('Non connecté — activez le Bluetooth (LoRa), vérifiez votre connexion MQTT ou Nostr');
+    if (!ble.connected && !nostrClient.isConnected) {
+      throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
     }
-    // Forums accessibles uniquement si MQTT ou Nostr disponible (pas BLE seul)
-    if (isForum_ && mqttRef.current?.state !== 'connected' && !nostrClient.isConnected) {
-      throw new Error('Forums indisponibles hors ligne — connectez-vous via MQTT ou Nostr');
+    // Forums accessibles uniquement si Nostr disponible
+    if (isForum_ && !nostrClient.isConnected) {
+      throw new Error('Forums indisponibles hors ligne — connectez-vous via Nostr');
     }
 
     // ✅ Validation taille message
@@ -1821,87 +964,45 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (isForum) {
       const channelName = convId.slice(6);
 
-      // Nostr prioritaire (NIP-28 kind:42 — messages en clair sur channel déterministe)
-      if (nostrClient.isConnected) {
-        const channelId = deriveChannelId(channelName);
-        try {
-          await nostrClient.publishChannelMessage(channelId, text);
-        } catch (err) {
-          console.error('[Messages] Erreur publication Nostr forum:', err);
-          // Fallback MQTT si disponible
-          if (mqttRef.current?.state === 'connected') {
-            const enc = encryptForum(text, channelName);
-            publishAndStore(msgId, convId, text, enc, TOPICS.forum(channelName), ts, type, id);
-            return;
-          }
-          throw err;
-        }
-        // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
-        const msg: StoredMessage = {
-          id: msgId,
-          conversationId: convId,
-          fromNodeId: id.nodeId,
-          fromPubkey: id.pubkeyHex,
-          text,
-          type,
-          timestamp: ts,
-          isMine: true,
-          status: 'sent',
-        };
-        try {
-          await saveMessage(msg);
-          await updateConversationLastMessage(convId, text.slice(0, 50), ts, false);
-        } catch (err) {
-          console.error('[Messages] Erreur sauvegarde message forum Nostr:', err);
-        }
-        setMessagesByConv(prev => ({
-          ...prev,
-          [convId]: [...(prev[convId] ?? []), msg],
-        }));
-        setConversations(prev => prev.map(c =>
-          c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
-        ));
-        return;
+      // Nostr (NIP-28 kind:42 — messages en clair sur channel déterministe)
+      const channelId = deriveChannelId(channelName);
+      await nostrClient.publishChannelMessage(channelId, text);
+      // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
+      const msg: StoredMessage = {
+        id: msgId,
+        conversationId: convId,
+        fromNodeId: id.nodeId,
+        fromPubkey: id.pubkeyHex,
+        text,
+        type,
+        timestamp: ts,
+        isMine: true,
+        status: 'sent',
+      };
+      try {
+        await saveMessage(msg);
+        await updateConversationLastMessage(convId, text.slice(0, 50), ts, false);
+      } catch (err) {
+        console.error('[Messages] Erreur sauvegarde message forum Nostr:', err);
       }
-
-      // Fallback MQTT
-      const enc = encryptForum(text, channelName);
-      const topic = TOPICS.forum(channelName);
-      publishAndStore(msgId, convId, text, enc, topic, ts, type, id);
+      setMessagesByConv(prev => ({
+        ...prev,
+        [convId]: [...(prev[convId] ?? []), msg],
+      }));
+      setConversations(prev => prev.map(c =>
+        c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
+      ));
       return;
     }
 
     // DM normal (sans chunking)
     const conv = conversations.find(c => c.id === convId);
     if (!conv?.peerPubkey) {
-      return new Promise((resolve, reject) => {
-        fetchPeerPubkey(mqttRef.current!, convId, (pubkeyHex) => {
-          if (!pubkeyHex) {
-            reject(new Error('Pair hors ligne — clé publique introuvable'));
-            return;
-          }
-          setConversations(prev => {
-            const updated = prev.map(c =>
-              c.id === convId ? { ...c, peerPubkey: pubkeyHex } : c
-            );
-            const updatedConv = updated.find(c => c.id === convId);
-            // ✅ CORRECTION: try/catch pour saveConversation
-            if (updatedConv) {
-              saveConversation(updatedConv).catch(err => {
-                console.error('[Messages] Erreur sauvegarde conversation:', err);
-              });
-            }
-            return updated;
-          });
-          const enc = encryptDM(text, id.privkeyBytes, pubkeyHex);
-          publishAndStore(msgId, convId, text, enc, TOPICS.dm(convId), ts, type, id);
-          resolve();
-        });
-      });
+      throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
     }
 
     const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
-    publishAndStore(msgId, convId, text, enc, TOPICS.dm(convId), ts, type, id);
+    publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
   }, [identity, conversations, publishAndStore, ble.connected]);
 
   // Envoyer un Cashu token
@@ -1931,22 +1032,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     peerName?: string
   ): Promise<void> => {
     const existing = conversations.find(c => c.id === peerNodeId);
-    if (existing) {
-      // FIX #3: Si la conv existe mais sans pubkey, tenter une résolution
-      if (!existing.peerPubkey && mqttRef.current?.state === 'connected') {
-        fetchPeerPubkey(mqttRef.current, peerNodeId, (pubkeyHex) => {
-          if (!pubkeyHex) return;
-          setConversations(prev => prev.map(c => {
-            if (c.id !== peerNodeId || c.peerPubkey) return c;
-            const updated = { ...c, peerPubkey: pubkeyHex };
-            saveConversation(updated).catch(() => {});
-            return updated;
-          }));
-          console.log('[Messages] Pubkey résolue proactivement pour:', peerNodeId);
-        });
-      }
-      return;
-    }
+    if (existing) return;
 
     const conv: StoredConversation = {
       id: peerNodeId,
@@ -1965,20 +1051,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.error('[Messages] Erreur démarrage conversation:', err);
       throw err;
     }
-
-    // FIX #3: Résolution proactive de la pubkey dès la création
-    if (mqttRef.current?.state === 'connected') {
-      fetchPeerPubkey(mqttRef.current, peerNodeId, (pubkeyHex) => {
-        if (!pubkeyHex) return;
-        setConversations(prev => prev.map(c => {
-          if (c.id !== peerNodeId || c.peerPubkey) return c;
-          const updated = { ...c, peerPubkey: pubkeyHex };
-          saveConversation(updated).catch(() => {});
-          return updated;
-        }));
-        console.log('[Messages] Pubkey résolue proactivement pour:', peerNodeId);
-      });
-    }
   }, [conversations]);
 
   // Rejoindre un forum
@@ -1987,10 +1059,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     joinedForums.current.add(channelName);
     // FIX #4: Persister la liste des forums rejoints
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
-
-    if (mqttRef.current?.state === 'connected') {
-      joinForumChannel(mqttRef.current, channelName, getForumHandler(channelName));
-    }
 
     // Nostr : souscrire au channel déterministe si connecté
     if (nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {
@@ -2025,26 +1093,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } else {
       console.log('[Messages] Forum déjà existant:', channelName);
     }
-  }, [conversations, handleIncomingForum, handleIncomingNostrChannelMessage]);
-
-  // ✅ NOUVEAU : Annoncer un forum public
-  const announceForumPublic = useCallback((channelName: string, description: string): boolean => {
-    if (!mqttRef.current || mqttRef.current.state !== 'connected' || !identity) {
-      console.log('[Forums] Impossible d\'annoncer — non connecté, état:', mqttRef.current?.state);
-      return false;
-    }
-
-    announceForumChannel(
-      mqttRef.current,
-      channelName,
-      description,
-      identity.pubkeyHex,
-      true
-    );
-
-    console.log('[Forums] Forum annoncé publiquement:', channelName);
-    return true;
-  }, [identity]);
+  }, [conversations, handleIncomingNostrChannelMessage]);
 
   // ✅ NOUVEAU : Mettre à jour le display name
   const setDisplayName = useCallback(async (name: string): Promise<void> => {
@@ -2069,9 +1118,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     joinedForums.current.delete(channelName);
     // FIX #4: Persister la liste mise à jour
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
-    if (mqttRef.current) {
-      leaveForumChannel(mqttRef.current, channelName);
-    }
     // Nostr : désabonner du channel
     const nostrUnsub = nostrChannelUnsubs.current.get(channelName);
     if (nostrUnsub) {
@@ -2145,35 +1191,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, []);
 
-  const reconnectMqtt = useCallback(() => {
-    console.log('[Messages] Force reconnect MQTT...');
-    shouldAutoConnectRef.current = true;
-    if (mqttRef.current) {
-      disconnectMesh(mqttRef.current);
-      mqttRef.current = null;
-    }
-    if (statePollerRef.current) {
-      clearInterval(statePollerRef.current);
-      statePollerRef.current = null;
-    }
-    setMqttState('disconnected');
-    setTimeout(() => {
-      if (identity) {
-        connectRef.current();
-      }
-    }, 300);
-  }, [identity]);
-
   // ── Bridge Nostr → conversations ────────────────────────────────────────────
   // S'abonne au MessagingBus et intègre les DMs Nostr entrants dans les
-  // conversations existantes, sans toucher au chemin MQTT.
+  // conversations existantes.
 
   useEffect(() => {
     if (!identity) return;
 
     const unsub = messagingBus.subscribe(async (msg) => {
-      // MQTT est déjà géré par les handlers directs — ne traiter que Nostr
-      if (msg.transport !== 'nostr') return;
       if (msg.type !== 'dm') return;
 
       const fromId = msg.from; // nodeId MESH-XXXX ou pubkey hex si pas de tag meshcore-from
@@ -2274,25 +1299,17 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   return {
     identity,
-    mqttState,
     conversations,
     messagesByConv,
     radarPeers,
     myLocation,
-    discoveredForums,
-    connect,
-    disconnect,
-    reconnectMqtt,
     sendMessage,
-    sendAudio,
-    sendImage,
     sendCashu,
     loadConversationMessages,
     startConversation,
     joinForum,
     leaveForum,
     markRead,
-    announceForumPublic,
     setDisplayName,
     deleteMessage,
     deleteConversation,
