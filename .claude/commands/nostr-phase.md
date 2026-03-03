@@ -2,9 +2,9 @@
 
 Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 
-## État actuel (2026-03-02)
+## État actuel (2026-03-03)
 
-**4 phases complètes — 163 tests verts — branche `main` pushée**
+**5 phases complètes — 185 tests verts — branche `main` pushée**
 
 ### ✅ Phase 1 — Fondations Nostr
 - `utils/nostr-client.ts` : NIP-06 (dérivation `m/44'/1237'/0'/0/0`), NIP-04 (sans crypto.subtle via @noble), SimplePool, offline queue, double-validation events
@@ -29,19 +29,22 @@ Tu travailles sur le repo `C:\Users\Silex\MeshPay-Nostr` (fork de MeshPay).
 - `app/(tabs)/(messages)/index.tsx` : badge Nostr ●/○ dans status bar
 - `app/(tabs)/wallet/index.tsx` : bannière Gateway, indicateur pending relay
 
+### ✅ Phase 5 — Forums/Channels Nostr (NIP-28)
+- `utils/nostr-client.ts` : `deriveChannelId(channelName)` → sha256("meshpay:forum:"+name) hex 64 chars
+  - Déterministe : tous les nœuds calculent le même channelId sans coordination préalable
+- `providers/MessagesProvider.ts` :
+  - `nostrChannelUnsubs` ref : Map<channelName, unsub fn>
+  - `handleIncomingNostrChannelMessage()` : bridge kind:42 → DB + state (dedup, skip own)
+  - `useEffect([nostrConnected])` : réabonne tous les forums sur reconnexion Nostr
+  - `joinForum()` : subscribeChannel Nostr + MQTT
+  - `leaveForum()` : unsub Nostr proprement
+  - `sendMessage()` isForum : Nostr prioritaire (publishChannelMessage), MQTT fallback
+  - Guards: Nostr accepté comme transport valide (BLE OU MQTT OU Nostr)
+- `utils/__tests__/nostr-channels.test.ts` : 22 tests (185 total)
+
 ---
 
 ## Prochaines phases (dans l'ordre)
-
-### Phase 5 — Forums/Channels Nostr
-**Objectif** : les forums fonctionnent via Nostr (NIP-28) en plus de MQTT.
-
-Fichiers à modifier :
-- `providers/MessagesProvider.ts` :
-  - `joinForum()` : si Nostr connecté → `nostrClient.subscribeChannel(channelId, handler)` + MQTT
-  - `sendMessage()` pour forums : si Nostr → `nostrClient.publishChannelMessage(channelId, text)`
-  - Bridge incoming `msg.type === 'channel'` depuis messagingBus → dispatcher dans le bon forum
-- `utils/__tests__/messaging-bus.test.ts` ou nouveau fichier : tester le bridge channel
 
 ### Phase 6 — NIP-17 Gift Wrap DMs (upgrade sécurité)
 **Objectif** : remplacer NIP-04 (DMs visibles sur relays) par NIP-17 (sealed sender + gift wrap).
@@ -84,6 +87,8 @@ Fichiers à supprimer/nettoyer :
 - **Chemin de dérivation Nostr** : `m/44'/1237'/0'/0/0` (NIP-06 standard)
 - **nostrClient** : singleton global exporté depuis `utils/nostr-client.ts`
 - **messagingBus** : singleton global exporté depuis `utils/messaging-bus.ts`
+- **deriveChannelId** : préfixe "meshpay:forum:" + normalize toLowerCase().trim()
+- **isConnected getter** : vérifie `relayStatus.some(s => s === 'connected')` — ne pas mocker `_connected`
 
 ## Commandes utiles
 
@@ -93,7 +98,8 @@ npx jest --no-coverage                    # tous les tests
 npx jest --no-coverage nostr-client       # tests Phase 1 uniquement
 npx jest --no-coverage messaging-bus      # tests Phase 2 uniquement
 npx jest --no-coverage tx-relay           # tests Phase 3 uniquement
+npx jest --no-coverage nostr-channels     # tests Phase 5 uniquement
 git log --oneline -8                      # voir les commits récents
 ```
 
-## Pour continuer : indique simplement "phase 5", "phase 6", etc.
+## Pour continuer : indique simplement "phase 6", "phase 7", etc.
