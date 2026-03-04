@@ -104,6 +104,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const recentMsgIds = useRef<Set<string>>(new Set());
   // Buffer paquets chiffrés reçus avant de connaître la pubkey du sender
   const pendingEncryptedPackets = useRef<Map<string, MeshCorePacket[]>>(new Map());
+  // Timestamp d'arrivée du premier paquet bufferisé par nodeId (pour expiration)
+  const pendingEncryptedTimestamps = useRef<Map<string, number>>(new Map());
+  /** Durée max de buffering : 5 minutes. Après, on abandonne (pubkey jamais reçue). */
+  const PENDING_PACKET_TTL_MS = 5 * 60 * 1000;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
   const addToDedup = (id: string) => {
@@ -275,6 +279,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           const buffered = pendingEncryptedPackets.current.get(fromNodeId);
           if (buffered && buffered.length > 0) {
             pendingEncryptedPackets.current.delete(fromNodeId);
+            pendingEncryptedTimestamps.current.delete(fromNodeId); // Nettoyer le timestamp
             console.log(`[MeshCore] Retry ${buffered.length} paquet(s) bufferisé(s) pour ${fromNodeId}`);
             for (const bufferedPkt of buffered) {
               try {
@@ -326,10 +331,25 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           // Récupérer la pubkey du sender depuis nos conversations
           const conv = conversations.find(c => c.id === fromNodeId);
           if (!conv?.peerPubkey) {
+            const now = Date.now();
+
+            // Vérifier si l'entrée a expiré (pubkey jamais arrivée depuis > 5 min)
+            const firstSeen = pendingEncryptedTimestamps.current.get(fromNodeId);
+            if (firstSeen !== undefined && now - firstSeen > PENDING_PACKET_TTL_MS) {
+              console.warn(`[MeshCore] Pubkey introuvable pour ${fromNodeId} depuis ${Math.round((now - firstSeen) / 1000)}s — buffer purgé`);
+              pendingEncryptedPackets.current.delete(fromNodeId);
+              pendingEncryptedTimestamps.current.delete(fromNodeId);
+              return;
+            }
+
             // Buffer le paquet — sera retraité quand KEY_ANNOUNCE arrivera
             const existing = pendingEncryptedPackets.current.get(fromNodeId) ?? [];
             if (existing.length < 5) {
               pendingEncryptedPackets.current.set(fromNodeId, [...existing, packet]);
+              // Enregistrer le timestamp du premier paquet bufferisé pour ce nodeId
+              if (!pendingEncryptedTimestamps.current.has(fromNodeId)) {
+                pendingEncryptedTimestamps.current.set(fromNodeId, now);
+              }
               console.warn(`[MeshCore] Pubkey inconnue pour ${fromNodeId} — paquet bufferisé (${existing.length + 1}/5)`);
             }
             // Envoyer KEY_ANNOUNCE pour demander la pubkey

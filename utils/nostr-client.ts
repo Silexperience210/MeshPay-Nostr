@@ -52,6 +52,8 @@ export const DEFAULT_RELAYS: string[] = [
 
 const OFFLINE_QUEUE_MAX = 100;
 const CONNECT_TIMEOUT_MS = 5_000;
+/** Clé AsyncStorage pour la persistance de la queue offline */
+const OFFLINE_QUEUE_STORAGE_KEY = 'nostr_offline_queue_v1';
 
 // ─── Event kinds ─────────────────────────────────────────────────────────────
 
@@ -332,6 +334,7 @@ export class NostrClient {
       console.warn('[Nostr] Hors ligne — event kind:', template.kind, 'mis en queue');
       return new Promise<NostrEvent>((resolve, reject) => {
         this.offlineQueue.push({ template, resolve, reject });
+        this.onQueueChanged?.(this.getOfflineQueueTemplates());
       });
     }
 
@@ -570,13 +573,32 @@ export class NostrClient {
   /**
    * S'abonne aux transactions relayées via Nostr.
    * Utile pour les nœuds gateway qui ont internet et broadcastent les txs reçues.
+   *
+   * @param onTx           Callback appelé pour chaque TX valide et autorisée
+   * @param trustedPubkeys Ensemble de pubkeys hex (64 chars) autorisées à relayer.
+   *                       Passer `null` pour mode permissif (déconseillé en production).
+   *                       Omis = strict : seul self-relay accepté.
    */
   subscribeTxRelay(
     onTx: (payload: TxRelayPayload, event: NostrEvent) => void,
+    trustedPubkeys?: Set<string> | null,
   ): () => void {
     return this.subscribe(
       [{ kinds: [Kind.TxRelay] }],
       (event) => {
+        // Vérification expéditeur — note : hash + signature déjà vérifiés dans subscribe()
+        if (trustedPubkeys !== null) {
+          const allowed = trustedPubkeys ?? new Set<string>();
+          const selfPubkey = this.keypair?.publicKey;
+          if (event.pubkey !== selfPubkey && !allowed.has(event.pubkey)) {
+            console.warn(
+              '[Nostr] TxRelay rejeté — expéditeur non autorisé:',
+              event.pubkey.slice(0, 16) + '…',
+            );
+            return;
+          }
+        }
+
         try {
           const payload = JSON.parse(event.content) as TxRelayPayload;
           if (payload.type && payload.data) {
@@ -690,6 +712,45 @@ export class NostrClient {
         pending.reject(err instanceof Error ? err : new Error(String(err)));
       }
     }
+
+    // Vider la persistance après drain réussi (appelé par _persistQueue en fin de drain)
+    this.onQueueChanged?.([]);
+  }
+
+  // ── Persistance offline queue ─────────────────────────────────────────────
+  //
+  // nostr-client.ts est un module pur (pas de React, pas de AsyncStorage).
+  // La sérialisation est déléguée au provider via ce callback.
+
+  /** Callback appelé à chaque mutation de la queue — injecté par NostrProvider */
+  onQueueChanged?: (templates: EventTemplate[]) => void;
+
+  /**
+   * Retourne les templates de la queue (sérialisables).
+   * Utilisé par NostrProvider pour persister dans AsyncStorage.
+   */
+  getOfflineQueueTemplates(): EventTemplate[] {
+    return this.offlineQueue.map(p => p.template);
+  }
+
+  /**
+   * Restaure des templates depuis AsyncStorage (appelé au démarrage).
+   * Les re-queue comme de nouvelles promesses silencieuses (fire-and-forget).
+   */
+  restoreOfflineQueue(templates: EventTemplate[]): void {
+    if (templates.length === 0) return;
+    const available = OFFLINE_QUEUE_MAX - this.offlineQueue.length;
+    const toRestore = templates.slice(0, available);
+    for (const template of toRestore) {
+      // Promesses orphelines — le résultat ne sera pas observé mais l'event sera publié
+      this.offlineQueue.push({
+        template,
+        resolve: () => {},
+        reject: () => {},
+      });
+    }
+    console.log('[Nostr] Queue restaurée depuis stockage persistant:', toRestore.length, 'events');
+    this.onQueueChanged?.(this.getOfflineQueueTemplates());
   }
 
   private _notifyStatus(): void {

@@ -2,11 +2,19 @@ import { useState, useEffect, useCallback } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
+import { setTrustedMints } from '@/utils/cashu';
 
 const SETTINGS_KEY = 'meshcore_app_settings';
 
 export type ConnectionMode = 'internet' | 'lora' | 'bridge';
 export type AppLanguage = 'en' | 'fr' | 'es';
+
+export interface NostrRelayConfig {
+  url: string;
+  enabled: boolean;
+  /** true = ajouté par l'utilisateur (peut être supprimé) */
+  custom?: boolean;
+}
 
 export interface AppSettings {
   connectionMode: ConnectionMode;
@@ -25,6 +33,8 @@ export interface AppSettings {
   autoRelay: boolean;
   notifications: boolean;
   shareLocation: boolean;
+  /** Relays Nostr — liste ordonnée avec état activé/désactivé */
+  nostrRelays: NostrRelayConfig[];
 }
 
 function detectLanguage(): AppLanguage {
@@ -53,6 +63,13 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoRelay: true,
   notifications: true,
   shareLocation: false,
+  nostrRelays: [
+    { url: 'wss://relay.damus.io', enabled: true },
+    { url: 'wss://nos.lol', enabled: true },
+    { url: 'wss://relay.nostr.band', enabled: true },
+    { url: 'wss://nostr.wine', enabled: true },
+    { url: 'wss://relay.snort.social', enabled: true },
+  ],
 };
 
 export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
@@ -82,6 +99,13 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
   useEffect(() => {
     if (loadQuery.data) {
       setSettings(loadQuery.data);
+      // Synchroniser la whitelist Cashu dès le chargement des settings
+      const mints = [
+        loadQuery.data.defaultCashuMint,
+        loadQuery.data.fallbackCashuMint,
+        loadQuery.data.customCashuMint,
+      ].filter(Boolean);
+      setTrustedMints(mints);
     }
   }, [loadQuery.data]);
 
@@ -104,6 +128,11 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
     const updated = { ...settings, ...partial };
     setSettings(updated);
     saveMutation.mutate(updated);
+    // Re-synchroniser la whitelist Cashu si les mints ont changé
+    if (partial.defaultCashuMint || partial.fallbackCashuMint || partial.customCashuMint) {
+      const mints = [updated.defaultCashuMint, updated.fallbackCashuMint, updated.customCashuMint].filter(Boolean);
+      setTrustedMints(mints);
+    }
   }, [settings, saveMutation]);
 
   const getMempoolUrl = useCallback((): string => {
@@ -112,6 +141,16 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
     }
     return settings.mempoolUrl;
   }, [settings]);
+
+  /** Retourne les URLs des relays Nostr activés (au moins 1 garanti) */
+  const getActiveRelayUrls = useCallback((): string[] => {
+    const active = settings.nostrRelays.filter(r => r.enabled).map(r => r.url);
+    if (active.length === 0) {
+      // Fallback de sécurité : si tout est désactivé on garde le premier relay
+      return [settings.nostrRelays[0]?.url ?? 'wss://relay.damus.io'];
+    }
+    return active;
+  }, [settings.nostrRelays]);
 
   const getCashuMintUrl = useCallback((): string => {
     if (settings.useCustomCashuMint && settings.customCashuMint.trim()) {
@@ -133,6 +172,7 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
     updateSettings,
     getMempoolUrl,
     getCashuMintUrl,
+    getActiveRelayUrls,
     resetToDefaults,
     isInternetMode,
     isLoRaMode,

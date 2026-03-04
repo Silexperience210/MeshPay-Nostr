@@ -3,6 +3,13 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
+// @ts-ignore — subpath exports
+import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
+// @ts-ignore — subpath exports
+import { sha256 } from '@noble/hashes/sha2.js';
+// @ts-ignore — subpath exports
+import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
+import { gcm } from '@noble/ciphers/aes';
 import {
   generateMnemonic,
   validateMnemonic,
@@ -15,6 +22,76 @@ import {
 
 const MNEMONIC_KEY = 'meshcore_wallet_mnemonic';
 const WALLET_INITIALIZED_KEY = 'meshcore_wallet_initialized';
+
+// ─── Wallet backup chiffré (PBKDF2 + AES-256-GCM) ────────────────────────────
+
+interface EncryptedWalletBackup {
+  /** Version du format */
+  v: 1;
+  /** Sel PBKDF2 hex (32 bytes) */
+  salt: string;
+  /** IV AES-GCM hex (12 bytes) */
+  iv: string;
+  /** Mnemonic chiffré + tag GCM hex */
+  ct: string;
+}
+
+/**
+ * Chiffre le mnemonic avec un mot de passe.
+ * PBKDF2-SHA256 (100k itérations) → clé AES-256-GCM.
+ * Retourne un JSON string prêt à copier/partager.
+ */
+export function exportWalletEncrypted(mnemonic: string, password: string): string {
+  if (!mnemonic || !password) throw new Error('Mnemonic et mot de passe requis');
+
+  const salt = randomBytes(32);
+  const iv = randomBytes(12);
+
+  // Dérivation de clé : PBKDF2(password, salt, 100_000, SHA-256) → 32 bytes
+  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 100_000, dkLen: 32 });
+
+  // Chiffrement AES-256-GCM
+  const plaintext = new TextEncoder().encode(mnemonic);
+  const ciphertext = gcm(key, iv).encrypt(plaintext); // inclut tag GCM (16 bytes en fin)
+
+  const backup: EncryptedWalletBackup = {
+    v: 1,
+    salt: bytesToHex(salt),
+    iv: bytesToHex(iv),
+    ct: bytesToHex(ciphertext),
+  };
+  return JSON.stringify(backup);
+}
+
+/**
+ * Déchiffre un backup avec le mot de passe.
+ * @throws si le mot de passe est incorrect (tag GCM invalide) ou format invalide.
+ */
+export function importWalletDecrypted(backupJson: string, password: string): string {
+  let backup: EncryptedWalletBackup;
+  try {
+    backup = JSON.parse(backupJson) as EncryptedWalletBackup;
+  } catch {
+    throw new Error('Format de backup invalide — JSON attendu');
+  }
+
+  if (backup.v !== 1 || !backup.salt || !backup.iv || !backup.ct) {
+    throw new Error('Format de backup invalide — champs manquants');
+  }
+
+  const salt = hexToBytes(backup.salt);
+  const iv = hexToBytes(backup.iv);
+  const ciphertext = hexToBytes(backup.ct);
+
+  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 100_000, dkLen: 32 });
+
+  try {
+    const plaintext = gcm(key, iv).decrypt(ciphertext);
+    return new TextDecoder().decode(plaintext);
+  } catch {
+    throw new Error('Mot de passe incorrect ou backup corrompu');
+  }
+}
 
 export interface WalletSeedState {
   mnemonic: string | null;
@@ -31,6 +108,10 @@ export interface WalletSeedState {
   importWallet: (mnemonic: string) => void;
   deleteWallet: () => void;
   getFormattedAddress: () => string;
+  /** Exporte le mnemonic chiffré avec un mot de passe (PBKDF2 + AES-GCM). Retourne JSON string. */
+  exportWallet: (password: string) => string;
+  /** Importe un backup chiffré. Lance une erreur si mot de passe incorrect. */
+  importEncryptedWallet: (backupJson: string, password: string) => void;
 }
 
 export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
@@ -56,12 +137,27 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
           const legacy = await AsyncStorage.getItem(MNEMONIC_KEY);
           if (legacy && validateMnemonic(legacy)) {
             console.warn('[WalletSeed] Migration : mnemonic non chiffré détecté dans AsyncStorage, migration vers SecureStore...');
-            await SecureStore.setItemAsync(MNEMONIC_KEY, legacy);
-            await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
-            await AsyncStorage.removeItem(MNEMONIC_KEY);
-            await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
-            console.log('[WalletSeed] Migration réussie — AsyncStorage nettoyé');
-            stored = legacy;
+            try {
+              await SecureStore.setItemAsync(MNEMONIC_KEY, legacy);
+              await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+
+              // Vérification avant suppression : relire depuis SecureStore pour confirmer
+              // que l'écriture est effective (Android Keystore peut retarder le flush)
+              const written = await SecureStore.getItemAsync(MNEMONIC_KEY);
+              if (written !== legacy) {
+                throw new Error('Vérification SecureStore échouée — valeur non conforme');
+              }
+
+              // Écriture confirmée : suppression sécurisée de la copie non chiffrée
+              await AsyncStorage.removeItem(MNEMONIC_KEY);
+              await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
+              console.log('[WalletSeed] Migration réussie — AsyncStorage nettoyé');
+              stored = legacy;
+            } catch (migrationErr) {
+              // Migration incomplète : AsyncStorage conservé intact (aucune perte de données)
+              // Le prochain démarrage retentrera la migration
+              console.error('[WalletSeed] Migration échouée — AsyncStorage conservé:', migrationErr);
+            }
           }
         }
 
@@ -200,6 +296,16 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
     return 'No wallet';
   }, [walletInfo]);
 
+  const exportWallet = useCallback((password: string): string => {
+    if (!mnemonic) throw new Error('Aucun wallet à exporter');
+    return exportWalletEncrypted(mnemonic, password);
+  }, [mnemonic]);
+
+  const importEncryptedWallet = useCallback((backupJson: string, password: string) => {
+    const decrypted = importWalletDecrypted(backupJson, password);
+    importMutation.mutate(decrypted);
+  }, [importMutation]);
+
   return {
     mnemonic,
     walletInfo,
@@ -215,5 +321,7 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
     importWallet,
     deleteWallet,
     getFormattedAddress,
+    exportWallet,
+    importEncryptedWallet,
   };
 });

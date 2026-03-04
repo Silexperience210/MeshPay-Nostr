@@ -9,17 +9,21 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
+import { useAppSettings } from '@/providers/AppSettingsProvider';
 import {
   nostrClient,
   deriveNostrKeypair,
-  DEFAULT_RELAYS,
   type RelayInfo,
   type NostrKeypair,
   type TxRelayPayload,
   type PresencePayload,
 } from '@/utils/nostr-client';
+import type { EventTemplate } from 'nostr-tools';
+
+const OFFLINE_QUEUE_STORAGE_KEY = 'nostr_offline_queue_v1';
 import { deriveMeshIdentity } from '@/utils/identity';
 import type { Event as NostrEvent } from 'nostr-tools';
 
@@ -74,12 +78,15 @@ export interface NostrState {
 
   // ── Accès bas niveau ─────────────────────────────────────────────────────
   publish: (template: { kind: number; content: string; tags: string[][] }) => Promise<NostrEvent>;
+  /** Reconnecte aux relays actifs (à appeler après modification de la liste) */
+  reconnectRelays: () => Promise<void>;
 }
 
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   const { mnemonic, isInitialized } = useWalletSeed();
+  const { getActiveRelayUrls } = useAppSettings();
 
   const [npub, setNpub] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
@@ -93,6 +100,36 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
+  }, []);
+
+  // ── Persistance offline queue ─────────────────────────────────────────────
+
+  useEffect(() => {
+    // Restaurer la queue depuis AsyncStorage au montage
+    AsyncStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY).then((raw) => {
+      if (!raw) return;
+      try {
+        const templates = JSON.parse(raw) as EventTemplate[];
+        if (Array.isArray(templates) && templates.length > 0) {
+          nostrClient.restoreOfflineQueue(templates);
+        }
+      } catch {
+        console.warn('[NostrProvider] Queue persistée invalide — ignorée');
+      }
+    }).catch(() => {});
+
+    // Brancher le callback de persistance sur le client
+    nostrClient.onQueueChanged = (templates) => {
+      if (templates.length === 0) {
+        AsyncStorage.removeItem(OFFLINE_QUEUE_STORAGE_KEY).catch(() => {});
+      } else {
+        AsyncStorage.setItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(templates)).catch(() => {});
+      }
+    };
+
+    return () => {
+      nostrClient.onQueueChanged = undefined;
+    };
   }, []);
 
   // ── Auto-connexion / déconnexion ─────────────────────────────────────────
@@ -132,7 +169,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
           }
         });
 
-        await nostrClient.connect(DEFAULT_RELAYS);
+        await nostrClient.connect(getActiveRelayUrls());
 
         if (!cancelled && mountedRef.current) {
           setNpub(keypair.npub);
@@ -240,6 +277,20 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     [],
   );
 
+  // ── Reconnexion manuelle (après changement de relay list) ────────────────
+
+  const reconnectRelays = useCallback(async () => {
+    if (!isInitialized || !mnemonic) return;
+    try {
+      if (mountedRef.current) setIsConnecting(true);
+      await nostrClient.connect(getActiveRelayUrls());
+      if (mountedRef.current) setIsConnecting(false);
+    } catch (err) {
+      console.warn('[NostrProvider] reconnectRelays error:', err);
+      if (mountedRef.current) setIsConnecting(false);
+    }
+  }, [isInitialized, mnemonic, getActiveRelayUrls]);
+
   // ── Publish bas niveau ───────────────────────────────────────────────────
 
   const publish = useCallback(
@@ -270,5 +321,6 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     publishPresence,
     subscribePresence,
     publish,
+    reconnectRelays,
   };
 });

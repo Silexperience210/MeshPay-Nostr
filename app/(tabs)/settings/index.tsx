@@ -57,6 +57,8 @@ import { useTranslation } from '@/utils/i18n';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useBle } from '@/providers/BleProvider';
 import { useNostr } from '@/providers/NostrProvider';
+import { type NostrRelayConfig } from '@/providers/AppSettingsProvider';
+import { type RelayInfo } from '@/utils/nostr-client';
 import { useTxRelay } from '@/providers/TxRelayProvider';
 import * as Location from 'expo-location';
 import { testMempoolConnection } from '@/utils/mempool';
@@ -139,6 +141,8 @@ function SeedManagementCard() {
     importWallet,
     deleteWallet,
     getFormattedAddress,
+    exportWallet,
+    importEncryptedWallet,
   } = useWalletSeed();
 
   const [showSeed, setShowSeed] = useState<boolean>(false);
@@ -146,6 +150,14 @@ function SeedManagementCard() {
   const [showSeedQRScanner, setShowSeedQRScanner] = useState<boolean>(false);
   const [importText, setImportText] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
+  // Export chiffré
+  const [showExport, setShowExport] = useState(false);
+  const [exportPwd, setExportPwd] = useState('');
+  const [exportPwdConfirm, setExportPwdConfirm] = useState('');
+  // Import chiffré
+  const [showImportEncrypted, setShowImportEncrypted] = useState(false);
+  const [importBackupJson, setImportBackupJson] = useState('');
+  const [importBackupPwd, setImportBackupPwd] = useState('');
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.95)).current;
 
@@ -250,6 +262,50 @@ function SeedManagementCard() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowSeed(prev => !prev);
   }, []);
+
+  const handleExportEncrypted = useCallback(() => {
+    if (exportPwd.length < 8) {
+      Alert.alert('Erreur', 'Le mot de passe doit faire au moins 8 caractères.');
+      return;
+    }
+    if (exportPwd !== exportPwdConfirm) {
+      Alert.alert('Erreur', 'Les mots de passe ne correspondent pas.');
+      return;
+    }
+    try {
+      const json = exportWallet(exportPwd);
+      Clipboard.setStringAsync(json).catch(() => {});
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert('Backup copié !', 'Le backup chiffré a été copié dans le presse-papier. Collez-le dans un endroit sûr (notes, gestionnaire de mots de passe…).');
+      setShowExport(false);
+      setExportPwd('');
+      setExportPwdConfirm('');
+    } catch (err: any) {
+      Alert.alert('Erreur export', err.message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [exportPwd, exportPwdConfirm, exportWallet]);
+
+  const handleImportEncrypted = useCallback(() => {
+    if (!importBackupJson.trim()) {
+      Alert.alert('Erreur', 'Collez le JSON de backup chiffré.');
+      return;
+    }
+    if (!importBackupPwd) {
+      Alert.alert('Erreur', 'Entrez le mot de passe de déchiffrement.');
+      return;
+    }
+    try {
+      importEncryptedWallet(importBackupJson.trim(), importBackupPwd);
+      setShowImportEncrypted(false);
+      setImportBackupJson('');
+      setImportBackupPwd('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err: any) {
+      Alert.alert('Import échoué', err.message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
+  }, [importBackupJson, importBackupPwd, importEncryptedWallet]);
 
   if (isLoading) {
     return (
@@ -377,6 +433,50 @@ function SeedManagementCard() {
               <Text style={styles.seedActionDestructiveText}>Delete</Text>
             </TouchableOpacity>
           </View>
+
+          {/* ── Export backup chiffré ── */}
+          <TouchableOpacity
+            style={styles.importToggle}
+            onPress={() => setShowExport(prev => !prev)}
+            activeOpacity={0.7}
+          >
+            <HardDrive size={16} color={Colors.textSecondary} />
+            <Text style={styles.importToggleText}>
+              {showExport ? 'Annuler export' : 'Exporter backup chiffré'}
+            </Text>
+          </TouchableOpacity>
+
+          {showExport && (
+            <View style={styles.importContainer}>
+              <TextInput
+                style={styles.importInput}
+                placeholder="Mot de passe (min 8 car.)"
+                placeholderTextColor={Colors.textMuted}
+                value={exportPwd}
+                onChangeText={setExportPwd}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={[styles.importInput, { marginTop: 8 }]}
+                placeholder="Confirmer le mot de passe"
+                placeholderTextColor={Colors.textMuted}
+                value={exportPwdConfirm}
+                onChangeText={setExportPwdConfirm}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={styles.importButton}
+                onPress={handleExportEncrypted}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.importButtonText}>Copier le backup chiffré</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </>
       ) : (
         <>
@@ -435,7 +535,7 @@ function SeedManagementCard() {
                 autoCorrect={false}
                 testID="import-seed-input"
               />
-              
+
               {/* Bouton Scan SeedQR */}
               <TouchableOpacity
                 style={styles.scanQRButton}
@@ -445,7 +545,7 @@ function SeedManagementCard() {
                 <QrCode size={18} color={Colors.background} />
                 <Text style={styles.scanQRButtonText}>Scan SeedQR</Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={styles.importButton}
                 onPress={handleImport}
@@ -456,6 +556,55 @@ function SeedManagementCard() {
                   <ActivityIndicator color={Colors.black} size="small" />
                 ) : (
                   <Text style={styles.importButtonText}>Import Wallet</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ── Import backup chiffré ── */}
+          <TouchableOpacity
+            style={styles.importToggle}
+            onPress={() => setShowImportEncrypted(prev => !prev)}
+            activeOpacity={0.7}
+          >
+            <Shield size={16} color={Colors.textSecondary} />
+            <Text style={styles.importToggleText}>
+              {showImportEncrypted ? 'Annuler import chiffré' : 'Importer backup chiffré'}
+            </Text>
+          </TouchableOpacity>
+
+          {showImportEncrypted && (
+            <View style={styles.importContainer}>
+              <TextInput
+                style={styles.importInput}
+                placeholder="Coller le JSON de backup chiffré..."
+                placeholderTextColor={Colors.textMuted}
+                value={importBackupJson}
+                onChangeText={setImportBackupJson}
+                multiline
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={[styles.importInput, { marginTop: 8 }]}
+                placeholder="Mot de passe de déchiffrement"
+                placeholderTextColor={Colors.textMuted}
+                value={importBackupPwd}
+                onChangeText={setImportBackupPwd}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={styles.importButton}
+                onPress={handleImportEncrypted}
+                activeOpacity={0.7}
+                disabled={isImporting}
+              >
+                {isImporting ? (
+                  <ActivityIndicator color={Colors.black} size="small" />
+                ) : (
+                  <Text style={styles.importButtonText}>Importer backup chiffré</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1047,11 +1196,14 @@ function NetworkSettingsCard() {
 }
 
 function NostrSettingsCard() {
-  const { npub, relays, isConnected, isConnecting } = useNostr();
+  const { npub, relays, isConnected, isConnecting, reconnectRelays } = useNostr();
   const { gatewayStats, isGateway, pendingRelays } = useTxRelay();
   const { settings, updateSettings } = useAppSettings();
   const [copiedNpub, setCopiedNpub] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
+  const [customRelayInput, setCustomRelayInput] = useState('');
+  const [addingRelay, setAddingRelay] = useState(false);
+  const [showAddInput, setShowAddInput] = useState(false);
 
   const handleCopyNpub = useCallback(async () => {
     if (!npub) return;
@@ -1079,9 +1231,60 @@ function NostrSettingsCard() {
     }
   }, [updateSettings]);
 
+  /** Active/désactive un relay et reconnecte */
+  const handleToggleRelay = useCallback((url: string, enabled: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const updated = settings.nostrRelays.map(r =>
+      r.url === url ? { ...r, enabled } : r
+    );
+    updateSettings({ nostrRelays: updated });
+    // Reconnexion différée pour laisser le state se propager
+    setTimeout(() => reconnectRelays(), 300);
+  }, [settings.nostrRelays, updateSettings, reconnectRelays]);
+
+  /** Supprime un relay custom */
+  const handleDeleteRelay = useCallback((url: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const updated = settings.nostrRelays.filter(r => r.url !== url);
+    updateSettings({ nostrRelays: updated });
+    setTimeout(() => reconnectRelays(), 300);
+  }, [settings.nostrRelays, updateSettings, reconnectRelays]);
+
+  /** Ajoute un relay custom */
+  const handleAddRelay = useCallback(async () => {
+    const raw = customRelayInput.trim().toLowerCase();
+    if (!raw) return;
+    const url = raw.startsWith('wss://') || raw.startsWith('ws://')
+      ? raw
+      : `wss://${raw}`;
+
+    if (settings.nostrRelays.some(r => r.url === url)) {
+      Alert.alert('Relay existant', 'Ce relay est déjà dans la liste.');
+      return;
+    }
+    if (!url.startsWith('wss://') && !url.startsWith('ws://')) {
+      Alert.alert('URL invalide', 'L\'URL doit commencer par wss:// ou ws://');
+      return;
+    }
+
+    setAddingRelay(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    const newRelay: NostrRelayConfig = { url, enabled: true, custom: true };
+    const updated = [...settings.nostrRelays, newRelay];
+    updateSettings({ nostrRelays: updated });
+    setCustomRelayInput('');
+    setShowAddInput(false);
+    setTimeout(() => reconnectRelays(), 300);
+    setAddingRelay(false);
+  }, [customRelayInput, settings.nostrRelays, updateSettings, reconnectRelays]);
+
   const statusColor = isConnecting ? Colors.yellow : isConnected ? Colors.green : Colors.red;
   const statusLabel = isConnecting ? 'Connexion...' : isConnected ? 'Connecté' : 'Déconnecté';
   const pendingCount = pendingRelays.filter(r => r.status === 'pending').length;
+
+  /** Statut de connexion pour un URL donné (depuis l'état live des relays) */
+  const getLiveStatus = (url: string): RelayInfo | undefined =>
+    relays.find(r => r.url === url);
 
   const getRelayColor = (status: string) => {
     if (status === 'connected') return Colors.green;
@@ -1121,23 +1324,92 @@ function NostrSettingsCard() {
         </TouchableOpacity>
       )}
 
-      {/* Liste relays */}
-      {relays.length > 0 && (
-        <View style={nostrStyles.relayList}>
+      {/* Liste relays avec toggles */}
+      <View style={nostrStyles.relayList}>
+        <View style={nostrStyles.relayListHeader}>
           <Text style={nostrStyles.relayListTitle}>Relays</Text>
-          {relays.map(r => (
-            <View key={r.url} style={nostrStyles.relayRow}>
-              <View style={[nostrStyles.relayDot, { backgroundColor: getRelayColor(r.status) }]} />
-              <Text style={nostrStyles.relayUrl} numberOfLines={1}>
-                {r.url.replace('wss://', '')}
-              </Text>
-              <Text style={[nostrStyles.relayStatus, { color: getRelayColor(r.status) }]}>
-                {r.status}
-              </Text>
-            </View>
-          ))}
+          <TouchableOpacity
+            style={nostrStyles.addRelayBtn}
+            onPress={() => setShowAddInput(v => !v)}
+            activeOpacity={0.7}
+          >
+            <Plus size={13} color={Colors.accent} />
+            <Text style={nostrStyles.addRelayBtnText}>Ajouter</Text>
+          </TouchableOpacity>
         </View>
-      )}
+
+        {settings.nostrRelays.map(relay => {
+          const live = getLiveStatus(relay.url);
+          const dotColor = !relay.enabled
+            ? Colors.textMuted
+            : live ? getRelayColor(live.status) : Colors.textMuted;
+          const statusText = !relay.enabled
+            ? 'désactivé'
+            : live?.status ?? '—';
+
+          return (
+            <View key={relay.url} style={nostrStyles.relayRow}>
+              <View style={[nostrStyles.relayDot, { backgroundColor: dotColor }]} />
+              <View style={{ flex: 1 }}>
+                <Text
+                  style={[nostrStyles.relayUrl, !relay.enabled && { color: Colors.textMuted }]}
+                  numberOfLines={1}
+                >
+                  {relay.url.replace('wss://', '')}
+                </Text>
+                <Text style={[nostrStyles.relayStatus, { color: dotColor }]}>
+                  {statusText}
+                </Text>
+              </View>
+              {/* Bouton supprimer (relays custom uniquement) */}
+              {relay.custom && (
+                <TouchableOpacity
+                  onPress={() => handleDeleteRelay(relay.url)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
+                  style={{ marginRight: 6 }}
+                >
+                  <X size={13} color={Colors.red} />
+                </TouchableOpacity>
+              )}
+              {/* Toggle ON/OFF */}
+              <Switch
+                value={relay.enabled}
+                onValueChange={(val) => handleToggleRelay(relay.url, val)}
+                trackColor={{ false: Colors.border, true: Colors.accentGlow }}
+                thumbColor={relay.enabled ? Colors.accent : Colors.textMuted}
+                style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
+              />
+            </View>
+          );
+        })}
+
+        {/* Input ajout relay custom */}
+        {showAddInput && (
+          <View style={nostrStyles.addRelayRow}>
+            <TextInput
+              style={nostrStyles.addRelayInput}
+              placeholder="wss://your-relay.com"
+              placeholderTextColor={Colors.textMuted}
+              value={customRelayInput}
+              onChangeText={setCustomRelayInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              onSubmitEditing={handleAddRelay}
+            />
+            <TouchableOpacity
+              style={nostrStyles.addRelayConfirm}
+              onPress={handleAddRelay}
+              disabled={addingRelay || !customRelayInput.trim()}
+              activeOpacity={0.7}
+            >
+              {addingRelay
+                ? <ActivityIndicator size={14} color={Colors.accent} />
+                : <Check size={14} color={Colors.accent} />}
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
 
       {/* Gateway stats */}
       {isGateway && (
@@ -1175,33 +1447,86 @@ const nostrStyles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: Colors.border,
   },
+  relayListHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
   relayListTitle: {
     color: Colors.textMuted,
     fontSize: 10,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    marginBottom: 6,
+  },
+  addRelayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: Colors.accent,
+  },
+  addRelayBtnText: {
+    color: Colors.accent,
+    fontSize: 10,
+    fontWeight: '600',
   },
   relayRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 3,
+    paddingVertical: 5,
+    borderBottomWidth: 0.5,
+    borderBottomColor: Colors.border,
   },
   relayDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
+    flexShrink: 0,
   },
   relayUrl: {
     color: Colors.textSecondary,
     fontSize: 11,
-    flex: 1,
     fontFamily: 'monospace',
   },
   relayStatus: {
-    fontSize: 10,
+    fontSize: 9,
+    marginTop: 1,
+  },
+  addRelayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 0.5,
+    borderTopColor: Colors.border,
+  },
+  addRelayInput: {
+    flex: 1,
+    backgroundColor: Colors.surfaceLight,
+    borderWidth: 0.5,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    color: Colors.text,
+    fontSize: 12,
+    fontFamily: 'monospace',
+  },
+  addRelayConfirm: {
+    backgroundColor: Colors.surfaceLight,
+    borderWidth: 0.5,
+    borderColor: Colors.accent,
+    borderRadius: 8,
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   gatewayStats: {
     paddingHorizontal: 16,

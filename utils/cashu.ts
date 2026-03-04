@@ -43,6 +43,50 @@ export function isMintQuotePaid(quote: CashuMintQuote): boolean {
 const mintInfoCache: Map<string, { info: CashuMintInfo; timestamp: number }> = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 
+// ─── Mint whitelist ───────────────────────────────────────────────────────────
+//
+// Mints connus et opérationnels — pré-approuvés hors ligne.
+// L'utilisateur peut ajouter ses propres mints via setTrustedMints().
+//
+const BUILTIN_TRUSTED_MINTS = new Set<string>([
+  'https://mint.minibits.cash',
+  'https://mint.lnvoltz.com',
+  'https://legend.lnbits.com/cashu/api/v1',
+  'https://8333.space:3338',
+]);
+
+// Mints dynamiques ajoutés par l'utilisateur (depuis AppSettingsProvider)
+let _userTrustedMints = new Set<string>();
+
+/**
+ * Configure les mints de confiance depuis les settings utilisateur.
+ * À appeler depuis AppSettingsProvider à chaque changement de settings.
+ */
+export function setTrustedMints(urls: string[]): void {
+  _userTrustedMints = new Set(urls.map(u => u.replace(/\/$/, '')));
+}
+
+/**
+ * Vérifie que l'URL du mint est de confiance.
+ * @throws si le mint n'est ni builtin ni ajouté par l'utilisateur.
+ */
+function assertTrustedMint(mintUrl: string): void {
+  const origin = (() => {
+    try { return new URL(mintUrl).origin; } catch { return mintUrl.replace(/\/$/, ''); }
+  })();
+  const trusted =
+    BUILTIN_TRUSTED_MINTS.has(origin) ||
+    _userTrustedMints.has(origin) ||
+    _userTrustedMints.has(mintUrl.replace(/\/$/, ''));
+
+  if (!trusted) {
+    throw new Error(
+      `[Cashu] Mint non autorisé: ${origin}\n` +
+      `Ajoutez ce mint dans Paramètres → Cashu Mint pour l'utiliser.`,
+    );
+  }
+}
+
 export interface CashuMeltQuote {
   quote: string;
   amount: number;
@@ -339,6 +383,7 @@ export async function requestMintQuote(
   amount: number,
   unit: string = 'sat'
 ): Promise<CashuMintQuote> {
+  assertTrustedMint(mintUrl); // 🔒 Whitelist check
   const url = `${mintUrl}/v1/mint/quote/bolt11`;
   console.log('[Cashu] Requesting mint quote for', amount, unit);
 
@@ -382,6 +427,7 @@ export async function mintTokens(
   keysetId: string,
   mintKeys: Record<string, string>
 ): Promise<CashuProof[]> {
+  assertTrustedMint(mintUrl); // 🔒 Whitelist check
   console.log('[Cashu] Minting tokens for quote:', quoteId, 'amount:', amount);
 
   const denominations = splitAmountIntoPowerOfTwo(amount);
@@ -756,6 +802,7 @@ export async function meltTokens(
   changeKeysetId?: string,
   changeMintKeys?: Record<string, string>
 ): Promise<{ paid: boolean; preimage?: string; change?: CashuProof[] }> {
+  assertTrustedMint(mintUrl); // 🔒 Whitelist check
   console.log('[Cashu] Melting', proofs.length, 'proofs for invoice');
 
   const meltQuote = await requestMeltQuote(mintUrl, invoice);

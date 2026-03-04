@@ -59,6 +59,8 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
   const clientRef = useRef<BleGatewayClient | null>(null);
   const retryServiceRef = useRef(getMessageRetryService());
+  // Handler en attente : enregistré avant que le client BLE soit initialisé
+  const pendingPacketHandlerRef = useRef<((packet: MeshCorePacket) => void) | null>(null);
 
   useEffect(() => {
     // Initialiser le client BLE
@@ -76,6 +78,15 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         client.onDeviceInfo((info) => {
           setState((prev) => ({ ...prev, deviceInfo: info }));
         });
+
+        // Appliquer tout handler enregistré avant l'initialisation
+        if (pendingPacketHandlerRef.current) {
+          client.onMessage((packet) => {
+            setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+            pendingPacketHandlerRef.current?.(packet);
+          });
+          console.log('[BleProvider] Handler en attente appliqué après init BLE');
+        }
 
         console.log('[BleProvider] BLE initialized');
 
@@ -227,47 +238,65 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
     setState((prev) => ({ ...prev, error: null }));
 
-    try {
-      // Indiquer dans l'UI que l'appairage BLE peut prendre du temps
-      setState((prev) => ({
-        ...prev,
-        error: null,
-        // On réutilise le champ error pour afficher une info non-fatale
-      }));
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS_MS = [1000, 2000, 4000]; // backoff exponentiel
 
-      await clientRef.current.connect(deviceId);
+    let lastError: any = null;
 
-      const device = clientRef.current.getConnectedDevice();
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = RETRY_DELAYS_MS[attempt - 1];
+          console.log(`[BleProvider] Retry ${attempt}/${MAX_RETRIES - 1} dans ${delay}ms…`);
+          setState((prev) => ({
+            ...prev,
+            error: `Retry ${attempt}/${MAX_RETRIES - 1}…`,
+          }));
+          await new Promise((res) => setTimeout(res, delay));
+          setState((prev) => ({ ...prev, error: null }));
+        }
 
-      setState((prev) => ({
-        ...prev,
-        connected: true,
-        device,
-      }));
+        await clientRef.current!.connect(deviceId);
 
-      // Persister l'ID pour auto-reconnect au prochain démarrage
-      await AsyncStorage.setItem(BLE_LAST_DEVICE_KEY, deviceId);
+        const device = clientRef.current!.getConnectedDevice();
+        setState((prev) => ({ ...prev, connected: true, device }));
 
-      console.log(`[BleProvider] Connected to ${device?.name}`);
-    } catch (error: any) {
-      console.error('[BleProvider] Connection error:', error);
-      const msg: string = error?.message ?? String(error);
-      // Donner un message utile si c'est un problème d'appairage
-      const isAuthErr =
-        msg.includes('133') ||
-        msg.includes('insufficient') ||
-        msg.includes('authentication') ||
-        msg.includes('bonding') ||
-        msg.includes('pairing');
-      const displayMsg = isAuthErr
-        ? 'Appairage BLE requis. Allez dans Paramètres → Bluetooth, supprimez "MeshCore-..." puis relancez. PIN : 123456'
-        : msg || 'Connection failed';
-      setState((prev) => ({
-        ...prev,
-        error: displayMsg,
-      }));
-      throw error;
+        // Persister l'ID pour auto-reconnect au prochain démarrage
+        await AsyncStorage.setItem(BLE_LAST_DEVICE_KEY, deviceId);
+
+        console.log(`[BleProvider] Connecté à ${device?.name} (tentative ${attempt + 1})`);
+        return; // succès — sortir de la boucle
+
+      } catch (error: any) {
+        lastError = error;
+        const msg: string = error?.message ?? String(error);
+
+        // Erreur d'appairage : action utilisateur requise, inutile de retry
+        const isAuthErr =
+          msg.includes('133') ||
+          msg.includes('insufficient') ||
+          msg.includes('authentication') ||
+          msg.includes('bonding') ||
+          msg.includes('pairing');
+
+        if (isAuthErr) {
+          console.warn('[BleProvider] Erreur appairage — pas de retry automatique');
+          setState((prev) => ({
+            ...prev,
+            error: 'Appairage BLE requis. Allez dans Paramètres → Bluetooth, supprimez "MeshCore-..." puis relancez.',
+          }));
+          throw error; // remonter immédiatement sans retry
+        }
+
+        console.warn(`[BleProvider] Échec tentative ${attempt + 1}/${MAX_RETRIES}:`, msg);
+      }
     }
+
+    // Toutes les tentatives épuisées
+    const finalMsg: string = lastError?.message ?? String(lastError) ?? 'Connection failed';
+    console.error(`[BleProvider] Connexion échouée après ${MAX_RETRIES} tentatives`);
+    setState((prev) => ({ ...prev, error: finalMsg }));
+    throw lastError;
   };
 
   /**
@@ -330,17 +359,26 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * Enregistre un handler pour les paquets entrants
-   * Wrappé pour marquer loraActive=true dès le premier paquet reçu
+   * Enregistre un handler pour les paquets entrants.
+   * Wrappé pour marquer loraActive=true dès le premier paquet reçu.
+   *
+   * Si le client BLE n'est pas encore initialisé, le handler est mis en attente
+   * et sera appliqué automatiquement dès que le client sera prêt.
+   * Chaque appel remplace le handler précédent (design single-handler).
    */
   const onPacket = (handler: (packet: MeshCorePacket) => void) => {
+    // Toujours mémoriser le dernier handler (remplace le précédent)
+    pendingPacketHandlerRef.current = handler;
+
     if (clientRef.current) {
       clientRef.current.onMessage((packet) => {
         // Premier paquet reçu = confirmation que le relay LoRa fonctionne
         setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
-        handler(packet);
+        // Appel via ref : garantit que la version la plus récente du handler est utilisée
+        pendingPacketHandlerRef.current?.(packet);
       });
     }
+    // Si clientRef.current === null, le handler sera appliqué dans le useEffect d'init
   };
 
   /**
