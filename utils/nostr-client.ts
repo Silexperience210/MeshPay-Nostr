@@ -3,12 +3,12 @@
  *
  * Implémentation 100% compatible React Native / Hermes :
  * - Pas de crypto.subtle (non disponible sur Hermes)
- * - NIP-04 reimplementé via @noble/curves + @noble/ciphers (AES-CBC)
+ * - NIP-44 v2 : ChaCha20-Poly1305 + HKDF (AEAD — padding longueur)
  * - NIP-06 key derivation via @scure/bip32 (même lib que le wallet Bitcoin)
  *
  * NIPs supportés :
  *   NIP-01 : Protocole de base (events, signatures)
- *   NIP-04 : DMs chiffrés (AES-256-CBC + ECDH secp256k1)
+ *   NIP-44 : DMs chiffrés v2 (ChaCha20-Poly1305 + HKDF — remplace NIP-04)
  *   NIP-06 : Dérivation clés depuis mnemonic BIP39
  *   NIP-17 : Gift Wrap DMs (Phase 2)
  *   NIP-19 : Encodage bech32 (npub / nsec)
@@ -21,6 +21,7 @@ import {
   verifyEvent,
   getEventHash,
   getPublicKey,
+  nip44,
   type Event as NostrEvent,
   type EventTemplate,
   type Filter,
@@ -31,7 +32,6 @@ import { nip19 } from 'nostr-tools';
 import * as nip17 from 'nostr-tools/nip17';
 import { HDKey } from '@scure/bip32';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { cbc } from '@noble/ciphers/aes';
 // @ts-ignore — subpath exports
 import { sha256 } from '@noble/hashes/sha2.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
@@ -169,49 +169,27 @@ export function deriveNostrKeypair(mnemonic: string): NostrKeypair {
   };
 }
 
-// ─── NIP-04 — Chiffrement/déchiffrement compatible React Native ──────────────
+// ─── NIP-44 v2 — Chiffrement AEAD compatible React Native ────────────────────
 //
-//  Reimplementé sans crypto.subtle (absent de Hermes/React Native).
-//  Algorithme identique à la spec NIP-04 :
-//    1. ECDH secp256k1 → shared point → x-coordinate (32 bytes) = clé AES
-//    2. IV aléatoire 16 bytes
-//    3. AES-256-CBC (padding auto via @noble/ciphers)
-//    4. Format de sortie : "<ciphertext_b64>?iv=<iv_b64>"
+//  NIP-44 utilise :
+//    1. ECDH secp256k1 → conversation key via HKDF-SHA256
+//    2. ChaCha20-Poly1305 (AEAD — authentification intégrée, pas de padding oracle)
+//    3. Padding de longueur : masque la taille du message
+//    4. Nonce 32 bytes (vs 16 bytes NIP-04)
+//
+//  Avantages sur NIP-04 (AES-CBC) :
+//    - Authentification intégrée → pas d'attaque padding oracle
+//    - Padding → un observateur ne connaît pas la longueur du message
+//    - HKDF → isolation de contexte entre conversations
 
-function nip04Encrypt(senderPrivKey: Uint8Array, recipientPubKey: string, plaintext: string): string {
-  // 1. ECDH — préfixer la clé publique x-only avec 02 pour obtenir une clé compressée
-  const sharedPoint = secp256k1.getSharedSecret(senderPrivKey, '02' + recipientPubKey);
-  const aesKey = sharedPoint.slice(1, 33); // x-coordinate uniquement
-
-  // 2. IV aléatoire 16 bytes
-  const iv = crypto.getRandomValues(new Uint8Array(16));
-
-  // 3. Chiffrement AES-256-CBC
-  const encodedText = new TextEncoder().encode(plaintext);
-  const ciphertext = cbc(aesKey, iv).encrypt(encodedText);
-
-  // 4. Format NIP-04
-  const ciphertextB64 = Buffer.from(ciphertext).toString('base64');
-  const ivB64 = Buffer.from(iv).toString('base64');
-  return `${ciphertextB64}?iv=${ivB64}`;
+function nip44Encrypt(senderPrivKey: Uint8Array, recipientPubKey: string, plaintext: string): string {
+  const conversationKey = nip44.getConversationKey(senderPrivKey, recipientPubKey);
+  return nip44.encrypt(plaintext, conversationKey);
 }
 
-function nip04Decrypt(receiverPrivKey: Uint8Array, senderPubKey: string, ciphertextMsg: string): string {
-  const [ciphertextB64, ivPart] = ciphertextMsg.split('?iv=');
-  if (!ciphertextB64 || !ivPart) {
-    throw new Error('[Nostr] NIP-04 : format de message chiffré invalide');
-  }
-
-  // 1. ECDH
-  const sharedPoint = secp256k1.getSharedSecret(receiverPrivKey, '02' + senderPubKey);
-  const aesKey = sharedPoint.slice(1, 33);
-
-  // 2. Déchiffrement
-  const ciphertext = Buffer.from(ciphertextB64, 'base64');
-  const iv = Buffer.from(ivPart, 'base64');
-  const plaintext = cbc(aesKey, iv).decrypt(ciphertext);
-
-  return new TextDecoder().decode(plaintext);
+function nip44Decrypt(receiverPrivKey: Uint8Array, senderPubKey: string, ciphertext: string): string {
+  const conversationKey = nip44.getConversationKey(receiverPrivKey, senderPubKey);
+  return nip44.decrypt(ciphertext, conversationKey);
 }
 
 // ─── NostrClient ─────────────────────────────────────────────────────────────
@@ -377,15 +355,16 @@ export class NostrClient {
     return () => sub.close();
   }
 
-  // ── NIP-04 : DMs chiffrés ─────────────────────────────────────────────────
+  // ── NIP-44 : DMs chiffrés (ChaCha20-Poly1305) ────────────────────────────
 
   /**
-   * Envoie un DM chiffré NIP-04 à une clé publique Nostr.
+   * Envoie un DM chiffré NIP-44 à une clé publique Nostr.
+   * NIP-44 = ChaCha20-Poly1305 + HKDF + padding longueur (remplace NIP-04).
    */
   async publishDM(recipientPubKey: string, content: string): Promise<NostrEvent> {
     if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
 
-    const ciphertext = nip04Encrypt(this.keypair.secretKey, recipientPubKey, content);
+    const ciphertext = nip44Encrypt(this.keypair.secretKey, recipientPubKey, content);
     return this.publish({
       kind: Kind.EncryptedDM,
       content: ciphertext,
@@ -395,7 +374,7 @@ export class NostrClient {
   }
 
   /**
-   * S'abonne aux DMs entrants et les déchiffre automatiquement.
+   * S'abonne aux DMs entrants NIP-44 et les déchiffre automatiquement.
    * Retourne une fonction de désabonnement.
    */
   subscribeDMs(
@@ -409,10 +388,10 @@ export class NostrClient {
       [{ kinds: [Kind.EncryptedDM], '#p': [myPubKey] }],
       (event) => {
         try {
-          const plaintext = nip04Decrypt(this.keypair!.secretKey, event.pubkey, event.content);
+          const plaintext = nip44Decrypt(this.keypair!.secretKey, event.pubkey, event.content);
           onDM(event.pubkey, plaintext, event);
         } catch {
-          console.warn('[Nostr] Déchiffrement DM échoué — ignoré:', event.id.slice(0, 12));
+          console.warn('[Nostr] Déchiffrement DM NIP-44 échoué — ignoré:', event.id.slice(0, 12));
         }
       },
     );

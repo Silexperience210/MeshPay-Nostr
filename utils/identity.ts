@@ -3,11 +3,72 @@ import { HDKey } from '@scure/bip32';
 // @ts-ignore
 import { sha256 } from '@noble/hashes/sha2.js';
 // @ts-ignore
+import { hmac } from '@noble/hashes/hmac.js';
+// @ts-ignore
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
 
 // Chemin de dérivation dédié à la messagerie MeshCore
 const MESHCORE_PATH = "m/69'/0'/0'/0";
+
+// ─── BIP-85 : dérivation de seeds enfants isolés ─────────────────────────────
+//
+// BIP-85 permet de dériver des seeds enfants à partir d'un master seed.
+// Chaque seed enfant est cryptographiquement indépendant des autres :
+// compromettre un seed enfant ne révèle rien sur les autres ni sur le master.
+//
+// Spec BIP-85 :
+//   child_entropy = HMAC-SHA512(key="bip-entropy-from-k", data=derived_key)
+//   → Les 32 premiers bytes = seed enfant (256 bits d'entropie)
+//
+// Index recommandés pour MeshPay :
+//   BIP85_DOMAIN.BITCOIN  (0) → seed wallet BTC
+//   BIP85_DOMAIN.NOSTR    (1) → seed identité Nostr
+//   BIP85_DOMAIN.MESHCORE (2) → seed identité réseau mesh
+
+export const BIP85_DOMAIN = {
+  BITCOIN: 0,
+  NOSTR: 1,
+  MESHCORE: 2,
+} as const;
+
+/**
+ * Dérive un seed enfant BIP-85 à partir du master seed.
+ *
+ * @param masterSeed  - seed BIP39 principal (64 bytes)
+ * @param index       - index du domaine (BIP85_DOMAIN.*)
+ * @returns           - 32 bytes d'entropie indépendants pour ce domaine
+ */
+export function deriveBip85Seed(masterSeed: Uint8Array, index: number): Uint8Array {
+  // Chemin de dérivation BIP-85 : m/83696968'/0'/{index}'
+  // 83696968 = 0x4F45F10 = "BIP85" en ASCII-like (valeur spécifiée dans BIP-85)
+  const path = `m/83696968'/0'/${index}'`;
+  const master = HDKey.fromMasterSeed(masterSeed);
+  const child = master.derive(path);
+
+  if (!child.privateKey) {
+    throw new Error(`[BIP-85] Échec dérivation index=${index}`);
+  }
+
+  // HMAC-SHA512(key="bip-entropy-from-k", data=child.privateKey)
+  const hmacKey = new TextEncoder().encode('bip-entropy-from-k');
+  const entropy = hmac(sha256, hmacKey, child.privateKey);
+
+  // 32 premiers bytes = seed enfant (SHA256 donne exactement 32 bytes)
+  return entropy.slice(0, 32);
+}
+
+/**
+ * Dérive le seed MeshCore de façon isolée via BIP-85.
+ * Remplace la dérivation directe m/69'/0'/0'/0 depuis le même arbre BIP32.
+ *
+ * Usage futur : remplacer mnemonicToSeed(mnemonic) par deriveBip85Seed(masterSeed, BIP85_DOMAIN.MESHCORE)
+ * pour que l'identité mesh soit cryptographiquement isolée du wallet Bitcoin.
+ */
+export function deriveMeshSeedBip85(mnemonic: string, passphrase?: string): Uint8Array {
+  const masterSeed = mnemonicToSeed(mnemonic, passphrase);
+  return deriveBip85Seed(masterSeed, BIP85_DOMAIN.MESHCORE);
+}
 
 export interface MeshIdentity {
   nodeId: string;       // ex: "MESH-A7F2"

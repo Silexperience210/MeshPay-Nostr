@@ -13,7 +13,10 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Radio, Plus, Wifi, Globe, Hash, User, X, Lock, Search } from 'lucide-react-native';
+import { Radio, Plus, Wifi, Globe, Hash, User, X, Lock, Search, Eye, EyeOff, Copy, KeyRound, ShieldCheck } from 'lucide-react-native';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
+import { generateForumKey } from '@/utils/encryption';
 import Colors from '@/constants/colors';
 import { formatTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
@@ -166,20 +169,45 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   visible: boolean;
   onClose: () => void;
   onDM: (nodeId: string, name: string, pubkey?: string) => void;
-  onForum: (channelName: string) => Promise<void>;
+  onForum: (channelName: string, pskHex?: string, skipAnnounce?: boolean) => Promise<void>;
 }) {
   const { joinForum: joinForumContext } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
   const [tab, setTab] = useState<'dm' | 'forum' | 'discover'>('dm');
   const [nodeId, setNodeId] = useState('');
   const [name, setName] = useState('');
+  // Forum public
   const [channel, setChannel] = useState('');
+  // Forum privé
+  const [forumType, setForumType] = useState<'public' | 'private'>('public');
+  const [privateAction, setPrivateAction] = useState<'create' | 'join'>('create');
+  const [privateName, setPrivateName] = useState('');
+  const [privateDesc, setPrivateDesc] = useState('');
+  const [generatedPsk, setGeneratedPsk] = useState<string | null>(null);
+  const [joinPsk, setJoinPsk] = useState('');
+  const [showPsk, setShowPsk] = useState(false);
+  const [pskCopied, setPskCopied] = useState(false);
+  // Discover
   const [newForumName, setNewForumName] = useState('');
   const [newForumDesc, setNewForumDesc] = useState('');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [discoveredForums, setDiscoveredForums] = useState<DiscoveredForum[]>([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
+
+  const handleGeneratePsk = () => {
+    const psk = generateForumKey();
+    setGeneratedPsk(psk);
+    setPskCopied(false);
+  };
+
+  const handleCopyPsk = () => {
+    if (!generatedPsk) return;
+    Clipboard.setStringAsync(generatedPsk);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setPskCopied(true);
+    setTimeout(() => setPskCopied(false), 2000);
+  };
 
   // Découverte de forums via kind:40 quand l'onglet est actif
   useEffect(() => {
@@ -224,22 +252,59 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
     onClose();
   };
 
-  // FIX: handleForum est maintenant async et attend la fin avant de fermer
+  // Rejoindre un forum public par nom
   const handleForum = async () => {
     if (!channel.trim()) return;
     const channelName = channel.trim().toLowerCase().replace(/\s+/g, '-');
     const error = validateForumName(channelName);
-    if (error) {
-      Alert.alert('Nom invalide', error);
-      return;
-    }
+    if (error) { Alert.alert('Nom invalide', error); return; }
     try {
       setLoading(true);
       await onForum(channelName);
       setChannel('');
       onClose();
-    } catch (err) {
+    } catch {
       Alert.alert('Erreur', 'Impossible de rejoindre le forum. Réessayez.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Créer un forum privé avec PSK générée
+  const handleCreatePrivateForum = async () => {
+    const channelName = privateName.trim().toLowerCase().replace(/\s+/g, '-');
+    const error = validateForumName(channelName);
+    if (error) { Alert.alert('Nom invalide', error); return; }
+    if (!generatedPsk) { Alert.alert('Clé manquante', 'Générez une clé secrète avant de créer le forum.'); return; }
+    if (!nostrConnected) { Alert.alert('Non connecté', 'Nostr est requis pour créer un forum.'); return; }
+    try {
+      setLoading(true);
+      await onForum(channelName, generatedPsk);
+      setPrivateName(''); setPrivateDesc(''); setGeneratedPsk(null);
+      onClose();
+    } catch (err) {
+      Alert.alert('Erreur', err instanceof Error ? err.message : 'Impossible de créer le forum privé.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Rejoindre un forum privé avec PSK connue
+  const handleJoinPrivateForum = async () => {
+    const channelName = privateName.trim().toLowerCase().replace(/\s+/g, '-');
+    const error = validateForumName(channelName);
+    if (error) { Alert.alert('Nom invalide', error); return; }
+    if (!joinPsk.trim() || joinPsk.trim().length !== 64) {
+      Alert.alert('Clé invalide', 'La clé secrète doit faire 64 caractères hexadécimaux.');
+      return;
+    }
+    try {
+      setLoading(true);
+      await onForum(channelName, joinPsk.trim(), true); // skipAnnounce = true
+      setPrivateName(''); setJoinPsk('');
+      onClose();
+    } catch (err) {
+      Alert.alert('Erreur', err instanceof Error ? err.message : 'Impossible de rejoindre le forum privé.');
     } finally {
       setLoading(false);
     }
@@ -278,10 +343,11 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   const handleJoinDiscoveredForum = async (channelName: string, description: string) => {
     try {
       setLoading(true);
-      await joinForumContext(channelName, description);
-      Alert.alert('Rejoint!', `Vous avez rejoint #${channelName}`);
+      // skipAnnounce = true : ne pas re-publier kind:40, le forum existe déjà sur Nostr
+      await joinForumContext(channelName, description, undefined, true);
+      Alert.alert('Rejoint !', `Vous avez rejoint #${channelName}`);
       onClose();
-    } catch (err) {
+    } catch {
       Alert.alert('Erreur', 'Impossible de rejoindre ce forum.');
     } finally {
       setLoading(false);
@@ -364,33 +430,166 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
             </View>
           ) : tab === 'forum' ? (
             <View style={styles.modalBody}>
-              <Text style={styles.inputLabel}>Nom du canal</Text>
-              <TextInput
-                style={styles.modalInput}
-                value={channel}
-                onChangeText={setChannel}
-                placeholder="bitcoin-paris"
-                placeholderTextColor={Colors.textMuted}
-                autoCapitalize="none"
-              />
-              <Text style={styles.inputHint}>
-                Tout le monde connaissant ce nom peut rejoindre le forum.
-                Les messages sont publics sur Nostr (NIP-28).
-              </Text>
-              <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: Colors.cyan, opacity: loading ? 0.6 : 1 }]}
-                onPress={handleForum}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator size="small" color={Colors.black} />
-                ) : (
-                  <>
-                    <Hash size={14} color={Colors.black} />
-                    <Text style={styles.modalBtnText}>Rejoindre le forum</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              {/* Toggle Public / Privé */}
+              <View style={styles.forumTypeRow}>
+                <TouchableOpacity
+                  style={[styles.forumTypeBtn, forumType === 'public' && styles.forumTypeBtnActive]}
+                  onPress={() => setForumType('public')} activeOpacity={0.7}
+                >
+                  <Globe size={13} color={forumType === 'public' ? Colors.cyan : Colors.textMuted} />
+                  <Text style={[styles.forumTypeTxt, forumType === 'public' && { color: Colors.cyan }]}>Public</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.forumTypeBtn, forumType === 'private' && styles.forumTypeBtnPrivate]}
+                  onPress={() => setForumType('private')} activeOpacity={0.7}
+                >
+                  <ShieldCheck size={13} color={forumType === 'private' ? Colors.accent : Colors.textMuted} />
+                  <Text style={[styles.forumTypeTxt, forumType === 'private' && { color: Colors.accent }]}>Privé (PSK)</Text>
+                </TouchableOpacity>
+              </View>
+
+              {forumType === 'public' ? (
+                <>
+                  <Text style={styles.inputLabel}>Nom du canal</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={channel}
+                    onChangeText={setChannel}
+                    placeholder="bitcoin-paris"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="none"
+                  />
+                  <Text style={styles.inputHint}>
+                    Tout le monde connaissant ce nom peut rejoindre. Messages publics sur Nostr (NIP-28).
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: Colors.cyan, opacity: loading ? 0.6 : 1 }]}
+                    onPress={handleForum} disabled={loading}
+                  >
+                    {loading ? <ActivityIndicator size="small" color={Colors.black} /> : (
+                      <><Hash size={14} color={Colors.black} /><Text style={styles.modalBtnText}>Rejoindre le forum</Text></>
+                    )}
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  {/* Sous-onglets Créer / Rejoindre */}
+                  <View style={styles.privateSubRow}>
+                    <TouchableOpacity
+                      style={[styles.privateSubBtn, privateAction === 'create' && styles.privateSubBtnActive]}
+                      onPress={() => { setPrivateAction('create'); setGeneratedPsk(null); }} activeOpacity={0.7}
+                    >
+                      <Text style={[styles.privateSubTxt, privateAction === 'create' && { color: Colors.accent }]}>Créer</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.privateSubBtn, privateAction === 'join' && styles.privateSubBtnActive]}
+                      onPress={() => setPrivateAction('join')} activeOpacity={0.7}
+                    >
+                      <Text style={[styles.privateSubTxt, privateAction === 'join' && { color: Colors.accent }]}>Rejoindre</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.inputLabel}>Nom du forum</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={privateName}
+                    onChangeText={setPrivateName}
+                    placeholder="mon-forum-secret"
+                    placeholderTextColor={Colors.textMuted}
+                    autoCapitalize="none"
+                  />
+
+                  {privateAction === 'create' ? (
+                    <>
+                      <TextInput
+                        style={styles.modalInput}
+                        value={privateDesc}
+                        onChangeText={setPrivateDesc}
+                        placeholder="Description (optionnel)"
+                        placeholderTextColor={Colors.textMuted}
+                      />
+
+                      {/* Génération PSK */}
+                      {!generatedPsk ? (
+                        <TouchableOpacity style={styles.pskGenBtn} onPress={handleGeneratePsk} activeOpacity={0.7}>
+                          <KeyRound size={15} color={Colors.accent} />
+                          <Text style={styles.pskGenTxt}>Générer une clé secrète</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.pskBox}>
+                          <View style={styles.pskHeader}>
+                            <ShieldCheck size={13} color={Colors.accent} />
+                            <Text style={styles.pskLabel}>Clé secrète (partagez-la aux membres via DM)</Text>
+                          </View>
+                          <View style={styles.pskRow}>
+                            <Text style={styles.pskValue} numberOfLines={showPsk ? undefined : 1}>
+                              {showPsk ? generatedPsk : '••••••••••••••••••••••••••••••••'}
+                            </Text>
+                            <TouchableOpacity onPress={() => setShowPsk(v => !v)} style={styles.pskEye} activeOpacity={0.7}>
+                              {showPsk ? <EyeOff size={14} color={Colors.textMuted} /> : <Eye size={14} color={Colors.textMuted} />}
+                            </TouchableOpacity>
+                          </View>
+                          <TouchableOpacity style={styles.pskCopyBtn} onPress={handleCopyPsk} activeOpacity={0.7}>
+                            <Copy size={13} color={pskCopied ? Colors.accent : Colors.textMuted} />
+                            <Text style={[styles.pskCopyTxt, pskCopied && { color: Colors.accent }]}>
+                              {pskCopied ? 'Copié !' : 'Copier la clé'}
+                            </Text>
+                          </TouchableOpacity>
+                          <Text style={styles.pskWarning}>
+                            ⚠️ Partagez cette clé uniquement via DM chiffré. Sans elle, impossible de lire les messages.
+                          </Text>
+                        </View>
+                      )}
+
+                      <TouchableOpacity
+                        style={[styles.modalBtn, { opacity: loading || !generatedPsk ? 0.5 : 1 }]}
+                        onPress={handleCreatePrivateForum}
+                        disabled={loading || !generatedPsk}
+                      >
+                        {loading ? <ActivityIndicator size="small" color={Colors.black} /> : (
+                          <><Lock size={14} color={Colors.black} /><Text style={styles.modalBtnText}>Créer le forum privé</Text></>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.inputLabel}>Clé secrète (PSK)</Text>
+                      <View style={styles.pskInputRow}>
+                        <TextInput
+                          style={[styles.modalInput, { flex: 1, fontFamily: 'monospace', fontSize: 12 }]}
+                          value={joinPsk}
+                          onChangeText={setJoinPsk}
+                          placeholder="64 caractères hexadécimaux..."
+                          placeholderTextColor={Colors.textMuted}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          secureTextEntry={!showPsk}
+                        />
+                        <TouchableOpacity onPress={() => setShowPsk(v => !v)} style={styles.pskEye} activeOpacity={0.7}>
+                          {showPsk ? <EyeOff size={14} color={Colors.textMuted} /> : <Eye size={14} color={Colors.textMuted} />}
+                        </TouchableOpacity>
+                      </View>
+                      {joinPsk.length > 0 && joinPsk.length !== 64 && (
+                        <Text style={[styles.inputHint, { color: Colors.red }]}>
+                          {64 - joinPsk.length} caractères manquants
+                        </Text>
+                      )}
+                      <Text style={styles.inputHint}>
+                        Collez la clé partagée par le créateur du forum.
+                      </Text>
+                      <TouchableOpacity
+                        style={[styles.modalBtn, { opacity: loading || joinPsk.length !== 64 ? 0.5 : 1 }]}
+                        onPress={handleJoinPrivateForum}
+                        disabled={loading || joinPsk.length !== 64}
+                      >
+                        {loading ? <ActivityIndicator size="small" color={Colors.black} /> : (
+                          <><Lock size={14} color={Colors.black} /><Text style={styles.modalBtnText}>Rejoindre le forum privé</Text></>
+                        )}
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </>
+              )}
             </View>
           ) : (
             <View style={styles.modalBody}>
@@ -535,8 +734,8 @@ export default function MessagesScreen() {
     router.push(`/(messages)/${encodeURIComponent(contact.nodeId)}` as never);
   }, [startConversation, router]);
 
-  const handleForum = async (channelName: string): Promise<void> => {
-    await joinForum(channelName);
+  const handleForum = async (channelName: string, pskHex?: string, skipAnnounce?: boolean): Promise<void> => {
+    await joinForum(channelName, undefined, pskHex, skipAnnounce);
     router.push(`/(messages)/${encodeURIComponent('forum:' + channelName)}` as never);
   };
 
@@ -806,4 +1005,43 @@ const styles = StyleSheet.create({
   discoveredForumName: { color: Colors.text, fontSize: 14, fontWeight: '600' },
   discoveredForumDesc: { color: Colors.textSecondary, fontSize: 12, marginTop: 2 },
   discoveredForumMeta: { color: Colors.textMuted, fontSize: 10, marginTop: 2 },
+  // Forum type toggle
+  forumTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  forumTypeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 9, borderRadius: 10,
+    backgroundColor: Colors.surfaceLight, borderWidth: 1, borderColor: Colors.border,
+  },
+  forumTypeBtnActive: { borderColor: Colors.cyan, backgroundColor: Colors.cyanDim },
+  forumTypeBtnPrivate: { borderColor: Colors.accent, backgroundColor: Colors.accentDim },
+  forumTypeTxt: { color: Colors.textMuted, fontSize: 13, fontWeight: '600' },
+  // Private sub-tabs
+  privateSubRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  privateSubBtn: {
+    flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8,
+    backgroundColor: Colors.surfaceLight, borderWidth: 1, borderColor: Colors.border,
+  },
+  privateSubBtnActive: { borderColor: Colors.accent, backgroundColor: Colors.accentDim },
+  privateSubTxt: { color: Colors.textMuted, fontSize: 13, fontWeight: '600' },
+  // PSK display
+  pskGenBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: Colors.accentDim, borderRadius: 10, borderWidth: 1, borderColor: Colors.accent,
+    marginTop: 4,
+  },
+  pskGenTxt: { color: Colors.accent, fontSize: 14, fontWeight: '700' },
+  pskBox: {
+    backgroundColor: Colors.surfaceLight, borderRadius: 12, padding: 12,
+    borderWidth: 1, borderColor: Colors.accent, marginTop: 4, gap: 8,
+  },
+  pskHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pskLabel: { color: Colors.accent, fontSize: 11, fontWeight: '600', flex: 1 },
+  pskRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pskValue: { color: Colors.text, fontSize: 11, fontFamily: 'monospace', flex: 1 },
+  pskEye: { padding: 6 },
+  pskCopyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pskCopyTxt: { color: Colors.textMuted, fontSize: 12, fontWeight: '600' },
+  pskWarning: { color: Colors.yellow, fontSize: 11, lineHeight: 15 },
+  pskInputRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 });

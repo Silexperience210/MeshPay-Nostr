@@ -58,11 +58,31 @@ export function deriveSharedSecret(
   return sha256(sharedPoint);
 }
 
-// --- Clé symétrique pour forum public ---
-// channelName ex: "bitcoin-paris" → SHA256("forum:bitcoin-paris")
+// --- Clé symétrique pour forum PUBLIC (nom = seul secret) ---
+// AVERTISSEMENT : utilisable uniquement pour des forums explicitement publics.
+// Pour les forums privés, utiliser generateForumKey() + partage via DM chiffré.
 export function deriveForumKey(channelName: string): Uint8Array {
   const encoder = new TextEncoder();
   return sha256(encoder.encode('forum:' + channelName));
+}
+
+// --- Génère une PSK aléatoire pour un forum privé ---
+// Appeler une seule fois à la création du forum.
+// Partager le hex résultant aux membres via encryptDM (jamais en clair).
+export function generateForumKey(): string {
+  return bytesToHex(randomBytes(32));
+}
+
+// --- Chiffrer avec une PSK explicite (forum privé) ---
+export function encryptForumWithKey(plaintext: string, pskHex: string): EncryptedPayload {
+  const key = hexToBytes(pskHex);
+  return encryptMessage(plaintext, key);
+}
+
+// --- Déchiffrer avec une PSK explicite (forum privé) ---
+export function decryptForumWithKey(payload: EncryptedPayload, pskHex: string): string {
+  const key = hexToBytes(pskHex);
+  return decryptMessage(payload, key);
 }
 
 // --- Chiffrement AES-GCM-256 ---

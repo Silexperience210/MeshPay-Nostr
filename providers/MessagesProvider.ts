@@ -7,8 +7,11 @@ import { type RadarPeer, haversineDistance, gpsBearing, distanceToSignal } from 
 import {
   encryptDM,
   decryptDM,
+  encryptForumWithKey,
+  decryptForumWithKey,
   type EncryptedPayload,
 } from '@/utils/encryption';
+import { savePsk, loadPsk, deletePsk, loadAllPsks } from '@/utils/forum-keys';
 import { isChunkPacket } from '@/utils/meshcore-protocol';
 import {
   type StoredMessage,
@@ -71,7 +74,7 @@ export interface MessagesState {
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string, peerPubkey?: string) => Promise<void>;
-  joinForum: (channelName: string, description?: string) => Promise<void>;
+  joinForum: (channelName: string, description?: string, pskHex?: string, skipAnnounce?: boolean) => Promise<void>;
   leaveForum: (channelName: string) => void;
   markRead: (convId: string) => Promise<void>;
   setDisplayName: (name: string) => Promise<void>;
@@ -100,6 +103,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const myLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const chunkManagerRef = useRef(getChunkManager());
   const joinedForums = useRef<Set<string>>(new Set());
+  // PSKs chargées en mémoire : channelName → pskHex (évite les appels AsyncStorage dans les callbacks)
+  const forumPsks = useRef<Map<string, string>>(new Map());
   // FIX #1: Deduplication — Set des IDs de messages récents (max 200)
   const recentMsgIds = useRef<Set<string>>(new Set());
   // Buffer paquets chiffrés reçus avant de connaître la pubkey du sender
@@ -583,14 +588,17 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     });
   }, []);
 
-  // FIX #4: Charger les forums persistés au démarrage
+  // Charger les forums persistés + leurs PSKs au démarrage
   useEffect(() => {
-    AsyncStorage.getItem(JOINED_FORUMS_KEY).then(raw => {
+    AsyncStorage.getItem(JOINED_FORUMS_KEY).then(async raw => {
       if (!raw) return;
       try {
         const saved: string[] = JSON.parse(raw);
         saved.forEach(ch => joinedForums.current.add(ch));
-        console.log('[Forums] Forums persistés chargés:', saved);
+        // Charger les PSKs connues en mémoire
+        const psks = await loadAllPsks(saved);
+        psks.forEach((psk, ch) => forumPsks.current.set(ch, psk));
+        console.log('[Forums] Forums persistés chargés:', saved, '| PSKs:', psks.size);
       } catch { /* ignore */ }
     });
   }, []);
@@ -654,12 +662,25 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const fromId = event.tags.find(t => t[0] === 'meshcore-from')?.[1] ?? event.pubkey;
     const ts = event.created_at * 1000;
 
+    // Déchiffrer si forum privé (PSK connue)
+    let plaintext = event.content;
+    const psk = forumPsks.current.get(channelName);
+    if (psk) {
+      try {
+        const payload = JSON.parse(event.content) as { v: number; nonce: string; ct: string };
+        plaintext = decryptForumWithKey(payload, psk);
+      } catch {
+        console.warn('[Forum] Déchiffrement PSK échoué pour', channelName, '— message ignoré');
+        return; // Ne pas afficher un message illisible
+      }
+    }
+
     const msg: StoredMessage = {
       id: event.id,
       conversationId: convId,
       fromNodeId: fromId,
       fromPubkey: event.pubkey,
-      text: event.content,
+      text: plaintext,
       type: 'text',
       timestamp: ts,
       isMine: false,
@@ -986,9 +1007,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (isForum) {
       const channelName = convId.slice(6);
 
-      // Nostr (NIP-28 kind:42 — messages en clair sur channel déterministe)
+      // Chiffrer avec PSK si forum privé
+      const psk = forumPsks.current.get(channelName);
+      const payload = psk
+        ? JSON.stringify(encryptForumWithKey(text, psk))
+        : text;
+
+      // Nostr (NIP-28 kind:42 sur channel déterministe)
       const channelId = deriveChannelId(channelName);
-      await nostrClient.publishChannelMessage(channelId, text);
+      await nostrClient.publishChannelMessage(channelId, payload);
       // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
       const msg: StoredMessage = {
         id: msgId,
@@ -1121,14 +1148,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, [conversations]);
 
   // Rejoindre un forum
-  const joinForum = useCallback(async (channelName: string, description?: string): Promise<void> => {
+  const joinForum = useCallback(async (channelName: string, description?: string, pskHex?: string, skipAnnounce?: boolean): Promise<void> => {
     const convId = `forum:${channelName}`;
     joinedForums.current.add(channelName);
-    // FIX #4: Persister la liste des forums rejoints
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
 
-    // Nostr : publier kind:40 ChannelCreate pour annoncer le forum
-    if (nostrClient.isConnected) {
+    // Stocker la PSK en mémoire + AsyncStorage si forum privé
+    if (pskHex) {
+      forumPsks.current.set(channelName, pskHex);
+      await savePsk(channelName, pskHex);
+      console.log('[Forum] PSK sauvegardée pour:', channelName);
+    }
+
+    // Nostr : publier kind:40 uniquement si nouveau forum (pas si on rejoint un forum découvert)
+    if (nostrClient.isConnected && !skipAnnounce) {
       nostrClient.createChannel(channelName, description || `Forum ${channelName}`)
         .then(() => console.log('[Forum] kind:40 publié:', channelName))
         .catch((err) => console.warn('[Forum] Impossible de publier kind:40:', err));
@@ -1190,8 +1223,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // Quitter un forum
   const leaveForum = useCallback((channelName: string): void => {
     joinedForums.current.delete(channelName);
-    // FIX #4: Persister la liste mise à jour
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
+    // Supprimer la PSK si forum privé
+    if (forumPsks.current.has(channelName)) {
+      forumPsks.current.delete(channelName);
+      deletePsk(channelName).catch(() => {});
+      console.log('[Forum] PSK supprimée pour:', channelName);
+    }
     // Nostr : désabonner du channel
     const nostrUnsub = nostrChannelUnsubs.current.get(channelName);
     if (nostrUnsub) {

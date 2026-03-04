@@ -7,7 +7,7 @@ import {
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useHeaderHeight } from '@react-navigation/elements';
 import * as Clipboard from 'expo-clipboard';
-import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera } from 'lucide-react-native';
+import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, ChevronDown } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import Colors from '@/constants/colors';
 import { formatMessageTime } from '@/utils/helpers';
@@ -28,6 +28,139 @@ import {
   AUDIO_MAX_DURATION_MS,
 } from '@/utils/audio';
 import type { Audio } from 'expo-av';
+
+// ─── Quote parser ──────────────────────────────────────────────────────────
+// Format reply : "↩ NOM: texte cité\n―――\nmessage réel"
+const QUOTE_DIVIDER = '\n―――\n';
+function parseQuote(text: string): { quote: { from: string; text: string } | null; body: string } {
+  if (!text.startsWith('↩ ')) return { quote: null, body: text };
+  const div = text.indexOf(QUOTE_DIVIDER);
+  if (div === -1) return { quote: null, body: text };
+  const line = text.slice(2, div);
+  const colon = line.indexOf(': ');
+  if (colon === -1) return { quote: null, body: text };
+  return { quote: { from: line.slice(0, colon), text: line.slice(colon + 2) }, body: text.slice(div + QUOTE_DIVIDER.length) };
+}
+
+// ─── MessageActionsSheet ───────────────────────────────────────────────────
+const QUICK_EMOJIS = ['❤️', '👍', '😂', '🔥', '⚡', '₿', '💜'];
+
+function MessageActionsSheet({ message, visible, onClose, onReply, onReact, onDelete, onReclaim, activeReactions }: {
+  message: StoredMessage | null;
+  visible: boolean;
+  onClose: () => void;
+  onReply: () => void;
+  onReact: (emoji: string) => void;
+  onDelete: () => void;
+  onReclaim: () => void;
+  activeReactions: string[];
+}) {
+  if (!message) return null;
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={actionStyles.overlay} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity activeOpacity={1} style={actionStyles.sheet}>
+          <View style={actionStyles.handle} />
+
+          {/* Emoji reactions rapides */}
+          <View style={actionStyles.emojiRow}>
+            {QUICK_EMOJIS.map(e => {
+              const active = activeReactions.includes(e);
+              return (
+                <TouchableOpacity key={e} onPress={() => { onReact(e); onClose(); }} activeOpacity={0.7}>
+                  <View style={[actionStyles.emojiBtn, active && actionStyles.emojiBtnActive]}>
+                    <Text style={actionStyles.emoji}>{e}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={actionStyles.divider} />
+
+          <TouchableOpacity style={actionStyles.action} onPress={() => { onReply(); onClose(); }} activeOpacity={0.7}>
+            <CornerUpLeft size={18} color={Colors.text} />
+            <Text style={actionStyles.actionText}>Répondre</Text>
+          </TouchableOpacity>
+
+          {!!message.text && (
+            <TouchableOpacity style={actionStyles.action} onPress={() => { Clipboard.setStringAsync(message.text!); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); onClose(); }} activeOpacity={0.7}>
+              <Copy size={18} color={Colors.text} />
+              <Text style={actionStyles.actionText}>Copier</Text>
+            </TouchableOpacity>
+          )}
+
+          {message.type === 'cashu' && message.isMine && (
+            <TouchableOpacity style={actionStyles.action} onPress={() => { onReclaim(); onClose(); }} activeOpacity={0.7}>
+              <RotateCcw size={18} color={Colors.yellow} />
+              <Text style={[actionStyles.actionText, { color: Colors.yellow }]}>Récupérer les sats</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={actionStyles.action} onPress={() => { onDelete(); onClose(); }} activeOpacity={0.7}>
+            <Trash2 size={18} color={Colors.red} />
+            <Text style={[actionStyles.actionText, { color: Colors.red }]}>Supprimer</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
+// ─── ProfileSheet ──────────────────────────────────────────────────────────
+function ProfileSheet({ nodeId, pubkey, name, onClose }: { nodeId: string; pubkey?: string; name: string; onClose: () => void }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = useCallback((val: string, label: string) => {
+    Clipboard.setStringAsync(val);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 1500);
+  }, []);
+
+  const isMesh = nodeId.startsWith('MESH-');
+  const isNostr = nodeId.startsWith('NOSTR-');
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={profileStyles.overlay} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity activeOpacity={1} style={profileStyles.sheet}>
+          <View style={profileStyles.handle} />
+          <View style={profileStyles.avatarWrap}>
+            <Text style={profileStyles.avatarText}>{name.charAt(0).toUpperCase()}</Text>
+          </View>
+          <Text style={profileStyles.name}>{name}</Text>
+          <View style={profileStyles.badgeRow}>
+            {isMesh && <View style={[profileStyles.badge, { backgroundColor: Colors.cyanDim }]}><Text style={[profileStyles.badgeText, { color: Colors.cyan }]}>📡 MeshCore</Text></View>}
+            {isNostr && <View style={[profileStyles.badge, { backgroundColor: 'rgba(160,32,240,0.15)' }]}><Text style={[profileStyles.badgeText, { color: '#a020f0' }]}>⚡ Nostr</Text></View>}
+            <View style={[profileStyles.badge, { backgroundColor: Colors.accentDim }]}><Shield size={10} color={Colors.accent} /><Text style={[profileStyles.badgeText, { color: Colors.accent }]}> Vérifié E2E</Text></View>
+          </View>
+
+          <View style={profileStyles.fields}>
+            <TouchableOpacity style={profileStyles.field} onPress={() => copy(nodeId, 'NodeID')} activeOpacity={0.7}>
+              <Text style={profileStyles.fieldLabel}>NodeID</Text>
+              <View style={profileStyles.fieldRow}>
+                <Text style={profileStyles.fieldValue}>{nodeId}</Text>
+                <Copy size={13} color={copied === 'NodeID' ? Colors.accent : Colors.textMuted} />
+              </View>
+              {copied === 'NodeID' && <Text style={profileStyles.copiedHint}>Copié !</Text>}
+            </TouchableOpacity>
+
+            {pubkey && (
+              <TouchableOpacity style={profileStyles.field} onPress={() => copy(pubkey, 'Pubkey')} activeOpacity={0.7}>
+                <Text style={profileStyles.fieldLabel}>Clé publique</Text>
+                <View style={profileStyles.fieldRow}>
+                  <Text style={profileStyles.fieldValue} numberOfLines={1}>{pubkey.slice(0, 20)}…{pubkey.slice(-8)}</Text>
+                  <Copy size={13} color={copied === 'Pubkey' ? Colors.accent : Colors.textMuted} />
+                </View>
+                {copied === 'Pubkey' && <Text style={profileStyles.copiedHint}>Copié !</Text>}
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
 
 function PaymentBubble({ amount }: { amount: number }) {
   return (
@@ -145,65 +278,100 @@ function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; image
   );
 }
 
-function MessageBubble({ message, displayName, onLongPress, onCashuPress }: { message: StoredMessage; displayName?: string; onLongPress?: () => void; onCashuPress?: () => void }) {
+function MessageBubble({ message, displayName, onLongPress, onCashuPress, onSenderTap, reactions, onReactionPress }: {
+  message: StoredMessage;
+  displayName?: string;
+  onLongPress?: () => void;
+  onCashuPress?: () => void;
+  onSenderTap?: () => void;
+  reactions?: string[];
+  onReactionPress?: (emoji: string) => void;
+}) {
   const isMe = message.isMine;
   const senderName = displayName ?? message.fromNodeId;
+  const { quote, body } = message.text ? parseQuote(message.text) : { quote: null, body: message.text };
 
   return (
-    <TouchableOpacity
-      style={[styles.messageBubbleContainer, isMe ? styles.bubbleRight : styles.bubbleLeft]}
-      onLongPress={onLongPress}
-      onPress={message.type === 'cashu' && !isMe ? onCashuPress : undefined}
-      delayLongPress={500}
-      activeOpacity={message.type === 'cashu' && !isMe ? 0.75 : 1}
-    >
-      {!isMe && (
-        <Text style={styles.senderLabel}>{senderName}</Text>
-      )}
-      <View style={[
-        styles.messageBubble,
-        isMe ? styles.myBubble : styles.theirBubble,
-        message.type === 'btc_tx' && styles.paymentWrapper,
-        message.type === 'cashu' && styles.cashuWrapper,
-        (message.type === 'image' || message.type === 'gif') && styles.imageWrapper,
-      ]}>
-        {message.type === 'audio' ? (
-          <AudioBubble audioData={message.audioData} audioDuration={message.audioDuration} isMe={isMe} />
-        ) : (message.type === 'image' || message.type === 'gif') ? (
-          <ImageBubble imageData={message.imageData} imageMime={message.imageMime} isMe={isMe} />
-        ) : message.type === 'cashu' && message.cashuAmount ? (
-          <CashuBubble amount={message.cashuAmount} received={!isMe} />
-        ) : message.type === 'btc_tx' && message.btcAmount ? (
-          <PaymentBubble amount={message.btcAmount} />
-        ) : (
-          <Text style={[styles.messageText, isMe && styles.myMessageText]}>
-            {message.text}
-          </Text>
+    <View style={[styles.messageBubbleOuter, isMe ? styles.outerRight : styles.outerLeft]}>
+      <TouchableOpacity
+        style={[styles.messageBubbleContainer, isMe ? styles.bubbleRight : styles.bubbleLeft]}
+        onLongPress={onLongPress}
+        onPress={message.type === 'cashu' && !isMe ? onCashuPress : undefined}
+        delayLongPress={400}
+        activeOpacity={message.type === 'cashu' && !isMe ? 0.75 : 1}
+      >
+        {!isMe && (
+          <TouchableOpacity onPress={onSenderTap} activeOpacity={0.6}>
+            <Text style={styles.senderLabel}>{senderName}</Text>
+          </TouchableOpacity>
         )}
-        <View style={styles.messageFooter}>
-          <Text style={[styles.messageTime, isMe && styles.myMessageTime]}>
-            {formatMessageTime(message.timestamp)}
-          </Text>
-          {message.transport && (
-            <View style={[
-              styles.transportBadge,
-              message.transport === 'nostr' ? styles.transportNostr
-              : message.transport === 'ble' ? styles.transportBle
-              : styles.transportLora,
-            ]}>
-              <Text style={styles.transportBadgeText}>
-                {message.transport === 'nostr' ? '⚡' : message.transport === 'ble' ? '🔵' : '📡'}
-              </Text>
+        <View style={[
+          styles.messageBubble,
+          isMe ? styles.myBubble : styles.theirBubble,
+          message.type === 'btc_tx' && styles.paymentWrapper,
+          message.type === 'cashu' && styles.cashuWrapper,
+          (message.type === 'image' || message.type === 'gif') && styles.imageWrapper,
+        ]}>
+          {/* Quote block si réponse */}
+          {quote && (
+            <View style={[styles.quoteBlock, isMe && styles.quoteBlockMe]}>
+              <View style={styles.quoteLine} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.quoteFrom, isMe && styles.quoteFromMe]}>{quote.from}</Text>
+                <Text style={[styles.quoteText, isMe && styles.quoteTextMe]} numberOfLines={2}>{quote.text}</Text>
+              </View>
             </View>
           )}
-          {isMe && (
-            <Text style={[styles.messageStatus, message.status === 'delivered' && styles.statusDelivered, message.status === 'failed' && styles.statusFailed]}>
-              {message.status === 'delivered' ? '✓✓' : message.status === 'sent' ? '✓' : message.status === 'sending' ? '◎' : '✗'}
+
+          {message.type === 'audio' ? (
+            <AudioBubble audioData={message.audioData} audioDuration={message.audioDuration} isMe={isMe} />
+          ) : (message.type === 'image' || message.type === 'gif') ? (
+            <ImageBubble imageData={message.imageData} imageMime={message.imageMime} isMe={isMe} />
+          ) : message.type === 'cashu' && message.cashuAmount ? (
+            <CashuBubble amount={message.cashuAmount} received={!isMe} />
+          ) : message.type === 'btc_tx' && message.btcAmount ? (
+            <PaymentBubble amount={message.btcAmount} />
+          ) : (
+            <Text style={[styles.messageText, isMe && styles.myMessageText]}>
+              {body ?? message.text}
             </Text>
           )}
+          <View style={styles.messageFooter}>
+            <Text style={[styles.messageTime, isMe && styles.myMessageTime]}>
+              {formatMessageTime(message.timestamp)}
+            </Text>
+            {message.transport && (
+              <View style={[
+                styles.transportBadge,
+                message.transport === 'nostr' ? styles.transportNostr
+                : message.transport === 'ble' ? styles.transportBle
+                : styles.transportLora,
+              ]}>
+                <Text style={styles.transportBadgeText}>
+                  {message.transport === 'nostr' ? '⚡' : message.transport === 'ble' ? '🔵' : '📡'}
+                </Text>
+              </View>
+            )}
+            {isMe && (
+              <Text style={[styles.messageStatus, message.status === 'delivered' && styles.statusDelivered, message.status === 'failed' && styles.statusFailed]}>
+                {message.status === 'delivered' ? '✓✓' : message.status === 'sent' ? '✓' : message.status === 'sending' ? '◎' : '✗'}
+              </Text>
+            )}
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+
+      {/* Réactions emoji sous la bulle */}
+      {reactions && reactions.length > 0 && (
+        <View style={[styles.reactionsRow, isMe && styles.reactionsRowMe]}>
+          {reactions.map((emoji, i) => (
+            <TouchableOpacity key={i} onPress={() => onReactionPress?.(emoji)} activeOpacity={0.7} style={styles.reactionChip}>
+              <Text style={styles.reactionEmoji}>{emoji}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -360,6 +528,14 @@ export default function ChatScreen() {
   const [isSendingMedia, setIsSendingMedia] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  // Reply
+  const [replyTo, setReplyTo] = useState<StoredMessage | null>(null);
+  // Réactions emoji : messageId → emojis
+  const [reactions, setReactions] = useState<Record<string, string[]>>({});
+  // Actions sheet (long press)
+  const [actionsSheet, setActionsSheet] = useState<StoredMessage | null>(null);
+  // Profile sheet (tap sender)
+  const [profileSheet, setProfileSheet] = useState<{ nodeId: string; pubkey?: string; name: string } | null>(null);
   const headerHeight = useHeaderHeight();
   const flatListRef = useRef<FlatList>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -401,13 +577,21 @@ export default function ChatScreen() {
     setIsSending(true);
     setError(null);
     try {
-      await sendMessage(convId, text, 'text');
+      // Préfixer avec la quote si réponse
+      let finalText = text;
+      if (replyTo) {
+        const quotedFrom = replyTo.isMine ? 'Vous' : (contactNameMap[replyTo.fromNodeId] ?? replyTo.fromNodeId.slice(0, 12));
+        const quotedText = replyTo.text ?? (replyTo.type === 'cashu' ? `💰 ${replyTo.cashuAmount} sats` : replyTo.type ?? '');
+        finalText = `↩ ${quotedFrom}: ${quotedText}${QUOTE_DIVIDER}${text}`;
+        setReplyTo(null);
+      }
+      await sendMessage(convId, finalText, 'text');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erreur envoi');
     } finally {
       setIsSending(false);
     }
-  }, [inputText, isSending, convId, sendMessage]);
+  }, [inputText, isSending, convId, sendMessage, replyTo, contactNameMap]);
 
   const router = useRouter();
 
@@ -487,46 +671,23 @@ export default function ChatScreen() {
 
   const handleLongPressMessage = useCallback((item: StoredMessage) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (item.type === 'cashu' && item.cashuToken) {
-      Alert.alert(
-        'Token Cashu · ' + (item.cashuAmount ?? 0) + ' sats',
-        item.isMine ? 'Token envoyé (appuyer pour tenter de récupérer)' : 'Importé automatiquement dans votre wallet',
-        [
-          { text: 'Annuler', style: 'cancel' },
-          {
-            text: 'Copier le token',
-            onPress: () => {
-              Clipboard.setStringAsync(item.cashuToken!);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            },
-          },
-          { text: 'Aller au wallet', onPress: () => router.push('/(tabs)/wallet') },
-          ...(item.isMine ? [{
-            text: '↩ Récupérer les sats',
-            onPress: () => handleReclaimToken(item),
-          }] : []),
-          {
-            text: 'Supprimer',
-            style: 'destructive',
-            onPress: () => deleteMessage(item.id, convId),
-          },
-        ]
-      );
-      return;
-    }
-    Alert.alert(
-      'Supprimer ce message ?',
-      item.isMine ? 'Le message sera supprimé localement.' : 'Le message sera supprimé de cet appareil uniquement.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: () => deleteMessage(item.id, convId),
-        },
-      ]
-    );
-  }, [convId, deleteMessage, router, handleReclaimToken]);
+    setActionsSheet(item);
+  }, []);
+
+  const handleToggleReaction = useCallback((msgId: string, emoji: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setReactions(prev => {
+      const curr = prev[msgId] ?? [];
+      const has = curr.includes(emoji);
+      return { ...prev, [msgId]: has ? curr.filter(e => e !== emoji) : [...curr, emoji] };
+    });
+  }, []);
+
+  const handleSenderTap = useCallback((item: StoredMessage) => {
+    const name = contactNameMap[item.fromNodeId] ?? item.fromNodeId;
+    const contact = contacts.find(c => c.nodeId === item.fromNodeId);
+    setProfileSheet({ nodeId: item.fromNodeId, pubkey: contact?.pubkeyHex, name });
+  }, [contactNameMap, contacts]);
 
   const handlePickMedia = useCallback(() => {
     if (isRecording || isSendingMedia) return;
@@ -592,9 +753,12 @@ export default function ChatScreen() {
         displayName={contactNameMap[item.fromNodeId]}
         onLongPress={() => handleLongPressMessage(item)}
         onCashuPress={() => handleCashuTap(item)}
+        onSenderTap={item.isMine ? undefined : () => handleSenderTap(item)}
+        reactions={reactions[item.id]}
+        onReactionPress={(emoji) => handleToggleReaction(item.id, emoji)}
       />
     ),
-    [handleLongPressMessage, handleCashuTap, contactNameMap]
+    [handleLongPressMessage, handleCashuTap, handleSenderTap, handleToggleReaction, contactNameMap, reactions]
   );
 
   const convName = conv?.name ?? convId;
@@ -635,14 +799,15 @@ export default function ChatScreen() {
         keyboardVerticalOffset={headerHeight}
       >
         <View style={styles.meshInfo}>
-          {settings.connectionMode === 'internet' ? <Globe size={12} color={Colors.blue} />
-            : settings.connectionMode === 'bridge' ? <Wifi size={12} color={Colors.cyan} />
-            : <Radio size={12} color={Colors.textMuted} />}
+          <Shield size={11} color={Colors.accent} />
           <Text style={styles.meshInfoText}>
             {isForum
-              ? `Forum #${convId.slice(6)} · chiffrement symétrique`
-              : `DM chiffré E2E · ECDH secp256k1 · AES-GCM-256`}
+              ? `Forum · AES-GCM-256 · PSK`
+              : nostrConnected
+                ? `NIP-44 · ChaCha20-Poly1305 · HKDF`
+                : `Mesh E2E · ECDH secp256k1 · AES-GCM-256`}
           </Text>
+          <Lock size={10} color={Colors.accent} />
         </View>
 
         {error && (
@@ -682,6 +847,24 @@ export default function ChatScreen() {
             <TouchableOpacity onPress={() => handleMicPressOut(false)} style={styles.recordingCancelBtn} activeOpacity={0.7}>
               <X size={14} color={Colors.red} />
               <Text style={styles.recordingCancelText}>Annuler</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Reply bar — apparaît au-dessus de l'input quand on répond */}
+        {replyTo && (
+          <View style={styles.replyBar}>
+            <View style={styles.replyBarLine} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.replyBarFrom}>
+                ↩ {replyTo.isMine ? 'Vous' : (contactNameMap[replyTo.fromNodeId] ?? replyTo.fromNodeId.slice(0, 12))}
+              </Text>
+              <Text style={styles.replyBarText} numberOfLines={1}>
+                {replyTo.text ?? (replyTo.type === 'cashu' ? `💰 ${replyTo.cashuAmount} sats` : replyTo.type)}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReplyTo(null)} style={{ padding: 6 }} activeOpacity={0.7}>
+              <X size={16} color={Colors.textMuted} />
             </TouchableOpacity>
           </View>
         )}
@@ -756,6 +939,26 @@ export default function ChatScreen() {
           await sendCashu(convId, token, amount);
         }}
       />
+
+      <MessageActionsSheet
+        message={actionsSheet}
+        visible={!!actionsSheet}
+        onClose={() => setActionsSheet(null)}
+        onReply={() => { if (actionsSheet) setReplyTo(actionsSheet); }}
+        onReact={(emoji) => { if (actionsSheet) handleToggleReaction(actionsSheet.id, emoji); }}
+        onDelete={() => { if (actionsSheet) deleteMessage(actionsSheet.id, convId); }}
+        onReclaim={() => { if (actionsSheet) handleReclaimToken(actionsSheet); }}
+        activeReactions={actionsSheet ? (reactions[actionsSheet.id] ?? []) : []}
+      />
+
+      {profileSheet && (
+        <ProfileSheet
+          nodeId={profileSheet.nodeId}
+          pubkey={profileSheet.pubkey}
+          name={profileSheet.name}
+          onClose={() => setProfileSheet(null)}
+        />
+      )}
     </>
   );
 }
@@ -771,10 +974,44 @@ const styles = StyleSheet.create({
   headerNodeId: { color: Colors.textMuted, fontSize: 10, fontFamily: 'monospace' },
   meshInfo: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 8, backgroundColor: Colors.surface,
+    paddingVertical: 7, backgroundColor: Colors.surface,
     borderBottomWidth: 0.5, borderBottomColor: Colors.border,
   },
-  meshInfoText: { color: Colors.textMuted, fontSize: 11, fontFamily: 'monospace' },
+  meshInfoText: { color: Colors.accent, fontSize: 11, fontFamily: 'monospace', opacity: 0.7 },
+  // Reply bar
+  replyBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: Colors.surfaceLight,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderTopWidth: 0.5, borderTopColor: Colors.border,
+  },
+  replyBarLine: { width: 3, height: '100%', minHeight: 32, borderRadius: 2, backgroundColor: Colors.accent },
+  replyBarFrom: { color: Colors.accent, fontSize: 11, fontWeight: '700', marginBottom: 2 },
+  replyBarText: { color: Colors.textMuted, fontSize: 13 },
+  // Message outer wrapper (bubble + reactions)
+  messageBubbleOuter: { marginBottom: 8 },
+  outerRight: { alignItems: 'flex-end' },
+  outerLeft: { alignItems: 'flex-start' },
+  // Quote block inside bubble
+  quoteBlock: {
+    flexDirection: 'row', gap: 8, marginBottom: 8,
+    backgroundColor: 'rgba(0,0,0,0.12)', borderRadius: 8, padding: 8,
+  },
+  quoteBlockMe: { backgroundColor: 'rgba(0,0,0,0.18)' },
+  quoteLine: { width: 3, borderRadius: 2, backgroundColor: Colors.textMuted },
+  quoteFrom: { color: Colors.textMuted, fontSize: 10, fontWeight: '700', marginBottom: 2 },
+  quoteFromMe: { color: 'rgba(0,0,0,0.5)' },
+  quoteText: { color: Colors.textMuted, fontSize: 12 },
+  quoteTextMe: { color: 'rgba(0,0,0,0.5)' },
+  // Reactions
+  reactionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4, marginLeft: 4 },
+  reactionsRowMe: { justifyContent: 'flex-end', marginRight: 4 },
+  reactionChip: {
+    backgroundColor: Colors.surfaceLight, borderRadius: 12,
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  reactionEmoji: { fontSize: 16 },
   errorBar: { backgroundColor: Colors.redDim, paddingHorizontal: 16, paddingVertical: 8 },
   errorText: { color: Colors.red, fontSize: 12 },
   messagesList: { paddingHorizontal: 12, paddingVertical: 12, paddingBottom: 8 },
@@ -969,6 +1206,66 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   white: { color: '#fff' },
+});
+
+const actionStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 16, paddingBottom: 40, paddingTop: 4,
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: Colors.surfaceHighlight,
+    alignSelf: 'center', marginBottom: 16,
+  },
+  emojiRow: { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 12 },
+  emojiBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: Colors.surfaceLight,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  emojiBtnActive: { backgroundColor: Colors.accentDim, borderWidth: 1.5, borderColor: Colors.accent },
+  emoji: { fontSize: 22 },
+  divider: { height: 0.5, backgroundColor: Colors.border, marginVertical: 8 },
+  action: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 8 },
+  actionText: { color: Colors.text, fontSize: 16 },
+});
+
+const profileStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    paddingHorizontal: 20, paddingBottom: 48, paddingTop: 4,
+    alignItems: 'center',
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: Colors.surfaceHighlight,
+    alignSelf: 'center', marginBottom: 20,
+  },
+  avatarWrap: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: Colors.accentDim,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 12,
+  },
+  avatarText: { color: Colors.accent, fontSize: 28, fontWeight: '800' },
+  name: { color: Colors.text, fontSize: 20, fontWeight: '700', marginBottom: 8 },
+  badgeRow: { flexDirection: 'row', gap: 8, marginBottom: 24, flexWrap: 'wrap', justifyContent: 'center' },
+  badge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
+  badgeText: { fontSize: 12, fontWeight: '600' },
+  fields: { width: '100%', gap: 12 },
+  field: {
+    backgroundColor: Colors.surfaceLight, borderRadius: 14,
+    padding: 14, borderWidth: 0.5, borderColor: Colors.border,
+  },
+  fieldLabel: { color: Colors.textMuted, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 },
+  fieldRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  fieldValue: { color: Colors.text, fontSize: 14, fontFamily: 'monospace', flex: 1, marginRight: 8 },
+  copiedHint: { color: Colors.accent, fontSize: 11, marginTop: 4, fontWeight: '600' },
 });
 
 const cashuStyles = StyleSheet.create({
