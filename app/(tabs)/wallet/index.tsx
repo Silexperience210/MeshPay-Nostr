@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   Animated,
   Dimensions,
@@ -1041,39 +1042,30 @@ function CashuBalanceCard({
             Select tokens to redeem ({selectedTokens.length} selected):
           </Text>
           
-          <ScrollView style={styles.tokenList}>
-            {tokens.map((token) => (
+          <FlatList
+            style={styles.tokenList}
+            data={tokens}
+            keyExtractor={(t) => t.id}
+            removeClippedSubviews
+            initialNumToRender={8}
+            renderItem={({ item: token }) => (
               <TouchableOpacity
-                key={token.id}
-                style={[
-                  styles.tokenItem,
-                  selectedTokens.includes(token.id) && styles.tokenItemSelected
-                ]}
-                onPress={() => {
-                  setSelectedTokens(prev =>
-                    prev.includes(token.id)
-                      ? prev.filter(id => id !== token.id)
-                      : [...prev, token.id]
-                  );
-                }}
+                style={[styles.tokenItem, selectedTokens.includes(token.id) && styles.tokenItemSelected]}
+                onPress={() => setSelectedTokens(prev =>
+                  prev.includes(token.id) ? prev.filter(id => id !== token.id) : [...prev, token.id]
+                )}
               >
                 <View style={styles.tokenCheckbox}>
-                  {selectedTokens.includes(token.id) && (
-                    <View style={styles.tokenCheckboxChecked} />
-                  )}
+                  {selectedTokens.includes(token.id) && <View style={styles.tokenCheckboxChecked} />}
                 </View>
                 <View style={styles.tokenInfo}>
                   <Text style={styles.tokenAmount}>{token.amount} sats</Text>
-                  <Text style={styles.tokenMint} numberOfLines={1}>
-                    {token.mintUrl.replace('https://', '')}
-                  </Text>
-                  {token.unverified && (
-                    <Text style={styles.tokenUnverified}>⚠️ Unverified</Text>
-                  )}
+                  <Text style={styles.tokenMint} numberOfLines={1}>{token.mintUrl.replace('https://', '')}</Text>
+                  {token.unverified && <Text style={styles.tokenUnverified}>⚠️ Unverified</Text>}
                 </View>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
+            )}
+          />
           
           <View style={styles.meltActions}>
             <TouchableOpacity
@@ -1243,36 +1235,29 @@ function CashuBalanceCard({
                     .reduce((s, t) => s + t.amount, 0)
                 } sats):
               </Text>
-              <ScrollView style={styles.tokenList}>
-                {tokens.filter(t => t.state === 'unspent').map((token) => (
+              <FlatList
+                style={styles.tokenList}
+                data={tokens.filter(t => t.state === 'unspent')}
+                keyExtractor={(t) => t.id}
+                removeClippedSubviews
+                initialNumToRender={8}
+                renderItem={({ item: token }) => (
                   <TouchableOpacity
-                    key={token.id}
-                    style={[
-                      styles.tokenItem,
-                      sendSelectedTokens.includes(token.id) && styles.tokenItemSelected,
-                    ]}
-                    onPress={() => {
-                      setSendSelectedTokens(prev =>
-                        prev.includes(token.id)
-                          ? prev.filter(id => id !== token.id)
-                          : [...prev, token.id]
-                      );
-                    }}
+                    style={[styles.tokenItem, sendSelectedTokens.includes(token.id) && styles.tokenItemSelected]}
+                    onPress={() => setSendSelectedTokens(prev =>
+                      prev.includes(token.id) ? prev.filter(id => id !== token.id) : [...prev, token.id]
+                    )}
                   >
                     <View style={styles.tokenCheckbox}>
-                      {sendSelectedTokens.includes(token.id) && (
-                        <View style={styles.tokenCheckboxChecked} />
-                      )}
+                      {sendSelectedTokens.includes(token.id) && <View style={styles.tokenCheckboxChecked} />}
                     </View>
                     <View style={styles.tokenInfo}>
                       <Text style={styles.tokenAmount}>{token.amount} sats</Text>
-                      <Text style={styles.tokenMint} numberOfLines={1}>
-                        {token.mintUrl.replace('https://', '')}
-                      </Text>
+                      <Text style={styles.tokenMint} numberOfLines={1}>{token.mintUrl.replace('https://', '')}</Text>
                     </View>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                )}
+              />
               <View style={styles.meltActions}>
                 <TouchableOpacity
                   style={styles.meltCancelBtn}

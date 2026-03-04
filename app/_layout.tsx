@@ -22,8 +22,11 @@ import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
+import { registerBackgroundTasks } from "@/services/BackgroundTaskService";
 
 SplashScreen.preventAutoHideAsync();
+// Enregistrer les tâches background au plus tôt (avant le premier render)
+registerBackgroundTasks();
 
 const queryClient = new QueryClient();
 const ONBOARDING_KEY = 'BITMESH_ONBOARDING_DONE';

@@ -352,7 +352,7 @@ function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; image
   );
 }
 
-function MessageBubble({ message, displayName, onLongPress, onCashuPress, onSenderTap, reactions, onReactionPress }: {
+const MessageBubble = React.memo(function MessageBubble({ message, displayName, onLongPress, onCashuPress, onSenderTap, reactions, onReactionPress }: {
   message: StoredMessage;
   displayName?: string;
   onLongPress?: () => void;
@@ -447,7 +447,12 @@ function MessageBubble({ message, displayName, onLongPress, onCashuPress, onSend
       )}
     </View>
   );
-}
+// Comparateur custom : re-render seulement si les données changent, pas les callbacks
+}, (prev, next) =>
+  prev.message === next.message &&
+  prev.displayName === next.displayName &&
+  prev.reactions === next.reactions
+);
 
 // Modal d'envoi d'un token Cashu
 function CashuSendModal({
@@ -951,6 +956,11 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          windowSize={8}
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews={true}
           ListEmptyComponent={
             <View style={styles.emptyChat}>
               <Lock size={32} color={Colors.textMuted} />

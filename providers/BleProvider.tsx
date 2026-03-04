@@ -7,7 +7,7 @@
  * V2.0: Utilise MessageRetryService pour persistance des messages
  */
 
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Platform, PermissionsAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BleGatewayClient, getBleGatewayClient, BleGatewayDevice, BleDeviceInfo } from '@/utils/ble-gateway';
@@ -61,6 +61,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const retryServiceRef = useRef(getMessageRetryService());
   // Handler en attente : enregistré avant que le client BLE soit initialisé
   const pendingPacketHandlerRef = useRef<((packet: MeshCorePacket) => void) | null>(null);
+  // Ref pour accéder à state.connected dans les callbacks sans les recréer
+  const connectedRef = useRef(false);
+  useEffect(() => { connectedRef.current = state.connected; }, [state.connected]);
 
   useEffect(() => {
     // Initialiser le client BLE
@@ -180,7 +183,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
    * Si le client n'est pas encore initialisé (BT était off au démarrage),
    * on re-tente l'initialisation avant de lancer le scan.
    */
-  const scanForGateways = async () => {
+  const scanForGateways = useCallback(async () => {
     // Re-init si le client n'est pas prêt (BT off au démarrage, permissions tardives…)
     if (!clientRef.current) {
       try {
@@ -226,12 +229,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       }));
       throw error;
     }
-  };
+  }, []);
 
   /**
    * Connecte à un gateway
    */
-  const connectToGateway = async (deviceId: string) => {
+  const connectToGateway = useCallback(async (deviceId: string) => {
     if (!clientRef.current) {
       throw new Error('BLE not initialized');
     }
@@ -297,12 +300,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     console.error(`[BleProvider] Connexion échouée après ${MAX_RETRIES} tentatives`);
     setState((prev) => ({ ...prev, error: finalMsg }));
     throw lastError;
-  };
+  }, []);
 
   /**
    * Déconnecte du gateway
    */
-  const disconnectGateway = async () => {
+  const disconnectGateway = useCallback(async () => {
     if (!clientRef.current) return;
 
     try {
@@ -326,14 +329,14 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         error: error.message || 'Disconnect failed',
       }));
     }
-  };
+  }, []);
 
   /**
    * Envoie un paquet MeshCore via BLE → LoRa avec timeout
    * Si déconnecté, ajoute à la file d'attente persistante
    */
-  const sendPacket = async (packet: MeshCorePacket, timeoutMs = 10000) => {
-    if (!clientRef.current || !state.connected) {
+  const sendPacket = useCallback(async (packet: MeshCorePacket, timeoutMs = 10000) => {
+    if (!clientRef.current || !connectedRef.current) {
       // Si déconnecté, ajouter à la file persistante
       const msgId = `pending-${Date.now()}`;
       await retryServiceRef.current.queueMessage(msgId, packet);
@@ -356,39 +359,31 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
       console.log(`[BleProvider] Échec envoi, message en file d'attente: ${msgId}`);
       throw error;
     }
-  };
+  }, []);
 
   /**
    * Enregistre un handler pour les paquets entrants.
-   * Wrappé pour marquer loraActive=true dès le premier paquet reçu.
-   *
-   * Si le client BLE n'est pas encore initialisé, le handler est mis en attente
-   * et sera appliqué automatiquement dès que le client sera prêt.
    * Chaque appel remplace le handler précédent (design single-handler).
    */
-  const onPacket = (handler: (packet: MeshCorePacket) => void) => {
-    // Toujours mémoriser le dernier handler (remplace le précédent)
+  const onPacket = useCallback((handler: (packet: MeshCorePacket) => void) => {
     pendingPacketHandlerRef.current = handler;
-
     if (clientRef.current) {
       clientRef.current.onMessage((packet) => {
-        // Premier paquet reçu = confirmation que le relay LoRa fonctionne
         setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
-        // Appel via ref : garantit que la version la plus récente du handler est utilisée
         pendingPacketHandlerRef.current?.(packet);
       });
     }
-    // Si clientRef.current === null, le handler sera appliqué dans le useEffect d'init
-  };
+  }, []);
 
   /**
-   * Marque explicitement LoRa comme actif (appelé par MessagesProvider après envoi/réception BLE)
+   * Marque explicitement LoRa comme actif
    */
-  const confirmLoraActive = () => {
+  const confirmLoraActive = useCallback(() => {
     setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
-  };
+  }, []);
 
-  const contextValue: BleContextValue = {
+  // Valeur stable : ne force pas de re-render des consommateurs si l'état n'a pas changé
+  const contextValue = useMemo<BleContextValue>(() => ({
     ...state,
     scanForGateways,
     connectToGateway,
@@ -396,7 +391,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     sendPacket,
     onPacket,
     confirmLoraActive,
-  };
+  }), [state, scanForGateways, connectToGateway, disconnectGateway, sendPacket, onPacket, confirmLoraActive]);
 
   return <BleContext.Provider value={contextValue}>{children}</BleContext.Provider>;
 }

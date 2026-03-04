@@ -117,6 +117,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const PENDING_PACKET_TTL_MS = 5 * 60 * 1000;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
+  // Debounce pour les mises à jour radar (évite un re-render par peer simultané)
+  const radarDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addToDedup = (id: string) => {
     recentMsgIds.current.add(id);
     if (recentMsgIds.current.size > 200) {
@@ -770,11 +772,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         signalStrength: distanceToSignal(distanceMeters),
       };
 
-      setRadarPeers(prev => {
-        const filtered = prev.filter(p => p.nodeId !== peer.nodeId);
-        if (!peer.online && filtered.length === prev.length) return prev;
-        return peer.online ? [peer, ...filtered] : filtered;
-      });
+      // Debounce 250ms : évite un re-render par peer si plusieurs arrivent simultanément
+      if (radarDebounceRef.current) clearTimeout(radarDebounceRef.current);
+      const capturedPeer = peer;
+      radarDebounceRef.current = setTimeout(() => {
+        setRadarPeers(prev => {
+          const filtered = prev.filter(p => p.nodeId !== capturedPeer.nodeId);
+          if (!capturedPeer.online && filtered.length === prev.length) return prev;
+          return capturedPeer.online ? [capturedPeer, ...filtered] : filtered;
+        });
+      }, 250);
 
       console.log('[Nostr→Radar] Présence reçue:', peer.nodeId, peer.online ? '●' : '○',
         peer.lat ? `${peer.lat.toFixed(3)},${peer.lng?.toFixed(3)}` : '(no GPS)');
@@ -801,11 +808,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   useEffect(() => {
     async function verifyUnverifiedTokens() {
       try {
-        const unverified = await getUnverifiedCashuTokens();
+        const allUnverified = await getUnverifiedCashuTokens();
+        if (allUnverified.length === 0) return;
+        // Limite : max 5 tokens par cycle, et on saute ceux qui ont déjà trop échoué
+        const unverified = allUnverified
+          .filter(t => (t.retryCount ?? 0) < 10)
+          .slice(0, 5);
         if (unverified.length === 0) return;
-        
-        console.log('[Cashu] Vérification de', unverified.length, 'tokens unverified');
-        
+
+        console.log('[Cashu] Vérification de', unverified.length, '/', allUnverified.length, 'tokens');
+
         for (const token of unverified) {
           try {
             const verification = await verifyCashuToken(token.token);

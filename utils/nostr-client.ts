@@ -201,6 +201,11 @@ export class NostrClient {
   private relayStatus = new Map<string, RelayStatus>();
   private offlineQueue: PendingEvent[] = [];
   private onStatusChange?: (relays: RelayInfo[]) => void;
+  // Auto-reconnect avec backoff exponentiel
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reconnectDelay = 2000; // commence à 2s, double jusqu'à 30s
+  private _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  private _intentionalDisconnect = false;
 
   constructor(relayUrls?: string[]) {
     this.pool = new SimplePool();
@@ -272,14 +277,68 @@ export class NostrClient {
 
     // Renvoyer les events en attente
     await this._drainOfflineQueue();
+
+    // Lancer le keep-alive : ping toutes les 30s, reconnecte si mort
+    this._startKeepAlive();
   }
 
   disconnect(): void {
+    this._intentionalDisconnect = true;
+    this._stopKeepAlive();
     this.pool.close(this.relayUrls);
     for (const url of this.relayUrls) {
       this.relayStatus.set(url, 'disconnected');
     }
     this._notifyStatus();
+  }
+
+  private _startKeepAlive(): void {
+    this._stopKeepAlive();
+    this._intentionalDisconnect = false;
+    this._reconnectDelay = 2000;
+    // Vérifie toutes les 30s si on est encore connecté
+    this._keepAliveTimer = setInterval(() => {
+      if (!this.isConnected && !this._intentionalDisconnect && this.relayUrls.length > 0) {
+        this._scheduleReconnect();
+      }
+    }, 30000);
+  }
+
+  private _stopKeepAlive(): void {
+    if (this._keepAliveTimer) {
+      clearInterval(this._keepAliveTimer);
+      this._keepAliveTimer = null;
+    }
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+  }
+
+  private _scheduleReconnect(): void {
+    if (this._reconnectTimer || this._intentionalDisconnect) return;
+    const delay = this._reconnectDelay;
+    // Backoff exponentiel : 2s → 4s → 8s → 16s → 30s max
+    this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30000);
+    console.log(`[Nostr] Reconnexion dans ${delay / 1000}s…`);
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      if (this._intentionalDisconnect || this.isConnected) return;
+      try {
+        // Recréer le pool pour éviter les WS zombies
+        this.pool = new SimplePool();
+        for (const url of this.relayUrls) {
+          this.relayStatus.set(url, 'connecting');
+        }
+        this._notifyStatus();
+        await this.connect(this.relayUrls);
+        // Reconnexion réussie : reset delay
+        this._reconnectDelay = 2000;
+        console.log('[Nostr] Reconnexion réussie');
+      } catch {
+        console.warn('[Nostr] Reconnexion échouée, retry dans', this._reconnectDelay / 1000, 's');
+      }
+    }, delay);
   }
 
   get isConnected(): boolean {
