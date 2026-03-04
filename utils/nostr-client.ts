@@ -202,8 +202,9 @@ export class NostrClient {
   private offlineQueue: PendingEvent[] = [];
   private onStatusChange?: (relays: RelayInfo[]) => void;
 
-  constructor() {
+  constructor(relayUrls?: string[]) {
     this.pool = new SimplePool();
+    if (relayUrls) this.relayUrls = relayUrls;
   }
 
   // ── Configuration ──────────────────────────────────────────────────────────
@@ -246,7 +247,7 @@ export class NostrClient {
       try {
         const sub = this.pool.subscribeMany(
           this.relayUrls,
-          [{ kinds: [Kind.Text], limit: 1 }],
+          { kinds: [Kind.Text], limit: 1 },
           {
             oneose: () => {
               clearTimeout(timeout);
@@ -336,23 +337,34 @@ export class NostrClient {
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
   ): () => void {
-    const sub = this.pool.subscribeMany(this.relayUrls, filters, {
-      onevent: (event) => {
-        // Double validation : hash + signature (verifyEvent seul ne vérifie pas le hash)
-        if (getEventHash(event) !== event.id) {
-          console.warn('[Nostr] Hash/ID invalide — event ignoré:', event.id.slice(0, 12));
-          return;
-        }
-        if (!verifyEvent(event)) {
-          console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
-          return;
-        }
-        onEvent(event);
-      },
-      oneose: onEOSE,
-    });
+    const handler = (event: NostrEvent): void => {
+      // Double validation : hash + signature (verifyEvent seul ne vérifie pas le hash)
+      if (getEventHash(event) !== event.id) {
+        console.warn('[Nostr] Hash/ID invalide — event ignoré:', event.id.slice(0, 12));
+        return;
+      }
+      if (!verifyEvent(event)) {
+        console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
+        return;
+      }
+      onEvent(event);
+    };
 
-    return () => sub.close();
+    // nostr-tools v2.23+ : subscribeMany prend un Filter unique — on crée une sub par filtre
+    let eoseFired = 0;
+    const subs = filters.map((filter, idx) =>
+      this.pool.subscribeMany(this.relayUrls, filter, {
+        onevent: handler,
+        oneose: onEOSE
+          ? () => {
+              eoseFired++;
+              if (eoseFired === filters.length) onEOSE();
+            }
+          : undefined,
+      })
+    );
+
+    return () => { for (const s of subs) s.close(); };
   }
 
   // ── NIP-44 : DMs chiffrés (ChaCha20-Poly1305) ────────────────────────────
