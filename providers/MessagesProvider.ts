@@ -72,6 +72,7 @@ export interface MessagesState {
   // Actions
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
   sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
+  sendImage: (convId: string, base64: string, mime: string) => Promise<void>;
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string, peerPubkey?: string) => Promise<void>;
@@ -1137,6 +1138,50 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     ));
   }, [identity, conversations, nostrClient]);
 
+  // Envoyer une image (base64 jpeg/png)
+  const sendImage = useCallback(async (
+    convId: string,
+    base64: string,
+    mime: string
+  ): Promise<void> => {
+    if (!identity) throw new Error('Identité non disponible');
+    if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
+
+    const imagePayload = `IMAGE:${mime}|${base64}`;
+    const imageLabel = '📷 Image';
+    const msgId = generateMsgId();
+    const ts = Date.now();
+
+    const conv = conversations.find(c => c.id === convId);
+    if (conv?.peerPubkey) {
+      const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
+      if (pk.length === 64) {
+        await nostrClient.publishDMSealed(pk, imagePayload);
+      }
+    }
+
+    const msg: StoredMessage = {
+      id: msgId,
+      conversationId: convId,
+      fromNodeId: identity.nodeId,
+      fromPubkey: identity.pubkeyHex,
+      text: imageLabel,
+      type: 'image',
+      imageData: base64,
+      imageMime: mime,
+      timestamp: ts,
+      isMine: true,
+      status: 'sent',
+      transport: 'nostr',
+    };
+    await saveMessage(msg);
+    await updateConversationLastMessage(convId, imageLabel, ts, false);
+    setMessagesByConv(prev => ({ ...prev, [convId]: [...(prev[convId] ?? []), msg] }));
+    setConversations(prev => prev.map(c =>
+      c.id === convId ? { ...c, lastMessage: imageLabel, lastMessageTime: ts } : c
+    ));
+  }, [identity, conversations, nostrClient]);
+
   // Envoyer un Cashu token
   const sendCashu = useCallback(async (
     convId: string,
@@ -1421,6 +1466,51 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         }
       }
 
+      // ── Détection image (IMAGE:<mime>|<base64>) ─────────────────────────────
+      if (content.startsWith('IMAGE:')) {
+        const payload = content.slice(6);
+        const sep = payload.indexOf('|');
+        if (sep > 0) {
+          const imageMime = payload.slice(0, sep);
+          const imageBase64 = payload.slice(sep + 1);
+          if (imageBase64 && imageMime) {
+            const imageMsg: StoredMessage = {
+              id: msg.id,
+              conversationId: fromId,
+              fromNodeId: fromId,
+              fromPubkey: msg.fromPubkey,
+              text: '📷 Image',
+              type: 'image',
+              imageData: imageBase64,
+              imageMime: imageMime,
+              timestamp: msg.ts,
+              isMine: false,
+              status: 'delivered',
+              transport: msg.transport as 'nostr' | 'lora' | 'ble',
+            };
+            await saveMessage(imageMsg);
+            await updateConversationLastMessage(fromId, '📷 Image', msg.ts, true);
+            setMessagesByConv(prev => ({ ...prev, [fromId]: [...(prev[fromId] ?? []), imageMsg] }));
+            setConversations(prev => {
+              const exists = prev.find(c => c.id === fromId);
+              if (!exists) {
+                const newConv: StoredConversation = {
+                  id: fromId, name: fromId, isForum: false, peerPubkey: msg.fromPubkey,
+                  lastMessage: '📷 Image', lastMessageTime: msg.ts, unreadCount: 1, online: true,
+                };
+                saveConversation(newConv);
+                return [newConv, ...prev];
+              }
+              return prev.map(c => c.id !== fromId ? c : {
+                ...c, lastMessage: '📷 Image', lastMessageTime: msg.ts,
+                unreadCount: c.unreadCount + 1, peerPubkey: msg.fromPubkey || c.peerPubkey, online: true,
+              });
+            });
+            return;
+          }
+        }
+      }
+
       if (content.startsWith('cashuA')) {
         msgType = 'cashu';
         const parsed = parseCashuAmount(content);
@@ -1513,6 +1603,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     myLocation,
     sendMessage,
     sendAudio,
+    sendImage,
     sendCashu,
     loadConversationMessages,
     startConversation,

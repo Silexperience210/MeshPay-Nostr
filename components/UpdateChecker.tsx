@@ -68,8 +68,15 @@ export function UpdateChecker() {
         Alert.alert('À jour', 'Vous utilisez la dernière version disponible.');
       }
     } catch (err: unknown) {
-      console.error('[Update] Erreur vérification:', err);
-      Alert.alert('Erreur', 'Impossible de vérifier les mises à jour.');
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn('[Update] Erreur vérification:', msg);
+      // Ignorer les erreurs de config OTA (update URL non configurée)
+      const isConfigError = msg.includes('expo-updates') || msg.includes('update URL') ||
+        msg.includes('not configured') || msg.includes('EXUpdates') ||
+        msg.includes('manifest') || msg.includes('No updates');
+      if (!isConfigError) {
+        Alert.alert('Erreur réseau', 'Impossible de joindre le serveur de mises à jour.');
+      }
     } finally {
       setChecking(false);
     }

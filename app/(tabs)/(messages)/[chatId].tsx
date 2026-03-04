@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TextInput,
-  TouchableOpacity, Pressable, KeyboardAvoidingView, Platform,
+  TouchableOpacity, KeyboardAvoidingView, Platform,
   ActivityIndicator, Modal, Alert, Image, Animated,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { useHeaderHeight } from '@react-navigation/elements';
 import * as Clipboard from 'expo-clipboard';
 import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, ChevronDown } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import Colors from '@/constants/colors';
 import { formatMessageTime } from '@/utils/helpers';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
@@ -587,7 +588,7 @@ export default function ChatScreen() {
   const { chatId } = useLocalSearchParams<{ chatId: string }>();
   const convId = decodeURIComponent(chatId ?? '');
   const { settings, isLoRaMode } = useAppSettings();
-  const { conversations, messagesByConv, sendMessage, sendAudio, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
+  const { conversations, messagesByConv, sendMessage, sendAudio, sendImage, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
   const ble = useBle();
 
@@ -784,14 +785,45 @@ export default function ChatScreen() {
     setProfileSheet({ nodeId: item.fromNodeId, pubkey: contact?.pubkeyHex, name });
   }, [contactNameMap, contacts]);
 
-  const handlePickMedia = useCallback(() => {
+  const handlePickMedia = useCallback(async () => {
     if (isRecording || isSendingMedia) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Alert.alert(
-      'Médias non disponibles',
-      'L\'envoi de médias nécessite une connexion dédiée. Fonctionnalité à venir.'
-    );
-  }, [isRecording, isSendingMedia]);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission requise', "L'accès à la galerie est nécessaire pour envoyer des images.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      if (!asset.base64) {
+        Alert.alert('Erreur', "Impossible de lire l'image.");
+        return;
+      }
+      // Vérifier la taille (~300 KB max pour NIP-17 DM)
+      if (asset.base64.length > 400000) {
+        Alert.alert('Image trop volumineuse', 'Choisissez une image plus petite (max ~300 KB).');
+        return;
+      }
+      const mime = asset.mimeType ?? 'image/jpeg';
+      setIsSendingMedia(true);
+      try {
+        await sendImage(convId, asset.base64, mime);
+      } finally {
+        setIsSendingMedia(false);
+      }
+    } catch (err) {
+      setIsSendingMedia(false);
+      const msg = err instanceof Error ? err.message : 'Erreur';
+      Alert.alert('Erreur', msg);
+    }
+  }, [isRecording, isSendingMedia, convId, sendImage]);
 
   const handleMicPressOut = useCallback(async (sendIt = true) => {
     if (!recordingRef.current) return;
@@ -888,7 +920,7 @@ export default function ChatScreen() {
       />
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         keyboardVerticalOffset={headerHeight}
       >
         <View style={styles.meshInfo}>
@@ -918,6 +950,7 @@ export default function ChatScreen() {
           contentContainerStyle={styles.messagesList}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           ListEmptyComponent={
             <View style={styles.emptyChat}>
               <Lock size={32} color={Colors.textMuted} />
@@ -1032,13 +1065,13 @@ export default function ChatScreen() {
                 : <Send size={18} color={Colors.black} />}
             </TouchableOpacity>
           ) : (
-            <Pressable
+            <TouchableOpacity
               style={[styles.sendButton, isRecording ? styles.micButtonRecording : styles.micButton]}
-              onPressIn={handleMicPressIn}
-              onPressOut={() => handleMicPressOut(true)}
+              onPress={isRecording ? () => void handleMicPressOut(true) : () => void handleMicPressIn()}
+              activeOpacity={0.7}
             >
               <Mic size={18} color={isRecording ? Colors.white : Colors.textMuted} />
-            </Pressable>
+            </TouchableOpacity>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -1166,7 +1199,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1, backgroundColor: Colors.surfaceLight, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 10, color: Colors.text,
-    fontSize: 15, maxHeight: 100, borderWidth: 0.5, borderColor: Colors.border,
+    fontSize: 15, minHeight: 40, maxHeight: 100, borderWidth: 0.5, borderColor: Colors.border,
   },
   sendButton: {
     width: 36, height: 36, borderRadius: 18,
