@@ -84,6 +84,111 @@ import { writeCashuTokenToNFC, readCashuTokenFromNFC, isNFCAvailable } from '@/u
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// ─── CashuActionBtn : bouton futuriste icône + label ──────────────────────
+function CashuActionBtn({
+  icon,
+  label,
+  onPress,
+  primary,
+  testID,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  primary?: boolean;
+  testID?: string;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const glowOpacity = useRef(new Animated.Value(0)).current;
+  const glowScale = useRef(new Animated.Value(0.6)).current;
+
+  const handlePressIn = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scale, { toValue: 0.88, useNativeDriver: true, speed: 50, bounciness: 0 }),
+      Animated.timing(glowOpacity, { toValue: 1, duration: 60, useNativeDriver: true }),
+      Animated.spring(glowScale, { toValue: 1.45, useNativeDriver: true, speed: 30, bounciness: 6 }),
+    ]).start();
+  }, [scale, glowOpacity, glowScale]);
+
+  const handlePressOut = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 30, bounciness: 12 }),
+      Animated.timing(glowOpacity, { toValue: 0, duration: 350, useNativeDriver: true }),
+      Animated.spring(glowScale, { toValue: 0.6, useNativeDriver: true, speed: 20, bounciness: 0 }),
+    ]).start();
+  }, [scale, glowOpacity, glowScale]);
+
+  return (
+    <TouchableOpacity
+      style={btnStyles.item}
+      activeOpacity={1}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onPress={onPress}
+      testID={testID}
+    >
+      <Animated.View style={{ transform: [{ scale }] }}>
+        {/* Glow ring animé */}
+        <Animated.View style={[
+          btnStyles.glowRing,
+          primary ? btnStyles.glowRingPrimary : btnStyles.glowRingAlt,
+          { opacity: glowOpacity, transform: [{ scale: glowScale }] },
+        ]} />
+        {/* Icône circulaire */}
+        <View style={[btnStyles.iconCircle, primary ? btnStyles.iconCirclePrimary : btnStyles.iconCircleAlt]}>
+          {icon}
+        </View>
+      </Animated.View>
+      <Text style={btnStyles.label}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const btnStyles = StyleSheet.create({
+  item: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 7,
+  },
+  glowRing: {
+    position: 'absolute',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+  },
+  glowRingAlt: {
+    borderColor: 'rgba(34,211,238,0.85)',
+    backgroundColor: 'rgba(34,211,238,0.12)',
+  },
+  glowRingPrimary: {
+    borderColor: 'rgba(34,211,238,1)',
+    backgroundColor: 'rgba(34,211,238,0.25)',
+  },
+  iconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconCircleAlt: {
+    backgroundColor: 'rgba(34,211,238,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.25)',
+  },
+  iconCirclePrimary: {
+    backgroundColor: 'rgba(34,211,238,1)',
+    borderWidth: 0,
+  },
+  label: {
+    color: '#e2e8f0',
+    fontSize: 11,
+    fontWeight: '600' as const,
+    textAlign: 'center' as const,
+  },
+});
+
 type WalletTab = 'bitcoin' | 'cashu';
 
 function WalletTabSelector({
@@ -811,71 +916,57 @@ function CashuBalanceCard({
       )}
 
       <View style={styles.balanceActions}>
-        <TouchableOpacity
-          style={styles.cashuActionButton}
-          activeOpacity={0.7}
+        <CashuActionBtn
+          primary
+          testID="mint-cashu-button"
+          icon={<Plus size={20} color={Colors.black} />}
+          label="Mint"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             setShowMintQuote(prev => !prev);
             setMintQuote(null);
             setMintAmount('');
           }}
-          testID="mint-cashu-button"
-        >
-          <Plus size={18} color={Colors.black} />
-          <Text style={styles.cashuActionText}>Mint</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.cashuActionButtonAlt}
-          activeOpacity={0.7}
+        />
+        <CashuActionBtn
+          testID="send-cashu-button"
+          icon={<ArrowUpRight size={20} color={Colors.cyan} />}
+          label="Send"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             setGeneratedSendToken(null);
             setSendSelectedTokens([]);
             setShowSendModal(true);
           }}
-          testID="send-cashu-button"
-        >
-          <ArrowUpRight size={18} color={Colors.cyan} />
-          <Text style={styles.cashuActionTextAlt}>Send</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.cashuActionButtonAlt}
-          activeOpacity={0.7}
+        />
+        <CashuActionBtn
+          testID="receive-cashu-button"
+          icon={<ArrowDownLeft size={20} color={Colors.cyan} />}
+          label="Import"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             setReceiveInput('');
             setShowReceiveModal(true);
           }}
-          testID="receive-cashu-button"
-        >
-          <ArrowDownLeft size={18} color={Colors.cyan} />
-          <Text style={styles.cashuActionTextAlt}>Import</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.cashuActionButtonAlt}
-          activeOpacity={0.7}
+        />
+        <CashuActionBtn
+          testID="melt-cashu-button"
+          icon={<Zap size={20} color={Colors.cyan} />}
+          label="Melt"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             setShowMeltModal(true);
           }}
-          testID="melt-cashu-button"
-        >
-          <Zap size={18} color={Colors.cyan} />
-          <Text style={styles.cashuActionTextAlt}>Melt</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.cashuActionButtonAlt}
-          activeOpacity={0.7}
+        />
+        <CashuActionBtn
+          testID="consolidate-cashu-button"
+          icon={<ArrowRightLeft size={20} color={Colors.cyan} />}
+          label="Pack"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             handleSwap();
           }}
-          testID="consolidate-cashu-button"
-        >
-          <ArrowRightLeft size={18} color={Colors.cyan} />
-          <Text style={styles.cashuActionTextAlt}>Pack</Text>
-        </TouchableOpacity>
+        />
       </View>
 
       {showMintQuote && (
@@ -2043,8 +2134,9 @@ const styles = StyleSheet.create({
   },
   balanceActions: {
     flexDirection: 'row',
-    gap: 10,
+    justifyContent: 'space-around',
     marginTop: 20,
+    paddingHorizontal: 4,
   },
   actionButton: {
     flex: 1,
@@ -2081,6 +2173,33 @@ const styles = StyleSheet.create({
   actionButtonTextDisabled: {
     color: Colors.textMuted,
   },
+  // Nouveau layout wallet-style : icône circulaire + label dessous
+  cashuActionItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 6,
+  },
+  cashuActionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.cyanDim,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 211, 238, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cashuActionIconPrimary: {
+    backgroundColor: Colors.cyan,
+    borderColor: Colors.cyan,
+  },
+  cashuActionLabel: {
+    color: Colors.text,
+    fontSize: 11,
+    fontWeight: '600' as const,
+    textAlign: 'center' as const,
+  },
+  // Anciens styles conservés pour compatibilité
   cashuActionButton: {
     flex: 1,
     flexDirection: 'row',
