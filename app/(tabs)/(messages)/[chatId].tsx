@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   View, Text, StyleSheet, FlatList, TextInput,
   TouchableOpacity, Pressable, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Modal, Alert, Image,
+  ActivityIndicator, Modal, Alert, Image, Animated,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useHeaderHeight } from '@react-navigation/elements';
@@ -26,6 +26,8 @@ import {
   playAudioBase64,
   formatDuration,
   AUDIO_MAX_DURATION_MS,
+  WAVEFORM_PROFILE,
+  encodeVoiceMessage,
 } from '@/utils/audio';
 import type { Audio } from 'expo-av';
 
@@ -189,56 +191,127 @@ function CashuBubble({ amount, received }: { amount: number; received?: boolean 
   );
 }
 
+// Périodes d'animation par barre — différentes pour un effet organique non-robotique
+const BAR_PERIODS = [185, 215, 162, 235, 178, 202, 190, 245, 168, 198, 218, 174, 208, 192, 182, 225];
+
 function AudioBubble({ audioData, audioDuration, isMe }: { audioData?: string; audioDuration?: number; isMe: boolean }) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0); // 0.0 → 1.0
   const soundRef = useRef<Audio.Sound | null>(null);
+  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Un Animated.Value par barre, initialisé au profil statique
+  const barAnims = useRef(
+    WAVEFORM_PROFILE.map(h => new Animated.Value(h))
+  ).current;
+
+  // Démarrer / arrêter les animations de barres selon l'état de lecture
+  useEffect(() => {
+    if (!isPlaying) {
+      WAVEFORM_PROFILE.forEach((h, i) => barAnims[i].setValue(h));
+      return;
+    }
+    // Chaque barre boucle indépendamment avec sa propre période
+    const loops = barAnims.map((anim, i) => {
+      const base = WAVEFORM_PROFILE[i];
+      const period = BAR_PERIODS[i];
+      return Animated.loop(
+        Animated.sequence([
+          Animated.timing(anim, { toValue: Math.min(1.0, base + 0.42), duration: period, useNativeDriver: false }),
+          Animated.timing(anim, { toValue: Math.max(0.12, base - 0.28), duration: Math.round(period * 0.75), useNativeDriver: false }),
+        ])
+      );
+    });
+    // Démarrage en escalier : cascade gauche → droite (30ms entre chaque barre)
+    const timeouts = loops.map((loop, i) => {
+      const t = setTimeout(() => loop.start(), i * 30);
+      return { loop, t };
+    });
+    return () => {
+      for (const { loop, t } of timeouts) { clearTimeout(t); loop.stop(); }
+      WAVEFORM_PROFILE.forEach((h, i) => barAnims[i].setValue(h));
+    };
+  }, [isPlaying]);
 
   const handlePlay = useCallback(async () => {
     if (!audioData) return;
     if (isPlaying) {
-      soundRef.current?.stopAsync();
+      await soundRef.current?.stopAsync();
+      if (progressTimerRef.current) clearInterval(progressTimerRef.current);
       setIsPlaying(false);
+      setProgress(0);
+      soundRef.current = null;
       return;
     }
     setIsPlaying(true);
+    setProgress(0);
     try {
       const sound = await playAudioBase64(audioData, () => {
+        if (progressTimerRef.current) clearInterval(progressTimerRef.current);
         setIsPlaying(false);
+        setProgress(0);
         soundRef.current = null;
       });
       soundRef.current = sound;
+      // Suivi de la position toutes les 100ms pour colorier les barres "jouées"
+      progressTimerRef.current = setInterval(async () => {
+        if (!soundRef.current || !audioDuration) return;
+        try {
+          const st = await soundRef.current.getStatusAsync();
+          if (st.isLoaded) setProgress(Math.min(1, (st.positionMillis ?? 0) / audioDuration));
+        } catch {}
+      }, 100);
     } catch {
       setIsPlaying(false);
     }
-  }, [audioData, isPlaying]);
+  }, [audioData, isPlaying, audioDuration]);
 
-  useEffect(() => {
-    return () => { soundRef.current?.unloadAsync().catch(() => {}); };
+  useEffect(() => () => {
+    soundRef.current?.unloadAsync().catch(() => {});
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
   }, []);
 
   const duration = audioDuration ?? 0;
+  const playedBars = Math.floor(progress * WAVEFORM_PROFILE.length);
 
   return (
     <View style={styles.audioBubble}>
-      <TouchableOpacity onPress={handlePlay} style={[styles.audioPlayBtn, isMe && styles.audioPlayBtnMe]} activeOpacity={0.7}>
+      {/* Bouton Play / Stop */}
+      <TouchableOpacity
+        onPress={() => void handlePlay()}
+        style={[styles.audioPlayBtn, isMe && styles.audioPlayBtnMe]}
+        activeOpacity={0.7}
+      >
         {isPlaying
-          ? <Square size={14} color={isMe ? Colors.black : Colors.accent} />
-          : <Play size={14} color={isMe ? Colors.black : Colors.accent} />}
+          ? <Square size={13} color={isMe ? Colors.black : Colors.accent} />
+          : <Play  size={13} color={isMe ? Colors.black : Colors.accent} fill={isMe ? Colors.black : Colors.accent} />}
       </TouchableOpacity>
+
+      {/* Waveform animée : chaque barre pulse indépendamment + progress */}
       <View style={styles.audioWaveform}>
-        {[...Array(12)].map((_, i) => (
-          <View
-            key={i}
-            style={[
-              styles.audioBar,
-              { height: 4 + Math.sin(i * 1.2) * 8 + 6 },
-              isMe ? styles.audioBarMe : styles.audioBarThem,
-            ]}
-          />
-        ))}
+        {barAnims.map((anim, i) => {
+          const played = isPlaying && i < playedBars;
+          return (
+            <Animated.View
+              key={i}
+              style={[
+                styles.audioBar,
+                {
+                  height: anim.interpolate({ inputRange: [0, 1], outputRange: [3, 26] }),
+                  backgroundColor: isMe
+                    ? played ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.22)'
+                    : played ? Colors.accent : Colors.accentDim,
+                  opacity: played ? 1 : 0.6,
+                },
+              ]}
+            />
+          );
+        })}
       </View>
+
+      {/* Durée : affiche la position courante pendant la lecture */}
       <Text style={[styles.audioDuration, isMe && styles.audioDurationMe]}>
-        {formatDuration(duration)}
+        {isPlaying && duration > 0 ? formatDuration(progress * duration) : formatDuration(duration)}
       </Text>
     </View>
   );
@@ -514,7 +587,7 @@ export default function ChatScreen() {
   const { chatId } = useLocalSearchParams<{ chatId: string }>();
   const convId = decodeURIComponent(chatId ?? '');
   const { settings, isLoRaMode } = useAppSettings();
-  const { conversations, messagesByConv, sendMessage, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
+  const { conversations, messagesByConv, sendMessage, sendAudio, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
   const ble = useBle();
 
@@ -540,6 +613,28 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Animations ripple pour l'overlay d'enregistrement
+  const ripple1 = useRef(new Animated.Value(0)).current;
+  const ripple2 = useRef(new Animated.Value(0)).current;
+  const ripple3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!isRecording) {
+      ripple1.setValue(0); ripple2.setValue(0); ripple3.setValue(0);
+      return;
+    }
+    const pulse = (anim: Animated.Value, delay: number) =>
+      Animated.loop(Animated.sequence([
+        Animated.delay(delay),
+        Animated.timing(anim, { toValue: 1, duration: 850, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 350, useNativeDriver: true }),
+      ]));
+    const a1 = pulse(ripple1, 0);
+    const a2 = pulse(ripple2, 280);
+    const a3 = pulse(ripple3, 560);
+    a1.start(); a2.start(); a3.start();
+    return () => { a1.stop(); a2.stop(); a3.stop(); };
+  }, [isRecording]);
 
   const isForum = convId.startsWith('forum:');
 
@@ -711,16 +806,14 @@ export default function ChatScreen() {
     try {
       const { uri, durationMs } = await stopRecording(rec);
       if (!sendIt || durationMs < 500) return; // Trop court, ignorer
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       const base64 = await audioUriToBase64(uri);
-      // Audio envoi non disponible (à venir via Nostr NIP-94)
-      console.log('[Chat] Audio recording done, length:', base64.length, 'duration:', durationMs);
-      Alert.alert('Audio non disponible', 'L\'envoi vocal n\'est pas encore disponible via Nostr.');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await sendAudio(convId, base64, durationMs);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Erreur envoi audio';
       setError(msg);
     }
-  }, [convId]);
+  }, [convId, sendAudio]);
 
   const handleMicPressIn = useCallback(async () => {
     const granted = await requestAudioPermissions();
@@ -840,11 +933,29 @@ export default function ChatScreen() {
         {/* Indicateur d'enregistrement au-dessus de la barre — layout stable */}
         {isRecording && (
           <View style={styles.recordingOverlay}>
-            <View style={styles.recordingDot} />
+            {/* Dot avec ripples concentriques */}
+            <View style={styles.recordingPulseWrap}>
+              {[ripple1, ripple2, ripple3].map((anim, i) => (
+                <Animated.View
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    width: 10 + i * 14,
+                    height: 10 + i * 14,
+                    borderRadius: 5 + i * 7,
+                    borderWidth: 1.5,
+                    borderColor: Colors.red,
+                    opacity: anim,
+                    transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1.6] }) }],
+                  }}
+                />
+              ))}
+              <View style={styles.recordingDot} />
+            </View>
             <Text style={styles.recordingText}>
-              Enregistrement... {formatDuration(recordingDuration)}
+              ● REC  {formatDuration(recordingDuration)}
             </Text>
-            <TouchableOpacity onPress={() => handleMicPressOut(false)} style={styles.recordingCancelBtn} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => void handleMicPressOut(false)} style={styles.recordingCancelBtn} activeOpacity={0.7}>
               <X size={14} color={Colors.red} />
               <Text style={styles.recordingCancelText}>Annuler</Text>
             </TouchableOpacity>
@@ -1075,10 +1186,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: Colors.red + '40',
   },
+  recordingPulseWrap: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   recordingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: Colors.red,
   },
   recordingText: {

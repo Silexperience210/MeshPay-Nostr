@@ -102,3 +102,31 @@ export function formatDuration(ms: number): string {
   const s = totalSec % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+/**
+ * Profil d'amplitudes (16 valeurs 0.0–1.0) pour l'affichage de la waveform.
+ * Forme naturelle : somme de sinusoïdes à fréquences différentes.
+ */
+export const WAVEFORM_PROFILE: number[] = [
+  0.32, 0.52, 0.78, 0.62, 0.88, 0.72, 0.54, 0.40,
+  0.46, 0.68, 0.84, 0.60, 0.74, 0.50, 0.36, 0.24,
+];
+
+/** Encode un message vocal — format de transport: VOICE:<base64>|<durationMs> */
+export function encodeVoiceMessage(base64: string, durationMs: number): string {
+  return `VOICE:${base64}|${durationMs}`;
+}
+
+/** Décode un message vocal. Retourne null si format invalide. */
+export function decodeVoiceMessage(
+  text: string
+): { base64: string; durationMs: number } | null {
+  if (!text.startsWith('VOICE:')) return null;
+  const payload = text.slice(6);
+  const sep = payload.lastIndexOf('|');
+  if (sep === -1) return null;
+  const base64 = payload.slice(0, sep);
+  const durationMs = parseInt(payload.slice(sep + 1), 10);
+  if (!base64 || isNaN(durationMs)) return null;
+  return { base64, durationMs };
+}

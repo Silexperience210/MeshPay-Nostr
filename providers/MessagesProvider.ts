@@ -71,6 +71,7 @@ export interface MessagesState {
   myLocation: { lat: number; lng: number } | null;
   // Actions
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
+  sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string, peerPubkey?: string) => Promise<void>;
@@ -1089,6 +1090,53 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [identity, conversations, publishAndStore, ble.connected]);
 
+  // Envoyer un message vocal (base64 m4a)
+  const sendAudio = useCallback(async (
+    convId: string,
+    base64: string,
+    durationMs: number
+  ): Promise<void> => {
+    if (!identity) throw new Error('Identité non disponible');
+    if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
+
+    const totalSec = Math.floor(durationMs / 1000);
+    const audioLabel = `🎤 ${Math.floor(totalSec / 60)}:${(totalSec % 60).toString().padStart(2, '0')}`;
+    const voicePayload = `VOICE:${base64}|${durationMs}`;
+    const msgId = generateMsgId();
+    const ts = Date.now();
+
+    // Envoi NIP-17 via Nostr
+    const conv = conversations.find(c => c.id === convId);
+    if (conv?.peerPubkey) {
+      const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
+      if (pk.length === 64) {
+        await nostrClient.publishDMSealed(pk, voicePayload);
+      }
+    }
+
+    // Sauvegarder localement
+    const msg: StoredMessage = {
+      id: msgId,
+      conversationId: convId,
+      fromNodeId: identity.nodeId,
+      fromPubkey: identity.pubkeyHex,
+      text: audioLabel,
+      type: 'audio',
+      audioData: base64,
+      audioDuration: durationMs,
+      timestamp: ts,
+      isMine: true,
+      status: 'sent',
+      transport: 'nostr',
+    };
+    await saveMessage(msg);
+    await updateConversationLastMessage(convId, audioLabel, ts, false);
+    setMessagesByConv(prev => ({ ...prev, [convId]: [...(prev[convId] ?? []), msg] }));
+    setConversations(prev => prev.map(c =>
+      c.id === convId ? { ...c, lastMessage: audioLabel, lastMessageTime: ts } : c
+    ));
+  }, [identity, conversations, nostrClient]);
+
   // Envoyer un Cashu token
   const sendCashu = useCallback(async (
     convId: string,
@@ -1326,6 +1374,53 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       let displayText = content;
       let msgType: StoredMessage['type'] = 'text';
 
+      // ── Détection message vocal (VOICE:<base64>|<durationMs>) ──────────────
+      if (content.startsWith('VOICE:')) {
+        const payload = content.slice(6);
+        const sep = payload.lastIndexOf('|');
+        if (sep > 0) {
+          const audioBase64 = payload.slice(0, sep);
+          const durMs = parseInt(payload.slice(sep + 1), 10);
+          if (audioBase64 && !isNaN(durMs)) {
+            const totalSec = Math.floor(durMs / 1000);
+            const audioLabel = `🎤 ${Math.floor(totalSec / 60)}:${(totalSec % 60).toString().padStart(2, '0')}`;
+            const voiceMsg: StoredMessage = {
+              id: msg.id,
+              conversationId: fromId,
+              fromNodeId: fromId,
+              fromPubkey: msg.fromPubkey,
+              text: audioLabel,
+              type: 'audio',
+              audioData: audioBase64,
+              audioDuration: durMs,
+              timestamp: msg.ts,
+              isMine: false,
+              status: 'delivered',
+              transport: msg.transport as 'nostr' | 'lora' | 'ble',
+            };
+            await saveMessage(voiceMsg);
+            await updateConversationLastMessage(fromId, audioLabel, msg.ts, true);
+            setMessagesByConv(prev => ({ ...prev, [fromId]: [...(prev[fromId] ?? []), voiceMsg] }));
+            setConversations(prev => {
+              const exists = prev.find(c => c.id === fromId);
+              if (!exists) {
+                const newConv: StoredConversation = {
+                  id: fromId, name: fromId, isForum: false, peerPubkey: msg.fromPubkey,
+                  lastMessage: audioLabel, lastMessageTime: msg.ts, unreadCount: 1, online: true,
+                };
+                saveConversation(newConv);
+                return [newConv, ...prev];
+              }
+              return prev.map(c => c.id !== fromId ? c : {
+                ...c, lastMessage: audioLabel, lastMessageTime: msg.ts,
+                unreadCount: c.unreadCount + 1, peerPubkey: msg.fromPubkey || c.peerPubkey, online: true,
+              });
+            });
+            return;
+          }
+        }
+      }
+
       if (content.startsWith('cashuA')) {
         msgType = 'cashu';
         const parsed = parseCashuAmount(content);
@@ -1417,6 +1512,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     radarPeers,
     myLocation,
     sendMessage,
+    sendAudio,
     sendCashu,
     loadConversationMessages,
     startConversation,
