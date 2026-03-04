@@ -42,6 +42,9 @@ import {
   QrCode,
   Pencil,
   X,
+  Star,
+  Users,
+  UserPlus,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -1703,7 +1706,7 @@ export default function SettingsScreen() {
   const [showNpubQR, setShowNpubQR] = React.useState(false);
   const { isInitialized, importWallet } = useWalletSeed();
   const { settings, updateSettings } = useAppSettings();
-  const { identity, setDisplayName } = useMessages();
+  const { identity, setDisplayName, contacts, addContact, removeContact, toggleFavorite } = useMessages();
   const { connected: btEnabled } = useBle();
 
   const autoRelay = settings.autoRelay;
@@ -1740,6 +1743,44 @@ export default function SettingsScreen() {
     setEditingName(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [nameInput, setDisplayName]);
+
+  // --- Contacts ---
+  const [showAddContact, setShowAddContact] = React.useState(false);
+  const [addNodeId, setAddNodeId] = React.useState('');
+  const [addName, setAddName] = React.useState('');
+  const [addingContact, setAddingContact] = React.useState(false);
+
+  const handleAddContact = useCallback(async () => {
+    const nodeId = addNodeId.trim();
+    const name = addName.trim();
+    if (!nodeId || !name) return;
+    setAddingContact(true);
+    try {
+      await addContact(nodeId, name);
+      setAddNodeId('');
+      setAddName('');
+      setShowAddContact(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } finally {
+      setAddingContact(false);
+    }
+  }, [addNodeId, addName, addContact]);
+
+  const handleRemoveContact = useCallback((nodeId: string, name: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert(
+      'Supprimer le contact',
+      `Retirer "${name}" de vos contacts ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: () => void removeContact(nodeId),
+        },
+      ]
+    );
+  }, [removeContact]);
 
   return (
     <ScrollView
@@ -1883,6 +1924,103 @@ export default function SettingsScreen() {
           />
         </View>
       </View>
+
+      {/* Contacts */}
+      <View style={styles.section}>
+        <View style={styles.contactsHeader}>
+          <Text style={styles.sectionTitle}>Contacts</Text>
+          <TouchableOpacity
+            style={styles.addContactBtn}
+            onPress={() => { setShowAddContact(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); }}
+          >
+            <UserPlus size={16} color={Colors.accent} />
+            <Text style={styles.addContactBtnText}>Ajouter</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.sectionCard}>
+          {contacts.length === 0 ? (
+            <View style={styles.contactsEmpty}>
+              <Users size={28} color={Colors.textMuted} />
+              <Text style={styles.contactsEmptyText}>Aucun contact</Text>
+              <Text style={styles.contactsEmptyHint}>
+                Ajoutez des contacts pour leur envoyer des DMs directement.
+              </Text>
+            </View>
+          ) : (
+            contacts.map((c, idx) => (
+              <View
+                key={c.nodeId}
+                style={[styles.contactRow, idx < contacts.length - 1 && { borderBottomWidth: 0.5, borderBottomColor: Colors.border }]}
+              >
+                <View style={styles.contactAvatar}>
+                  <Text style={styles.contactAvatarText}>{c.displayName[0]?.toUpperCase() ?? '?'}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.contactName}>{c.displayName}</Text>
+                  <Text style={styles.contactNodeId}>{c.nodeId.slice(0, 20)}…</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); void toggleFavorite(c.nodeId); }}
+                  style={styles.contactAction}
+                >
+                  <Star size={18} color={c.isFavorite ? Colors.yellow : Colors.textMuted} fill={c.isFavorite ? Colors.yellow : 'transparent'} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleRemoveContact(c.nodeId, c.displayName)}
+                  style={styles.contactAction}
+                >
+                  <Trash2 size={18} color={Colors.red} />
+                </TouchableOpacity>
+              </View>
+            ))
+          )}
+        </View>
+      </View>
+
+      {/* Add Contact Modal */}
+      <Modal visible={showAddContact} transparent animationType="slide">
+        <View style={styles.contactModalOverlay}>
+          <View style={styles.contactModalSheet}>
+            <View style={styles.contactModalHeader}>
+              <Text style={styles.contactModalTitle}>Ajouter un contact</Text>
+              <TouchableOpacity onPress={() => setShowAddContact(false)}>
+                <X size={22} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.contactModalLabel}>Node ID</Text>
+            <TextInput
+              style={styles.contactModalInput}
+              value={addNodeId}
+              onChangeText={setAddNodeId}
+              placeholder="MESH-XXXX ou npub…"
+              placeholderTextColor={Colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <Text style={styles.contactModalLabel}>Nom affiché</Text>
+            <TextInput
+              style={styles.contactModalInput}
+              value={addName}
+              onChangeText={setAddName}
+              placeholder="Satoshi"
+              placeholderTextColor={Colors.textMuted}
+              maxLength={32}
+            />
+            <TouchableOpacity
+              style={[styles.contactModalSave, (!addNodeId.trim() || !addName.trim() || addingContact) && { opacity: 0.5 }]}
+              onPress={() => void handleAddContact()}
+              disabled={!addNodeId.trim() || !addName.trim() || addingContact}
+            >
+              {addingContact ? (
+                <ActivityIndicator color={Colors.black} />
+              ) : (
+                <Text style={styles.contactModalSaveText}>Enregistrer</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Système</Text>
@@ -2708,5 +2846,132 @@ const styles = StyleSheet.create({
     color: Colors.purple,
     fontSize: 11,
     fontWeight: '600' as const,
+  },
+  // --- Contacts ---
+  contactsHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 8,
+  },
+  addContactBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: Colors.accentGlow,
+    borderWidth: 1,
+    borderColor: Colors.accentDim,
+  },
+  addContactBtnText: {
+    color: Colors.accent,
+    fontSize: 12,
+    fontWeight: '700' as const,
+  },
+  contactsEmpty: {
+    alignItems: 'center' as const,
+    paddingVertical: 24,
+    gap: 8,
+  },
+  contactsEmptyText: {
+    color: Colors.textMuted,
+    fontSize: 14,
+    fontWeight: '600' as const,
+  },
+  contactsEmptyHint: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    textAlign: 'center' as const,
+    paddingHorizontal: 20,
+    lineHeight: 18,
+  },
+  contactRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  contactAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.accentGlow,
+    justifyContent: 'center' as const,
+    alignItems: 'center' as const,
+  },
+  contactAvatarText: {
+    color: Colors.accent,
+    fontSize: 15,
+    fontWeight: '700' as const,
+  },
+  contactName: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: '600' as const,
+  },
+  contactNodeId: {
+    color: Colors.textMuted,
+    fontSize: 11,
+    fontFamily: 'monospace',
+    marginTop: 2,
+  },
+  contactAction: {
+    padding: 6,
+  },
+  contactModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end' as const,
+  },
+  contactModalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  contactModalHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 20,
+  },
+  contactModalTitle: {
+    color: Colors.text,
+    fontSize: 17,
+    fontWeight: '700' as const,
+  },
+  contactModalLabel: {
+    color: Colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700' as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  contactModalInput: {
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 10,
+    padding: 14,
+    color: Colors.text,
+    fontSize: 14,
+    borderWidth: 0.5,
+    borderColor: Colors.border,
+  },
+  contactModalSave: {
+    marginTop: 20,
+    backgroundColor: Colors.accent,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center' as const,
+  },
+  contactModalSaveText: {
+    color: Colors.black,
+    fontSize: 15,
+    fontWeight: '700' as const,
   },
 });
