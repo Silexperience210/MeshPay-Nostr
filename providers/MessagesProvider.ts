@@ -1,9 +1,7 @@
 // Provider principal pour la messagerie MeshCore P2P chiffrée
 import { useState, useEffect, useCallback, useRef } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
-import * as Notifications from 'expo-notifications'; // ✅ NOUVEAU
-import * as Location from 'expo-location';
-import { type RadarPeer, haversineDistance, gpsBearing, distanceToSignal } from '@/utils/radar';
+import * as Notifications from 'expo-notifications';
 import {
   encryptDM,
   decryptDM,
@@ -65,10 +63,6 @@ export interface MessagesState {
   conversations: StoredConversation[];
   // Messages par convId
   messagesByConv: Record<string, StoredMessage[]>;
-  // Pairs visibles sur le radar (via Nostr presence)
-  radarPeers: RadarPeer[];
-  // Notre position GPS
-  myLocation: { lat: number; lng: number } | null;
   // Actions
   sendMessage: (convId: string, text: string, type?: MessageType) => Promise<void>;
   sendAudio: (convId: string, base64: string, durationMs: number) => Promise<void>;
@@ -99,10 +93,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
-  const [radarPeers, setRadarPeers] = useState<RadarPeer[]>([]);
   const [contacts, setContacts] = useState<DBContact[]>([]);
-  const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const myLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const chunkManagerRef = useRef(getChunkManager());
   const joinedForums = useRef<Set<string>>(new Set());
   // PSKs chargées en mémoire : channelName → pskHex (évite les appels AsyncStorage dans les callbacks)
@@ -117,8 +108,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const PENDING_PACKET_TTL_MS = 5 * 60 * 1000;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
-  // Debounce pour les mises à jour radar (évite un re-render par peer simultané)
-  const radarDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addToDedup = (id: string) => {
     recentMsgIds.current.add(id);
     if (recentMsgIds.current.size > 200) {
@@ -526,42 +515,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           console.error('[MeshCore] Erreur envoi KEY_ANNOUNCE:', err);
         }
       } else if (packet.type === MeshCoreMessageType.POSITION) {
-        // ✅ Traiter les paquets GPS (ajouter au radar)
+        // GPS LoRa : position reçue (radar géré par RadarProvider via Nostr presence)
         const position = extractPosition(packet);
         if (position) {
           const fromNodeId = uint64ToNodeId(packet.fromNodeId);
           console.log('[MeshCore] Position reçue de', fromNodeId, ':', position.lat, position.lng);
-          
-          // Mettre à jour le radar avec la position du pair
-          setRadarPeers(prev => {
-            const existing = prev.find(p => p.nodeId === fromNodeId);
-            if (existing) {
-              return prev.map(p => p.nodeId === fromNodeId 
-                ? { 
-                    ...p, 
-                    lat: position.lat, 
-                    lng: position.lng, 
-                    lastSeen: Date.now(),
-                    online: true,
-                    signalStrength: 80
-                  }
-                : p
-              );
-            } else {
-              return [...prev, {
-                nodeId: fromNodeId,
-                name: fromNodeId,
-                lat: position.lat,
-                lng: position.lng,
-                lastSeen: Date.now(),
-                rssi: -80,
-                distanceMeters: 0,
-                bearingRad: 0,
-                online: true,
-                signalStrength: 80
-              }];
-            }
-          });
         }
       } else {
         console.log('[MeshCore] Type de paquet non géré:', packet.type);
@@ -607,43 +565,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     });
   }, []);
 
-  // Demander la permission GPS et tracker notre position
-  useEffect(() => {
-    let subscription: Location.LocationSubscription | null = null;
-    (async () => {
-      console.log('[Radar] Demande permission GPS...');
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      console.log('[Radar] Permission GPS:', status);
-      if (status !== 'granted') {
-        console.log('[Radar] Permission GPS refusée');
-        return;
-      }
-      // Position initiale
-      console.log('[Radar] Récupération position initiale...');
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      console.log('[Radar] Position obtenue:', loc.coords.latitude, loc.coords.longitude);
-      const pos = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-      setMyLocation(pos);
-      myLocationRef.current = pos;
-      console.log('[Radar] Position initiale:', pos.lat.toFixed(4), pos.lng.toFixed(4));
-
-      // Mise à jour continue (~5 secondes)
-      subscription = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.Balanced, timeInterval: 5000, distanceInterval: 10 },
-        (location) => {
-          const p = { lat: location.coords.latitude, lng: location.coords.longitude };
-          setMyLocation(p);
-          myLocationRef.current = p;
-          // Publier la présence Nostr si connecté
-          if (nostrClient.isConnected && identity) {
-            nostrClient.publishPresence(identity.nodeId, p.lat, p.lng).catch(() => {});
-          }
-        }
-      );
-    })();
-    return () => { subscription?.remove(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identity]);
+  // GPS + présence Nostr gérés par RadarProvider
 
   // ── Handler messages forum entrants via Nostr (kind:42) ─────────────────────
   // Les messages NIP-28 sont en clair (forum public).
@@ -736,59 +658,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [nostrConnected, handleIncomingNostrChannelMessage]);
 
-  // ── Présence Nostr : découverte de pairs ─────────────────────────────────
-  // Quand Nostr est connecté, s'abonner aux annonces de présence des pairs.
-  // Chaque présence reçue est convertie en RadarPeer via la même logique que MQTT.
-
-  useEffect(() => {
-    if (!nostrConnected || !identity) return;
-
-    const unsub = nostrClient.subscribePresence((payload, _event) => {
-      // Ignorer notre propre présence
-      if (payload.nodeId === identity.nodeId) return;
-
-      const myPos = myLocationRef.current;
-      let distanceMeters = 0;
-      let bearingRad = 0;
-
-      if (myPos && payload.lat !== undefined && payload.lng !== undefined) {
-        distanceMeters = haversineDistance(myPos.lat, myPos.lng, payload.lat, payload.lng);
-        bearingRad = gpsBearing(myPos.lat, myPos.lng, payload.lat, payload.lng);
-      } else {
-        const hash = payload.nodeId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        distanceMeters = 500 + (hash % 4000);
-        bearingRad = (hash % 628) / 100;
-      }
-
-      const peer: RadarPeer = {
-        nodeId: payload.nodeId,
-        name: payload.name ?? payload.nodeId,
-        distanceMeters,
-        bearingRad,
-        online: payload.online,
-        lat: payload.lat,
-        lng: payload.lng,
-        lastSeen: payload.ts,
-        signalStrength: distanceToSignal(distanceMeters),
-      };
-
-      // Debounce 250ms : évite un re-render par peer si plusieurs arrivent simultanément
-      if (radarDebounceRef.current) clearTimeout(radarDebounceRef.current);
-      const capturedPeer = peer;
-      radarDebounceRef.current = setTimeout(() => {
-        setRadarPeers(prev => {
-          const filtered = prev.filter(p => p.nodeId !== capturedPeer.nodeId);
-          if (!capturedPeer.online && filtered.length === prev.length) return prev;
-          return capturedPeer.online ? [capturedPeer, ...filtered] : filtered;
-        });
-      }, 250);
-
-      console.log('[Nostr→Radar] Présence reçue:', peer.nodeId, peer.online ? '●' : '○',
-        peer.lat ? `${peer.lat.toFixed(3)},${peer.lng?.toFixed(3)}` : '(no GPS)');
-    });
-
-    return () => unsub();
-  }, [nostrConnected, identity]);
+  // Radar géré par RadarProvider
 
 
   // ✅ NOUVEAU : Cleanup automatique des messages > 24h toutes les heures
@@ -818,26 +688,22 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
         console.log('[Cashu] Vérification de', unverified.length, '/', allUnverified.length, 'tokens');
 
-        for (const token of unverified) {
+        // Vérifier tous les tokens en parallèle (était séquentiel → N requêtes HTTP en série)
+        await Promise.all(unverified.map(async (token) => {
           try {
             const verification = await verifyCashuToken(token.token);
             if (verification.valid && !verification.unverified) {
-              // Token validé !
               await markCashuTokenVerified(token.id);
               console.log('[Cashu] Token vérifié avec succès:', token.id);
-            } else if (!verification.valid) {
-              // Token invalide
-              console.log('[Cashu] Token invalide détecté:', token.id, verification.error);
-              await incrementRetryCount(token.id);
             } else {
-              // Toujours unverified, incrémenter retry
               await incrementRetryCount(token.id);
+              if (!verification.valid) console.log('[Cashu] Token invalide:', token.id, verification.error);
             }
           } catch (err) {
             console.log('[Cashu] Erreur vérif token:', token.id, err);
             await incrementRetryCount(token.id);
           }
-        }
+        }));
       } catch (err) {
         console.log('[Cashu] Erreur batch verification:', err);
       }
@@ -1611,8 +1477,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     identity,
     conversations,
     messagesByConv,
-    radarPeers,
-    myLocation,
     sendMessage,
     sendAudio,
     sendImage,

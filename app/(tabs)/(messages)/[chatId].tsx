@@ -878,6 +878,11 @@ export default function ChatScreen() {
     }
   }, [handleMicPressOut]);
 
+  // Ref pour que renderMessage accède aux reactions sans les avoir dans ses deps
+  // (évite de recréer renderMessage — et donc re-rendre tous les items — à chaque reaction)
+  const reactionsRef = useRef(reactions);
+  useEffect(() => { reactionsRef.current = reactions; }, [reactions]);
+
   const renderMessage = useCallback(
     ({ item }: { item: StoredMessage }) => (
       <MessageBubble
@@ -886,12 +891,22 @@ export default function ChatScreen() {
         onLongPress={() => handleLongPressMessage(item)}
         onCashuPress={() => handleCashuTap(item)}
         onSenderTap={item.isMine ? undefined : () => handleSenderTap(item)}
-        reactions={reactions[item.id]}
+        reactions={reactionsRef.current[item.id]}
         onReactionPress={(emoji) => handleToggleReaction(item.id, emoji)}
       />
     ),
-    [handleLongPressMessage, handleCashuTap, handleSenderTap, handleToggleReaction, contactNameMap, reactions]
+    [handleLongPressMessage, handleCashuTap, handleSenderTap, handleToggleReaction, contactNameMap]
   );
+
+  // ListEmptyComponent extrait pour éviter une re-création à chaque render
+  const emptyChatComponent = useMemo(() => (
+    <View style={styles.emptyChat}>
+      <Lock size={32} color={Colors.textMuted} />
+      <Text style={styles.emptyChatText}>
+        {!nostrConnected ? 'Connexion Nostr en cours...' : 'Aucun message. Dites bonjour !'}
+      </Text>
+    </View>
+  ), [nostrConnected]);
 
   const convName = conv?.name ?? convId;
 
@@ -972,16 +987,8 @@ export default function ChatScreen() {
           maxToRenderPerBatch={8}
           updateCellsBatchingPeriod={50}
           removeClippedSubviews={true}
-          ListEmptyComponent={
-            <View style={styles.emptyChat}>
-              <Lock size={32} color={Colors.textMuted} />
-              <Text style={styles.emptyChatText}>
-                {!nostrConnected
-                  ? 'Connexion Nostr en cours...'
-                  : 'Aucun message. Dites bonjour !'}
-              </Text>
-            </View>
-          }
+          extraData={reactions}
+          ListEmptyComponent={emptyChatComponent}
         />
 
         {/* Indicateur d'enregistrement au-dessus de la barre — layout stable */}

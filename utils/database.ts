@@ -167,7 +167,7 @@ async function initDatabase(): Promise<void> {
       createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
       FOREIGN KEY (conversationId) REFERENCES conversations(id) ON DELETE CASCADE
     );
-    CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversationId, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversationId, timestamp ASC);
     CREATE INDEX IF NOT EXISTS idx_msg_status ON messages(status) WHERE status IN ('pending', 'sending');
   `);
   console.log('[Database] Table messages OK');
@@ -260,6 +260,7 @@ async function initDatabase(): Promise<void> {
       addedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000),
       updatedAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );
+    CREATE INDEX IF NOT EXISTS idx_contacts_sort ON contacts(isFavorite DESC, displayName ASC);
   `);
 
   // Migration: ajouter colonnes audio aux messages existants (silencieux si déjà présentes)
@@ -469,12 +470,12 @@ export async function loadMessagesDB(convId: string, limit: number = 200): Promi
   try {
     const database = await getDatabase();
     const rows = await database.getAllAsync<any>(`
-      SELECT * FROM messages 
+      SELECT * FROM messages
       WHERE conversationId = ?
-      ORDER BY timestamp DESC
+      ORDER BY timestamp ASC
       LIMIT ?
     `, toSQLiteParams([convId, limit]));
-    return rows.reverse().map(row => ({
+    return rows.map(row => ({
       ...row,
       isMine: Boolean(row.isMine),
       compressed: Boolean(row.compressed),

@@ -20,6 +20,7 @@ import { UsbSerialProvider } from "@/providers/UsbSerialProvider";
 import { NostrContext } from "@/providers/NostrProvider";
 import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
+import { RadarProvider } from "@/providers/RadarProvider";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
 
@@ -153,10 +154,12 @@ export default function RootLayout() {
                     <UsbSerialProvider>
                       <GatewayContext>
                         <MessagesContext>
-                          <GestureHandlerRootView style={{ flex: 1 }}>
-                            <StatusBar style="light" />
-                            <AppContent />
-                          </GestureHandlerRootView>
+                          <RadarProvider>
+                            <GestureHandlerRootView style={{ flex: 1 }}>
+                              <StatusBar style="light" />
+                              <AppContent />
+                            </GestureHandlerRootView>
+                          </RadarProvider>
                         </MessagesContext>
                       </GatewayContext>
                     </UsbSerialProvider>

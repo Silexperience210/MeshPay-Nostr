@@ -33,6 +33,7 @@ import Colors from '@/constants/colors';
 
 import { type BleDeviceInfo } from '@/utils/ble-gateway';
 import { useMessages } from '@/providers/MessagesProvider';
+import { useRadar } from '@/providers/RadarProvider';
 import { useRouter } from 'expo-router';
 import { type RadarPeer, formatDistance } from '@/utils/radar';
 import { useGateway } from '@/providers/GatewayProvider';
@@ -597,7 +598,8 @@ export default function MeshScreen() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
   const { settings } = useAppSettings();
   const isInternetOnly = settings.connectionMode === 'internet';
-  const { radarPeers, identity } = useMessages();
+  const { identity } = useMessages();
+  const { radarPeers } = useRadar();
   const { isConnected: nostrConnected } = useNostr();
   const { connected: bleConnected, device: bleDevice, deviceInfo } = useBle();
   const { gatewayState } = useGateway();
