@@ -27,7 +27,7 @@ export interface NfcBackupModalProps {
   importEncryptedWallet: (json: string, pwd: string) => void;
 }
 
-type Step = 'bestPractices' | 'password' | 'scanning';
+type Step = 'bestPractices' | 'password' | 'scanning' | 'decrypting';
 
 export default function NfcBackupModal({
   visible,
@@ -68,7 +68,7 @@ export default function NfcBackupModal({
   }, [visible, mode]);
 
   useEffect(() => {
-    if (step === 'scanning') {
+    if (step === 'scanning' || step === 'decrypting') {
       pulseLoop.current = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 1.3, duration: 700, useNativeDriver: true }),
@@ -92,17 +92,20 @@ export default function NfcBackupModal({
       setError('Les mots de passe ne correspondent pas.');
       return;
     }
-    setStep('scanning');
-    if (mode === 'write') {
-      doWrite();
-    } else {
-      doRead();
-    }
+    // Afficher "chiffrement/déchiffrement" avant que PBKDF2 bloque le thread JS
+    setStep('decrypting');
+    setTimeout(() => {
+      if (mode === 'write') doWrite();
+      else doRead();
+    }, 80);
   };
 
   const doWrite = async () => {
     try {
+      // PBKDF2 synchrone (~10s) — l'UI affiche déjà "Chiffrement en cours"
       const backupJson = exportWallet(password);
+      // Chiffrement terminé → attente de la carte NFC
+      setStep('scanning');
       await NfcManager.requestTechnology(NfcTech.Ndef);
       const bytes = Ndef.encodeMessage([Ndef.textRecord(backupJson)]);
       await NfcManager.ndefHandler.writeNdefMessage(bytes);
@@ -118,6 +121,8 @@ export default function NfcBackupModal({
 
   const doRead = async () => {
     try {
+      // Attente de la carte NFC
+      setStep('scanning');
       await NfcManager.requestTechnology(NfcTech.Ndef);
       const tag = await NfcManager.getTag();
       await NfcManager.cancelTechnologyRequest();
@@ -125,6 +130,10 @@ export default function NfcBackupModal({
       const payload = tag?.ndefMessage?.[0]?.payload;
       if (!payload) throw new Error('Tag NFC vide ou illisible.');
       const text = Ndef.text.decodePayload(payload as unknown as Uint8Array);
+
+      // PBKDF2 synchrone (~10s) — afficher "Déchiffrement en cours"
+      setStep('decrypting');
+      await new Promise(resolve => setTimeout(resolve, 80)); // laisse React rendre
 
       try {
         importEncryptedWallet(text, password);
@@ -253,6 +262,21 @@ export default function NfcBackupModal({
     </View>
   );
 
+  const renderDecrypting = () => (
+    <View style={styles.centerContent}>
+      <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+        <Nfc size={72} color={Colors.yellow} />
+      </Animated.View>
+      <ActivityIndicator size="large" color={Colors.yellow} style={{ marginTop: 8 }} />
+      <Text style={styles.scanTitle}>
+        {mode === 'write' ? 'Chiffrement en cours...' : 'Déchiffrement en cours...'}
+      </Text>
+      <Text style={{ color: Colors.textMuted, fontSize: 13, textAlign: 'center' }}>
+        PBKDF2 · 100 000 itérations{'\n'}Cela prend quelques secondes, c'est normal.
+      </Text>
+    </View>
+  );
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -273,6 +297,8 @@ export default function NfcBackupModal({
             ? renderBestPractices()
             : step === 'password'
             ? renderPassword()
+            : step === 'decrypting'
+            ? renderDecrypting()
             : renderScanning()
           }
         </View>
