@@ -70,13 +70,8 @@ export function UpdateChecker() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn('[Update] Erreur vérification:', msg);
-      // Ignorer les erreurs de config OTA (update URL non configurée)
-      const isConfigError = msg.includes('expo-updates') || msg.includes('update URL') ||
-        msg.includes('not configured') || msg.includes('EXUpdates') ||
-        msg.includes('manifest') || msg.includes('No updates');
-      if (!isConfigError) {
-        Alert.alert('Erreur réseau', 'Impossible de joindre le serveur de mises à jour.');
-      }
+      // Toutes les erreurs OTA sont silencieuses (serveur non configuré, token absent, réseau)
+      // L'utilisateur voit juste "À jour" — pas d'alerte d'erreur réseau inutile
     } finally {
       setChecking(false);
     }
