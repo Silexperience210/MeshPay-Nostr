@@ -18,7 +18,8 @@
       "bundleIdentifier": "app.rork.meshpay-lora-messaging-btc",
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa.",
-        "NSBluetoothPeripheralUsageDescription": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa."
+        "NSBluetoothPeripheralUsageDescription": "BitMesh utilise Bluetooth pour se connecter au gateway LoRa.",
+        "NFCReaderUsageDescription": "MeshPay utilise NFC pour écrire et lire les backups chiffrés de votre wallet."
       }
     },
     "android": {
@@ -35,7 +36,8 @@
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.INTERNET",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.NFC"
       ]
     },
     "web": {

@@ -7,7 +7,7 @@ import {
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useHeaderHeight } from '@react-navigation/elements';
 import * as Clipboard from 'expo-clipboard';
-import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, ChevronDown } from 'lucide-react-native';
+import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, ChevronDown, Zap } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import Colors from '@/constants/colors';
@@ -19,6 +19,7 @@ import { useBle } from '@/providers/BleProvider';
 import { decodeCashuToken, getTokenAmount, verifyCashuToken, generateTokenId, reclaimProofs, fetchMintKeys, encodeCashuToken } from '@/utils/cashu';
 import { markCashuTokenSpent, markCashuTokenPending, markCashuTokenUnspent, saveCashuToken, getCashuBalance } from '@/utils/database';
 import type { StoredMessage } from '@/utils/messages-store';
+import TipModal from '@/components/TipModal';
 import {
   requestAudioPermissions,
   startRecording,
@@ -604,6 +605,7 @@ export default function ChatScreen() {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCashuModal, setShowCashuModal] = useState(false);
+  const [showTipModal, setShowTipModal] = useState(false);
   const [isSendingMedia, setIsSendingMedia] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -897,6 +899,15 @@ export default function ChatScreen() {
     <>
       <Stack.Screen
         options={{
+          headerRight: () => !isForum ? (
+            <TouchableOpacity
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowTipModal(true); }}
+              style={{ paddingHorizontal: 12, paddingVertical: 8 }}
+              activeOpacity={0.7}
+            >
+              <Zap size={20} color={Colors.yellow} />
+            </TouchableOpacity>
+          ) : null,
           headerTitle: () => {
             const transportLabel = ble.loraActive
               ? (nostrConnected ? 'LoRa+Nostr' : 'LoRa')
@@ -1113,6 +1124,14 @@ export default function ChatScreen() {
           onClose={() => setProfileSheet(null)}
         />
       )}
+
+      <TipModal
+        visible={showTipModal}
+        onClose={() => setShowTipModal(false)}
+        convId={convId}
+        convName={convName}
+        sendCashu={sendCashu}
+      />
     </>
   );
 }

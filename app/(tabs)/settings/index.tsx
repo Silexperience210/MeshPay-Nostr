@@ -45,6 +45,7 @@ import {
   Star,
   Users,
   UserPlus,
+  Nfc,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -66,6 +67,7 @@ import { useTxRelay } from '@/providers/TxRelayProvider';
 import * as Location from 'expo-location';
 import { testMempoolConnection } from '@/utils/mempool';
 import { UpdateChecker } from '@/components/UpdateChecker';
+import NfcBackupModal from '@/components/NfcBackupModal';
 import { testMintConnection, formatMintUrl } from '@/utils/cashu';
 import { type GatewayRelayJob } from '@/utils/gateway';
 
@@ -161,6 +163,9 @@ function SeedManagementCard() {
   const [showImportEncrypted, setShowImportEncrypted] = useState(false);
   const [importBackupJson, setImportBackupJson] = useState('');
   const [importBackupPwd, setImportBackupPwd] = useState('');
+  // NFC backup
+  const [showNfc, setShowNfc] = useState(false);
+  const [nfcMode, setNfcMode] = useState<'write' | 'read'>('write');
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.95)).current;
 
@@ -480,6 +485,33 @@ function SeedManagementCard() {
               </TouchableOpacity>
             </View>
           )}
+
+          {/* ── NFC ── */}
+          <TouchableOpacity
+            style={styles.importToggle}
+            onPress={() => { setNfcMode('write'); setShowNfc(true); }}
+            activeOpacity={0.7}
+          >
+            <Nfc size={16} color={Colors.cyan} />
+            <Text style={[styles.importToggleText, { color: Colors.cyan }]}>Écrire backup sur carte NFC</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.importToggle}
+            onPress={() => { setNfcMode('read'); setShowNfc(true); }}
+            activeOpacity={0.7}
+          >
+            <Nfc size={16} color={Colors.cyan} />
+            <Text style={[styles.importToggleText, { color: Colors.cyan }]}>Importer backup depuis NFC</Text>
+          </TouchableOpacity>
+
+          <NfcBackupModal
+            visible={showNfc}
+            mode={nfcMode}
+            onClose={() => setShowNfc(false)}
+            exportWallet={exportWallet}
+            importEncryptedWallet={importEncryptedWallet}
+          />
         </>
       ) : (
         <>
@@ -1707,7 +1739,18 @@ export default function SettingsScreen() {
   const { isInitialized, importWallet } = useWalletSeed();
   const { settings, updateSettings } = useAppSettings();
   const { identity, setDisplayName, contacts, addContact, removeContact, toggleFavorite } = useMessages();
-  const { connected: btEnabled } = useBle();
+  const {
+    connected: btEnabled,
+    scanning: bleScanning,
+    availableDevices: bleDevices,
+    device: bleDevice,
+    deviceInfo: bleDeviceInfo,
+    error: bleError,
+    scanForGateways,
+    connectToGateway,
+    disconnectGateway,
+  } = useBle();
+  const [showBleModal, setShowBleModal] = useState(false);
 
   const autoRelay = settings.autoRelay;
   const notifications = settings.notifications;
@@ -1841,6 +1884,104 @@ export default function SettingsScreen() {
       {/* npub QR Modal */}
       <NpubQRModal visible={showNpubQR} onClose={() => setShowNpubQR(false)} />
 
+      {/* ── BLE Gateway Modal ── */}
+      <Modal visible={showBleModal} transparent animationType="slide" onRequestClose={() => setShowBleModal(false)}>
+        <View style={styles.bleModalOverlay}>
+          <View style={styles.bleModalSheet}>
+            <View style={styles.bleModalHandle} />
+            <TouchableOpacity style={styles.bleModalClose} onPress={() => setShowBleModal(false)} activeOpacity={0.7}>
+              <X size={20} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.bleModalHeader}>
+              <Bluetooth size={24} color={Colors.blue} />
+              <Text style={styles.bleModalTitle}>Gateway LoRa (BLE)</Text>
+            </View>
+
+            {/* Connecté */}
+            {btEnabled && bleDevice ? (
+              <View style={styles.bleConnectedBox}>
+                <View style={styles.bleConnectedRow}>
+                  <View style={styles.bleDot} />
+                  <Text style={styles.bleConnectedName}>{bleDevice.name ?? bleDevice.id}</Text>
+                </View>
+                {bleDeviceInfo && (
+                  <Text style={styles.bleDeviceInfo}>
+                    {`${(bleDeviceInfo.radioFreqHz / 1_000_000).toFixed(1)} MHz · SF${bleDeviceInfo.radioSf} · ${bleDeviceInfo.name}`}
+                  </Text>
+                )}
+                <TouchableOpacity
+                  style={styles.bleDisconnectBtn}
+                  onPress={async () => {
+                    await disconnectGateway();
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.bleDisconnectBtnText}>Déconnecter</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* Bouton scan */}
+                <TouchableOpacity
+                  style={[styles.bleScanBtn, bleScanning && styles.bleScanBtnDisabled]}
+                  onPress={() => { if (!bleScanning) scanForGateways(); }}
+                  activeOpacity={0.7}
+                  disabled={bleScanning}
+                >
+                  {bleScanning
+                    ? <ActivityIndicator color={Colors.black} size="small" />
+                    : <><Bluetooth size={16} color={Colors.black} /><Text style={styles.bleScanBtnText}>Scanner les appareils</Text></>
+                  }
+                </TouchableOpacity>
+
+                {bleScanning && (
+                  <Text style={styles.bleScanningHint}>Scan en cours (10s)…</Text>
+                )}
+
+                {/* Liste des devices trouvés */}
+                {bleDevices.length > 0 && (
+                  <View style={styles.bleDeviceList}>
+                    {bleDevices.map((d) => (
+                      <TouchableOpacity
+                        key={d.id}
+                        style={styles.bleDeviceItem}
+                        onPress={async () => {
+                          try {
+                            await connectToGateway(d.id);
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            setShowBleModal(false);
+                          } catch {
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Bluetooth size={14} color={Colors.blue} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.bleDeviceItemName}>{d.name ?? 'Appareil sans nom'}</Text>
+                          <Text style={styles.bleDeviceItemId}>{d.id}</Text>
+                        </View>
+                        <ChevronRight size={14} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                {!bleScanning && bleDevices.length === 0 && (
+                  <Text style={styles.bleNoDevices}>Aucun gateway détecté. Vérifiez que l'ESP32 est allumé et à portée.</Text>
+                )}
+              </>
+            )}
+
+            {!!bleError && (
+              <Text style={styles.bleErrorText}>{bleError}</Text>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       <ConnectionModeSelector />
 
       <View style={styles.section}>
@@ -1864,11 +2005,11 @@ export default function SettingsScreen() {
             value={autoRelay}
             onToggle={handleToggle('autoRelay')}
           />
-          <SettingToggle
-            icon={<Bluetooth size={18} color={Colors.blue} />}
-            label="Bluetooth Serial"
-            value={btEnabled}
-            onToggle={() => {}}
+          <SettingRow
+            icon={<Bluetooth size={18} color={btEnabled ? Colors.blue : Colors.textMuted} />}
+            label="Gateway LoRa (BLE)"
+            value={btEnabled ? (bleDevice?.name ?? 'Connecté') : 'Non connecté'}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowBleModal(true); }}
           />
         </View>
       </View>
@@ -2973,5 +3114,144 @@ const styles = StyleSheet.create({
     color: Colors.black,
     fontSize: 15,
     fontWeight: '700' as const,
+  },
+
+  // ── BLE Gateway Modal ──
+  bleModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  bleModalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingTop: 12,
+    paddingBottom: 48,
+  },
+  bleModalHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: Colors.border,
+    borderRadius: 2,
+    alignSelf: 'center' as const,
+    marginBottom: 16,
+  },
+  bleModalClose: {
+    position: 'absolute' as const,
+    top: 16,
+    right: 16,
+    padding: 4,
+  },
+  bleModalHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    marginBottom: 20,
+    marginTop: 8,
+  },
+  bleModalTitle: {
+    fontSize: 20,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  bleConnectedBox: {
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+  },
+  bleConnectedRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  bleDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.green,
+  },
+  bleConnectedName: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  bleDeviceInfo: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginLeft: 16,
+  },
+  bleDisconnectBtn: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: Colors.red,
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center' as const,
+  },
+  bleDisconnectBtnText: {
+    color: Colors.red,
+    fontWeight: '600' as const,
+    fontSize: 14,
+  },
+  bleScanBtn: {
+    backgroundColor: Colors.blue,
+    borderRadius: 12,
+    padding: 14,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+  },
+  bleScanBtnDisabled: {
+    opacity: 0.6,
+  },
+  bleScanBtnText: {
+    color: Colors.black,
+    fontWeight: '700' as const,
+    fontSize: 15,
+  },
+  bleScanningHint: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center' as const,
+    marginTop: 8,
+  },
+  bleDeviceList: {
+    marginTop: 12,
+    gap: 4,
+  },
+  bleDeviceItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+    padding: 12,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 10,
+  },
+  bleDeviceItemName: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  bleDeviceItemId: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  bleNoDevices: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center' as const,
+    marginTop: 16,
+    lineHeight: 18,
+  },
+  bleErrorText: {
+    fontSize: 13,
+    color: Colors.red,
+    marginTop: 12,
+    textAlign: 'center' as const,
   },
 });
