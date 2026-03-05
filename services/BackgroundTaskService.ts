@@ -13,8 +13,8 @@
 import * as TaskManager from 'expo-task-manager';
 import * as BackgroundFetch from 'expo-background-fetch';
 import { getPendingMessages, removePendingMessage, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount } from '@/utils/database';
-import { getBleGatewayClient } from '@/utils/ble-gateway';
-import { verifyCashuToken } from '@/utils/cashu';
+// Note: getBleGatewayClient et verifyCashuToken sont importés dynamiquement dans les tâches
+// pour éviter d'initialiser des singletons lourds au niveau module (crash au démarrage)
 
 // ─── Noms des tâches ──────────────────────────────────────────────────────────
 export const TASK_MESSAGE_SYNC    = 'meshpay-bg-message-sync';
@@ -30,10 +30,10 @@ export const TASK_CASHU_VERIFY    = 'meshpay-bg-cashu-verify';
 TaskManager.defineTask(TASK_MESSAGE_SYNC, async () => {
   try {
     const pending = await getPendingMessages();
-    if (pending.length === 0) {
-      return BackgroundFetch.BackgroundFetchResult.NoData;
-    }
+    if (pending.length === 0) return BackgroundFetch.BackgroundFetchResult.NoData;
 
+    // Import dynamique pour éviter d'initialiser BLE au niveau module
+    const { getBleGatewayClient } = await import('@/utils/ble-gateway');
     const client = getBleGatewayClient();
     if (!client.isConnected()) {
       console.log('[BgTask] BLE non connecté — messages restent en queue');
@@ -75,6 +75,7 @@ TaskManager.defineTask(TASK_CASHU_VERIFY, async () => {
       return BackgroundFetch.BackgroundFetchResult.NoData;
     }
 
+    const { verifyCashuToken } = await import('@/utils/cashu');
     let verified = 0;
     for (const token of batch) {
       try {

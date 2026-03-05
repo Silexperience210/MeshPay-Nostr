@@ -25,8 +25,6 @@ import { WelcomeModal } from "@/components/WelcomeModal";
 import { registerBackgroundTasks } from "@/services/BackgroundTaskService";
 
 SplashScreen.preventAutoHideAsync();
-// Enregistrer les tâches background au plus tôt (avant le premier render)
-registerBackgroundTasks();
 
 const queryClient = new QueryClient();
 const ONBOARDING_KEY = 'BITMESH_ONBOARDING_DONE';
@@ -73,6 +71,8 @@ function AppContent() {
   useEffect(() => {
     if (isReady && onboardingDone !== null) {
       SplashScreen.hideAsync();
+      // Enregistrer les tâches background après que le runtime RN soit prêt
+      registerBackgroundTasks();
     }
   }, [isReady, onboardingDone]);
 
