@@ -47,19 +47,25 @@ export default function NfcBackupModal({
   const pulseLoop = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
-    NfcManager.isSupported().then(setNfcSupported);
+    NfcManager.isSupported().then(async (supported) => {
+      setNfcSupported(supported);
+      if (supported) {
+        try { await NfcManager.start(); } catch { /* déjà démarré */ }
+      }
+    });
   }, []);
 
   useEffect(() => {
-    if (!visible) {
-      // Reset state on close
-      setStep('bestPractices');
+    if (visible) {
+      // Mode lecture → pas besoin des bonnes pratiques d'écriture
+      setStep(mode === 'read' ? 'password' : 'bestPractices');
+    } else {
       setPassword('');
       setPasswordConfirm('');
       setError('');
       pulseLoop.current?.stop();
     }
-  }, [visible]);
+  }, [visible, mode]);
 
   useEffect(() => {
     if (step === 'scanning') {
@@ -97,7 +103,6 @@ export default function NfcBackupModal({
   const doWrite = async () => {
     try {
       const backupJson = exportWallet(password);
-      await NfcManager.start();
       await NfcManager.requestTechnology(NfcTech.Ndef);
       const bytes = Ndef.encodeMessage([Ndef.textRecord(backupJson)]);
       await NfcManager.ndefHandler.writeNdefMessage(bytes);
@@ -113,14 +118,22 @@ export default function NfcBackupModal({
 
   const doRead = async () => {
     try {
-      await NfcManager.start();
       await NfcManager.requestTechnology(NfcTech.Ndef);
       const tag = await NfcManager.getTag();
+      await NfcManager.cancelTechnologyRequest();
+
       const payload = tag?.ndefMessage?.[0]?.payload;
       if (!payload) throw new Error('Tag NFC vide ou illisible.');
       const text = Ndef.text.decodePayload(payload as unknown as Uint8Array);
-      await NfcManager.cancelTechnologyRequest();
-      importEncryptedWallet(text, password);
+
+      try {
+        importEncryptedWallet(text, password);
+      } catch (importErr: any) {
+        setStep('password');
+        setError(importErr?.message ?? 'Mot de passe incorrect ou backup invalide.');
+        return;
+      }
+
       Alert.alert('Succès', 'Wallet importé depuis la carte NFC !');
       onClose();
     } catch (err: any) {

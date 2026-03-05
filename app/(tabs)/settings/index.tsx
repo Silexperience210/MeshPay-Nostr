@@ -571,15 +571,25 @@ function SeedManagementCard() {
                 testID="import-seed-input"
               />
 
-              {/* Bouton Scan SeedQR */}
-              <TouchableOpacity
-                style={styles.scanQRButton}
-                onPress={() => setShowSeedQRScanner(true)}
-                activeOpacity={0.7}
-              >
-                <QrCode size={18} color={Colors.background} />
-                <Text style={styles.scanQRButtonText}>Scan SeedQR</Text>
-              </TouchableOpacity>
+              {/* Boutons d'import alternatifs : SeedQR + NFC */}
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  style={[styles.scanQRButton, { flex: 1 }]}
+                  onPress={() => setShowSeedQRScanner(true)}
+                  activeOpacity={0.7}
+                >
+                  <QrCode size={18} color={Colors.background} />
+                  <Text style={styles.scanQRButtonText}>Scan SeedQR</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.scanQRButton, { flex: 1, backgroundColor: Colors.cyan }]}
+                  onPress={() => { setNfcMode('read'); setShowNfc(true); }}
+                  activeOpacity={0.7}
+                >
+                  <Nfc size={18} color={Colors.background} />
+                  <Text style={styles.scanQRButtonText}>Import NFC</Text>
+                </TouchableOpacity>
+              </View>
 
               <TouchableOpacity
                 style={styles.importButton}
