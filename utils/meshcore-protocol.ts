@@ -234,6 +234,12 @@ export function decodeMeshCorePacket(data: Uint8Array): MeshCorePacket | null {
 /**
  * Convertir string nodeId → uint64
  * Ex: "MESH-A7F2" → 0xA7F2000000000000
+ *
+ * ⚠️ LIMITATION FIRMWARE : Ce format (padding à droite avec des zéros)
+ * est une convention interne à BitMesh. Le firmware MeshCore réel utilise
+ * un format de nodeId différent (hash 32-bit encodé différemment).
+ * Cette fonction NE DOIT PAS être utilisée pour des échanges avec du
+ * firmware MeshCore standard — uniquement pour la logique interne de l'app.
  */
 export function nodeIdToUint64(nodeId: string): bigint {
   // Extraire la partie hex après "MESH-"
@@ -328,10 +334,10 @@ export function createTextMessageSync(
 
   if (encrypted) flags |= MeshCoreFlags.ENCRYPTED;
 
-  // ID basé sur timestamp + compteur statique
-  const now = Date.now();
-  createTextMessageSync.counter = (createTextMessageSync.counter + 1) % 0xFFFF;
-  const messageId = ((now % 0xFFFF) << 16) | createTextMessageSync.counter;
+  // ID aléatoire cryptographiquement sûr (évite les collisions timestamp+counter)
+  const randomId = new Uint32Array(1);
+  crypto.getRandomValues(randomId);
+  const messageId = randomId[0];
 
   return {
     version: 0x01,
@@ -341,12 +347,11 @@ export function createTextMessageSync(
     messageId,
     fromNodeId: nodeIdToUint64(fromNodeId),
     toNodeId: nodeIdToUint64(toNodeId),
-    timestamp: Math.floor(now / 1000),
+    timestamp: Math.floor(Date.now() / 1000),
     subMeshId: 0,
     payload,
   };
 }
-createTextMessageSync.counter = 0;
 
 import { decompressFromLora } from './compression';
 
@@ -631,7 +636,7 @@ export function extractAckInfo(payload: Uint8Array): { originalMessageId: number
 // Pour envoyer des messages longs en plusieurs paquets LoRa
 // ============================================================================
 
-const CHUNK_HEADER_SIZE = 6; // bytes: [msgId(2) | chunkIdx(1) | totalChunks(1) | ...]
+const CHUNK_HEADER_SIZE = 6; // bytes: [msgId(4) | chunkIdx(1) | totalChunks(1)]
 const CHUNK_MAX_PAYLOAD = LORA_MAX_PAYLOAD - CHUNK_HEADER_SIZE - 10; // Marge pour chiffrement
 
 /**
@@ -658,12 +663,12 @@ export function chunkMessage(
     const end = Math.min(start + CHUNK_MAX_PAYLOAD, data.length);
     const chunkData = data.slice(start, end);
     
-    // Header du chunk: [msgId(2 bytes) | chunkIdx(1) | totalChunks(1)]
-    const header = new Uint8Array(4);
+    // Header du chunk: [msgId(4 bytes BE) | chunkIdx(1) | totalChunks(1)] = 6 bytes
+    const header = new Uint8Array(6);
     const headerView = new DataView(header.buffer);
-    headerView.setUint16(0, messageId % 65536, false); // 2 bytes
-    header[2] = i; // chunkIndex
-    header[3] = totalChunks; // totalChunks
+    headerView.setUint32(0, messageId >>> 0, false); // 4 bytes, sans troncature
+    header[4] = i; // chunkIndex
+    header[5] = totalChunks; // totalChunks
     
     // Combiner header + data
     const fullChunk = new Uint8Array(header.length + chunkData.length);
@@ -735,8 +740,8 @@ export function reassembleChunks(
   const parts: Uint8Array[] = [];
   for (let i = 0; i < totalChunks; i++) {
     const chunk = chunks.get(i)!;
-    // Skip header (4 bytes)
-    parts.push(chunk.slice(4));
+    // Skip header (6 bytes: msgId(4) + chunkIdx(1) + totalChunks(1))
+    parts.push(chunk.slice(6));
   }
   
   // Concaténer
@@ -764,14 +769,14 @@ export function isChunkPacket(packet: MeshCorePacket): boolean {
  * Extrait les infos d'un chunk depuis son payload
  */
 export function extractChunkInfo(payload: Uint8Array): { messageId: number; chunkIndex: number; totalChunks: number; data: Uint8Array } | null {
-  if (payload.length < 4) return null;
-  
+  if (payload.length < 6) return null;
+
   const view = new DataView(payload.buffer, payload.byteOffset);
-  const messageId = view.getUint16(0, false);
-  const chunkIndex = payload[2];
-  const totalChunks = payload[3];
-  const data = payload.slice(4);
-  
+  const messageId = view.getUint32(0, false); // 4 bytes BE — correspond à chunkMessage()
+  const chunkIndex = payload[4];
+  const totalChunks = payload[5];
+  const data = payload.slice(6);
+
   return { messageId, chunkIndex, totalChunks, data };
 }
 

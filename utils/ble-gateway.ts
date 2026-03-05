@@ -344,6 +344,20 @@ export class BleGatewayClient {
 
   // ── Envoyer paquet BitMesh ───────────────────────────────────────
 
+  /**
+   * Envoie un paquet BitMesh encodé via CMD_SEND_RAW (0x19).
+   *
+   * ⚠️ FIRMWARE CUSTOM REQUIS : CMD_SEND_RAW bypasse le routing MeshCore
+   * et envoie des bytes bruts sur LoRa. Cette méthode ne fonctionne qu'avec
+   * le firmware BitMesh custom — elle est INCOMPATIBLE avec le firmware
+   * MeshCore standard (Companion app).
+   *
+   * Pour le firmware MeshCore standard, utiliser plutôt :
+   *   - `sendDirectMessage()` → CMD_SEND_TXT_MSG (0x02)
+   *   - `sendChannelMessage()` → CMD_SEND_CHAN_MSG (0x03)
+   *
+   * @param packet - Paquet MeshCore à encoder et envoyer
+   */
   async sendPacket(packet: MeshCorePacket): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
 
