@@ -22,7 +22,6 @@ import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
-import { registerBackgroundTasks } from "@/services/BackgroundTaskService";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -71,8 +70,6 @@ function AppContent() {
   useEffect(() => {
     if (isReady && onboardingDone !== null) {
       SplashScreen.hideAsync();
-      // Enregistrer les tâches background après que le runtime RN soit prêt
-      registerBackgroundTasks();
     }
   }, [isReady, onboardingDone]);
 
