@@ -414,9 +414,9 @@ export function decodeEncryptedPayload(payload: Uint8Array): {v: number; nonce: 
 }
 
 /**
- * Utils : base64 → Uint8Array
+ * Utils : base64 → Uint8Array (exporté pour usage externe)
  */
-function base64ToBytes(b64: string): Uint8Array {
+export function base64ToBytes(b64: string): Uint8Array {
   if (typeof Buffer !== 'undefined') {
     return Uint8Array.from(Buffer.from(b64, 'base64'));
   }
@@ -429,9 +429,9 @@ function base64ToBytes(b64: string): Uint8Array {
 }
 
 /**
- * Utils : Uint8Array → base64
+ * Utils : Uint8Array → base64 (exporté pour usage externe)
  */
-function bytesToBase64(bytes: Uint8Array): string {
+export function bytesToBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(bytes).toString('base64');
   }

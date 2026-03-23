@@ -220,7 +220,7 @@ export class MessagingBus {
   async bridgeLoraToNostr(rawPayload: string): Promise<void> {
     if (!this.nostr.isConnected) return;
     await this.nostr.publishTxRelay({
-      type: 'bitcoin_tx', // sera précisé par le parseur aval
+      type: 'lora_relay',
       data: rawPayload,
     });
     console.log('[Bus] Message LoRa bridgé vers Nostr (kind:9001)');
@@ -280,15 +280,18 @@ export class MessagingBus {
     });
     this.nostrUnsubs.push(dmUnsub);
 
-    // TX Relay entrants (Bitcoin / Cashu)
+    // TX Relay entrants (Bitcoin / Cashu / LoRa relay)
     const txUnsub = this.nostr.subscribeTxRelay((payload, event) => {
+      // Les paquets LoRa relayés sont distingués par leur type et dispatchés en 'lora'
+      const busType: BusMessage['type'] =
+        payload.type === 'lora_relay' ? 'lora' : 'tx_relay';
       const bus: BusMessage = {
         id: event.id,
-        type: 'tx_relay',
+        type: busType,
         from: event.tags.find(t => t[0] === 'meshcore-from')?.[1] ?? event.pubkey,
         fromPubkey: event.pubkey,
         to: '',
-        content: JSON.stringify(payload),
+        content: payload.type === 'lora_relay' ? payload.data : JSON.stringify(payload),
         ts: event.created_at * 1000,
         transport: 'nostr',
       };

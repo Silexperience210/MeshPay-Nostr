@@ -5,16 +5,18 @@
  */
 
 // Commandes Protocol Binaire MeshCore pour Repeater
+// IMPORTANT : Plage 0x40-0x48 pour éviter les conflits avec le protocole
+// MeshCore Companion officiel (0x01-0x27 réservés, ex: 0x20=CMD_SET_CHANNEL v1.13)
 const REPEATER_CMDS = {
-  GET_INFO: 0x20,
-  SET_NAME: 0x21,
-  SET_CONFIG: 0x22,
-  GET_STATUS: 0x23,
-  GET_NEIGHBORS: 0x24,
-  GET_STATS: 0x25,
-  RESET_STATS: 0x26,
-  REBOOT: 0x27,
-  FACTORY_RESET: 0x28,
+  GET_INFO: 0x40,
+  SET_NAME: 0x41,
+  SET_CONFIG: 0x42,
+  GET_STATUS: 0x43,
+  GET_NEIGHBORS: 0x44,
+  GET_STATS: 0x45,
+  RESET_STATS: 0x46,
+  REBOOT: 0x47,
+  FACTORY_RESET: 0x48,
 } as const;
 
 export interface RepeaterConfig {

@@ -42,16 +42,20 @@ const TX_UUID      = MESHCORE_BLE.TX_CHAR_UUID; // 6e400002  App → Device (WRI
 const RX_UUID      = MESHCORE_BLE.RX_CHAR_UUID; // 6e400003  Device → App (NOTIFY)
 
 // ── Command codes (App → Device) ──────────────────────────────────────
-const CMD_APP_START    = 1;   // Handshake principal
-const CMD_SET_TIME     = 6;   // Sync horloge après SelfInfo
-const CMD_DEVICE_QUERY = 22;  // Premier message (version protocole)
-const CMD_SEND_RAW     = 25;  // Broadcast raw bytes sur LoRa
+const CMD_APP_START     = 1;   // Handshake principal
+const CMD_SEND_TXT_MSG  = 2;   // Envoyer DM via routing firmware standard
+const CMD_SEND_CHAN_MSG  = 3;   // Envoyer message sur un canal (forum)
+const CMD_SET_TIME      = 6;   // Sync horloge après SelfInfo
+const CMD_DEVICE_QUERY  = 22;  // Premier message (version protocole)
+const CMD_SEND_RAW      = 25;  // Broadcast raw bytes sur LoRa (firmware custom BitMesh)
 
 // ── Response / push codes (Device → App) ──────────────────────────────
-const RESP_OK          = 0;
-const RESP_SELF_INFO   = 5;   // Public key, radio params, nom
-const RESP_DEVICE_INFO = 13;  // Firmware/model
-const PUSH_RAW_DATA    = 0x84; // Données LoRa reçues
+const RESP_OK           = 0;
+const RESP_SELF_INFO    = 5;    // Public key, radio params, nom
+const RESP_DEVICE_INFO  = 13;   // Firmware/model
+const RESP_DIRECT_MSG   = 0x10; // DM reçu (firmware standard MeshCore Companion)
+const RESP_CHANNEL_MSG  = 0x11; // Message canal reçu (firmware standard)
+const PUSH_RAW_DATA     = 0x84; // Données LoRa reçues (firmware custom BitMesh)
 
 const APP_PROTOCOL_VERSION = 3;
 const RAW_PUSH_HEADER_SIZE = 3; // [snr:int8][rssi:int8][reserved:uint8]
@@ -370,6 +374,56 @@ export class BleGatewayClient {
     await this.sendFrame(CMD_SEND_RAW, payload);
   }
 
+  /**
+   * Envoie un DM texte via CMD_SEND_TXT_MSG (0x02).
+   * Compatible avec le firmware MeshCore standard (Companion protocol).
+   * Le firmware gère le chiffrement E2E et le routing multi-hop.
+   *
+   * @param pubkeyHex - Clé publique du destinataire (32 bytes hex = 64 chars)
+   * @param text      - Texte en clair (le firmware chiffre pour le destinataire)
+   * @param expectAck - Si true, demande un ACK au firmware
+   */
+  async sendDirectMessage(pubkeyHex: string, text: string, expectAck = false): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
+
+    // Accepter les deux formats : 64 chars (x-only 32B) ou 66 chars (compressée 02/03 + 32B)
+    // Le firmware attend toujours le x-coordinate sur 32 bytes (sans byte de parité)
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
+    const textBytes = new TextEncoder().encode(text);
+
+    // Format CMD_SEND_TXT_MSG : [pubkey:32][flags:1][text...]
+    const flags = expectAck ? 0x01 : 0x00;
+    const payload = new Uint8Array(32 + 1 + textBytes.length);
+    payload.set(pubkeyBytes.slice(0, 32), 0);
+    payload[32] = flags;
+    payload.set(textBytes, 33);
+
+    console.log(`[BleGateway] sendDirectMessage → CMD_SEND_TXT_MSG (${text.length}B)`);
+    await this.sendFrame(CMD_SEND_TXT_MSG, payload);
+  }
+
+  /**
+   * Envoie un message sur un canal via CMD_SEND_CHAN_MSG (0x03).
+   * Compatible avec le firmware MeshCore standard (Companion protocol).
+   *
+   * @param channelIdx - Index du canal (0 = canal public par défaut)
+   * @param text       - Texte du message
+   */
+  async sendChannelMessage(channelIdx: number, text: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
+
+    const textBytes = new TextEncoder().encode(text);
+
+    // Format CMD_SEND_CHAN_MSG : [channelIdx:1][text...]
+    const payload = new Uint8Array(1 + textBytes.length);
+    payload[0] = channelIdx & 0xFF;
+    payload.set(textBytes, 1);
+
+    console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
+    await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
+  }
+
   // ── Handlers publics ────────────────────────────────────────────
 
   onMessage(handler: MessageHandler): void {
@@ -421,6 +475,29 @@ export class BleGatewayClient {
           const raw  = payload.slice(RAW_PUSH_HEADER_SIZE);
           console.log(`[BleGateway] RawData SNR:${snr} RSSI:${rssi} (${raw.length}B)`);
           this.deliverRawPacket(raw);
+        }
+        break;
+      case RESP_DIRECT_MSG:
+        // DM reçu via firmware standard MeshCore Companion (CMD_SEND_TXT_MSG path)
+        // Format : [fromPubkey:32][snr:1][rssi:1][text...]
+        if (payload.length > 34) {
+          const fromPubkeyHex = Array.from(payload.slice(0, 32))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+          const text = new TextDecoder().decode(payload.slice(34));
+          console.log(`[BleGateway] DirectMsg de ${fromPubkeyHex.slice(0, 16)}…: "${text.slice(0, 40)}"`);
+          this.deliverCompanionTextPacket(fromPubkeyHex, text, false);
+        }
+        break;
+      case RESP_CHANNEL_MSG:
+        // Message canal reçu via firmware standard MeshCore Companion
+        // Format : [channelIdx:1][fromPubkey:32][snr:1][rssi:1][text...]
+        if (payload.length > 36) {
+          const channelIdx = payload[0];
+          const fromPubkeyHex = Array.from(payload.slice(1, 33))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+          const text = new TextDecoder().decode(payload.slice(35));
+          console.log(`[BleGateway] ChannelMsg ch=${channelIdx} de ${fromPubkeyHex.slice(0, 16)}…: "${text.slice(0, 40)}"`);
+          this.deliverCompanionTextPacket(fromPubkeyHex, text, true, channelIdx);
         }
         break;
       default:
@@ -491,6 +568,46 @@ export class BleGatewayClient {
     this.sendFrame(CMD_SET_TIME, timeBuf)
       .then(() => console.log('[BleGateway] SetTime envoyé:', ts))
       .catch((e) => console.warn('[BleGateway] SetTime échoué:', e));
+  }
+
+  /**
+   * Convertit un message texte reçu via le protocole Companion standard
+   * (RESP_DIRECT_MSG / RESP_CHANNEL_MSG) en MeshCorePacket et le livre
+   * au handler de l'application.
+   */
+  private deliverCompanionTextPacket(
+    fromPubkeyHex: string,
+    text: string,
+    isChannel: boolean,
+    channelIdx = 0
+  ): void {
+    if (!this.messageHandler) return;
+    try {
+      // Construire un MeshCorePacket synthétique depuis le message companion
+      // Le fromNodeId est dérivé des 8 premiers bytes de la pubkey du sender
+      const pubkeyBytes = new Uint8Array(fromPubkeyHex.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
+      const view = new DataView(pubkeyBytes.buffer, pubkeyBytes.byteOffset);
+      const fromNodeId = view.getBigUint64(0, false);
+
+      const randomId = new Uint32Array(1);
+      crypto.getRandomValues(randomId);
+      const packet: MeshCorePacket = {
+        version: 0x01,
+        type: 0x01, // MeshCoreMessageType.TEXT
+        flags: 0x00, // En clair (firmware a déjà déchiffré)
+        ttl: 10,
+        messageId: randomId[0],
+        fromNodeId,
+        toNodeId: 0n, // broadcast / nous
+        timestamp: Math.floor(Date.now() / 1000),
+        subMeshId: isChannel ? channelIdx : 0,
+        payload: new TextEncoder().encode(text),
+      };
+
+      this.messageHandler(packet);
+    } catch (err) {
+      console.error('[BleGateway] Erreur conversion companion packet:', err);
+    }
   }
 
   private deliverRawPacket(rawBytes: Uint8Array): void {

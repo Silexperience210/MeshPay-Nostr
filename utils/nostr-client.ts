@@ -112,7 +112,7 @@ export interface RelayInfo {
 }
 
 export interface TxRelayPayload {
-  type: 'bitcoin_tx' | 'cashu_token' | 'cashu_melt';
+  type: 'bitcoin_tx' | 'cashu_token' | 'cashu_melt' | 'lora_relay';
   /** Transaction hex (bitcoin_tx) ou token JSON serialisé (cashu_*) */
   data: string;
   /** URL du mint cible (cashu uniquement) */

@@ -27,6 +27,7 @@ import {
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
 import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
+import { MeshRouter } from '@/utils/mesh-routing';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { useNostr } from '@/providers/NostrProvider';
 // MeshIdentity utilisé comme type de paramètre pour publishAndStore
@@ -46,10 +47,14 @@ import {
   nodeIdToUint64,
   encodeEncryptedPayload,
   decodeEncryptedPayload,
+  encodeMeshCorePacket,
+  decodeMeshCorePacket,
   createKeyAnnouncePacket,
   extractPubkeyFromAnnounce,
   extractPosition,
   createPingPacket,
+  base64ToBytes,
+  bytesToBase64,
 } from '@/utils/meshcore-protocol';
 // Import Cashu validation
 import { verifyCashuToken, generateTokenId } from '@/utils/cashu';
@@ -95,17 +100,22 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
   const [contacts, setContacts] = useState<DBContact[]>([]);
   const chunkManagerRef = useRef(getChunkManager());
+  // Ref à jour sur conversations — évite les stale closures dans les callbacks BLE async
+  const conversationsRef = useRef<StoredConversation[]>([]);
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
   const joinedForums = useRef<Set<string>>(new Set());
   // PSKs chargées en mémoire : channelName → pskHex (évite les appels AsyncStorage dans les callbacks)
   const forumPsks = useRef<Map<string, string>>(new Map());
-  // FIX #1: Deduplication — Set des IDs de messages récents (max 200)
+  // MeshRouter : deduplication + routing table + TTL (remplace le Set manuel)
+  const meshRouterRef = useRef<MeshRouter | null>(null);
+  // FIX #1: Deduplication — Set des IDs de messages récents (fallback si identity pas encore dispo)
   const recentMsgIds = useRef<Set<string>>(new Set());
   // Buffer paquets chiffrés reçus avant de connaître la pubkey du sender
   const pendingEncryptedPackets = useRef<Map<string, MeshCorePacket[]>>(new Map());
   // Timestamp d'arrivée du premier paquet bufferisé par nodeId (pour expiration)
   const pendingEncryptedTimestamps = useRef<Map<string, number>>(new Map());
-  /** Durée max de buffering : 5 minutes. Après, on abandonne (pubkey jamais reçue). */
-  const PENDING_PACKET_TTL_MS = 5 * 60 * 1000;
+  /** Durée max de buffering : 30 minutes. Après, on abandonne (pubkey jamais reçue). */
+  const PENDING_PACKET_TTL_MS = 30 * 60 * 1000;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
   const addToDedup = (id: string) => {
@@ -115,6 +125,21 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       recentMsgIds.current.delete(recentMsgIds.current.values().next().value as string);
     }
   };
+
+  // Initialiser / réinitialiser le MeshRouter quand l'identité change
+  useEffect(() => {
+    if (identity) {
+      if (meshRouterRef.current) meshRouterRef.current.destroy();
+      meshRouterRef.current = new MeshRouter(identity.nodeId);
+      console.log('[MeshRouter] Initialisé pour nodeId:', identity.nodeId);
+    }
+    return () => {
+      if (meshRouterRef.current) {
+        meshRouterRef.current.destroy();
+        meshRouterRef.current = null;
+      }
+    };
+  }, [identity?.nodeId]);
 
   // Dériver l'identité dès que le wallet est disponible
   useEffect(() => {
@@ -159,19 +184,38 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!identity) return;
 
     try {
+      const fromNodeIdStr = uint64ToNodeId(packet.fromNodeId);
       console.log('[MeshCore] Paquet reçu via BLE:', {
         type: packet.type,
-        fromNodeId: uint64ToNodeId(packet.fromNodeId),
+        fromNodeId: fromNodeIdStr,
         to: uint64ToNodeId(packet.toNodeId),
         ttl: packet.ttl,
       });
+
+      // Deduplication via MeshRouter (TTL 5 min, nettoyage auto) ou Set fallback
+      const msgKey = `${packet.messageId}-${fromNodeIdStr}`;
+      if (meshRouterRef.current) {
+        if (meshRouterRef.current.hasSeen(msgKey)) {
+          console.log('[MeshCore] DROP: message déjà vu (MeshRouter dedup):', msgKey);
+          return;
+        }
+        meshRouterRef.current.markSeen(msgKey);
+        // Mettre à jour la routing table avec le voisin détecté
+        meshRouterRef.current.updateNeighbor(fromNodeIdStr);
+      } else {
+        if (recentMsgIds.current.has(msgKey)) {
+          console.log('[MeshCore] DROP: message déjà vu (fallback dedup):', msgKey);
+          return;
+        }
+        addToDedup(msgKey);
+      }
 
       // Vérifier que le paquet est pour nous (ou broadcast)
       const myNodeIdUint64 = nodeIdToUint64(identity.nodeId);
       if (packet.toNodeId !== myNodeIdUint64 && packet.toNodeId !== 0n) {
         // Forward to gateway if active (LoRa relay mode)
         if (gatewayState.isActive) {
-          const rawPayload = JSON.stringify(packet);
+          const rawPayload = bytesToBase64(encodeMeshCorePacket(packet));
           handleLoRaMsg(rawPayload, packet.fromNodeId?.toString() ?? 'unknown');
         }
         return;
@@ -204,31 +248,41 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           
           // ✅ Message chunké reconstitué - stocké dans la DB
           const fromNodeId = uint64ToNodeId(packet.fromNodeId);
-          // ✅ Récupérer la pubkey depuis le packet ou la conversation
           let senderPubkey = '';
-          const existingConv = conversations.find(c => c.id === fromNodeId);
+          const existingConv = conversationsRef.current.find(c => c.id === fromNodeId);
           if (existingConv?.peerPubkey) {
             senderPubkey = existingConv.peerPubkey;
-          } else {
-            // Essayer d'extraire la pubkey du payload si présente
-            try {
-              const payloadStr = new TextDecoder().decode(packet.payload);
-              if (payloadStr.startsWith('04') || payloadStr.startsWith('02') || payloadStr.startsWith('03')) {
-                senderPubkey = payloadStr.slice(0, 66); // Pubkey compressed
-                // Sauvegarder la pubkey pour futures utilisations
-                updateConversationPubkey(fromNodeId, senderPubkey);
+          }
+
+          // Déchiffrer le message reconstitué si le flag ENCRYPTED est actif
+          let finalChunkText = result.message;
+          if (packet.flags & MeshCoreFlags.ENCRYPTED) {
+            if (senderPubkey) {
+              try {
+                const encBytes = base64ToBytes(result.message);
+                const encPayload = decodeEncryptedPayload(encBytes);
+                if (encPayload) {
+                  finalChunkText = decryptDM(encPayload, identity.privkeyBytes, senderPubkey);
+                  console.log('[MeshCore] Message chunké déchiffré avec succès');
+                } else {
+                  finalChunkText = '[Chunk chiffré invalide]';
+                }
+              } catch (decErr) {
+                console.error('[MeshCore] Erreur déchiffrement chunk:', decErr);
+                finalChunkText = '[Erreur déchiffrement]';
               }
-            } catch {
-              // Ignorer erreur décodage
+            } else {
+              finalChunkText = '[Chunk chiffré - clé publique inconnue]';
+              console.warn('[MeshCore] Chunk ENCRYPTED reçu mais pubkey inconnue pour', fromNodeId);
             }
           }
-          
+
           const msg: StoredMessage = {
             id: `chunk-${packet.messageId}`,
             conversationId: fromNodeId,
             fromNodeId: fromNodeId,
-            fromPubkey: senderPubkey, // ✅ Pubkey récupérée
-            text: result.message,
+            fromPubkey: senderPubkey,
+            text: finalChunkText,
             type: 'text',
             timestamp: packet.timestamp * 1000,
             isMine: false,
@@ -327,7 +381,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           }
 
           // Récupérer la pubkey du sender depuis nos conversations
-          const conv = conversations.find(c => c.id === fromNodeId);
+          const conv = conversationsRef.current.find(c => c.id === fromNodeId);
           if (!conv?.peerPubkey) {
             const now = Date.now();
 
@@ -342,7 +396,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
             // Buffer le paquet — sera retraité quand KEY_ANNOUNCE arrivera
             const existing = pendingEncryptedPackets.current.get(fromNodeId) ?? [];
-            if (existing.length < 5) {
+            if (existing.length < 50) {
               pendingEncryptedPackets.current.set(fromNodeId, [...existing, packet]);
               // Enregistrer le timestamp du premier paquet bufferisé pour ce nodeId
               if (!pendingEncryptedTimestamps.current.has(fromNodeId)) {
@@ -580,9 +634,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     // Skip nos propres events
     if (nostrClient.publicKey && event.pubkey === nostrClient.publicKey) return;
 
-    // Déduplication
-    if (recentMsgIds.current.has(event.id)) return;
-    addToDedup(event.id);
+    // Déduplication via MeshRouter si disponible, sinon fallback Set
+    if (meshRouterRef.current) {
+      if (meshRouterRef.current.hasSeen(event.id)) return;
+      meshRouterRef.current.markSeen(event.id);
+    } else {
+      if (recentMsgIds.current.has(event.id)) return;
+      addToDedup(event.id);
+    }
 
     const convId = `forum:${channelName}`;
     const fromId = event.tags.find(t => t[0] === 'meshcore-from')?.[1] ?? event.pubkey;
@@ -834,8 +893,25 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     // ✅ Utiliser chunking si message trop long (uniquement DM, pas forum)
     if (!isForum && chunkManagerRef.current.needsChunking(text)) {
       console.log('[Messages] Utilisation du chunking pour message long');
+
+      // Chiffrer AVANT le chunking si la pubkey du pair est connue
+      const convForChunk = conversations.find(c => c.id === convId);
+      let textToChunk = text;
+      let chunkEncrypted = false;
+      if (convForChunk?.peerPubkey && ble.connected) {
+        try {
+          const enc = encryptDM(text, id.privkeyBytes, convForChunk.peerPubkey);
+          const encBytes = encodeEncryptedPayload(enc);
+          textToChunk = bytesToBase64(encBytes);
+          chunkEncrypted = true;
+          console.log('[Messages] Chunk: payload chiffré avant découpage');
+        } catch (encErr) {
+          console.warn('[Messages] Chunk: chiffrement échoué, envoi en clair:', encErr);
+        }
+      }
+
       const result = await chunkManagerRef.current.sendMessageWithChunking(
-        text,
+        textToChunk,
         id.nodeId,
         convId,
         async (packet) => {
@@ -845,7 +921,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             throw new Error('BLE non connecté');
           }
         },
-        true // encrypted
+        chunkEncrypted
       );
       
       if (!result.success) {
@@ -1472,6 +1548,26 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
     return unsub;
   }, [identity]);
+
+  // Bridge Nostr → LoRa : reçoit les paquets LoRa relayés via Nostr (type='lora')
+  // et les réinjecte dans le pipeline handleIncomingMeshCorePacket.
+  useEffect(() => {
+    const unsub = messagingBus.subscribe((msg) => {
+      if (msg.type !== 'lora') return;
+
+      const bytes = base64ToBytes(msg.content);
+      const packet = decodeMeshCorePacket(bytes);
+      if (!packet) {
+        console.warn('[Nostr→LoRa] Paquet invalide ignoré (CRC/format)');
+        return;
+      }
+
+      console.log('[Nostr→LoRa] Paquet reçu via relay Nostr, type:', packet.type);
+      handleIncomingMeshCorePacket(packet);
+    });
+
+    return unsub;
+  }, [handleIncomingMeshCorePacket]);
 
   return {
     identity,
