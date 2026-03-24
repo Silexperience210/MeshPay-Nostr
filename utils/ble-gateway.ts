@@ -149,6 +149,7 @@ type BleSubscription  = { remove: () => void };
 
 export class BleGatewayClient {
   private connectedId: string | null = null;
+  private isConnecting = false; // Guard : empêche scan + connect simultanés
   private messageHandler: MessageHandler | null = null;
   private deviceInfo: BleDeviceInfo | null = null;
   private listeners: BleSubscription[] = [];
@@ -200,6 +201,12 @@ export class BleGatewayClient {
     onDeviceFound: (device: BleGatewayDevice) => void,
     timeoutMs = 10000
   ): Promise<void> {
+    // Guard : pas de scan si une connexion est en cours (conflit BLE natif Android)
+    if (this.isConnecting) {
+      console.warn('[BleGateway] Scan bloqué : connexion BLE en cours');
+      throw new Error('Connexion BLE en cours, réessayez dans quelques secondes');
+    }
+
     console.log('[BleGateway] Scan BLE actif...');
     const seen = new Set<string>();
 
@@ -231,7 +238,7 @@ export class BleGatewayClient {
       });
     };
 
-    // ── Phase 0 : devices bondés (directed advertising → invisible au scan) ──
+    // ── Phase 0 : devices bondés (directed advertising → invisible au scan normal) ──
     try {
       const bonded: any[] = await BleManager.getBondedPeripherals();
       console.log(`[BleGateway] ${bonded.length} device(s) bondé(s)`);
@@ -242,24 +249,16 @@ export class BleGatewayClient {
 
     const listener = this.emitter.addListener('BleManagerDiscoverPeripheral', reportDevice);
 
-    // ── Phase 1 : scan filtré Service UUID NUS (Android 13+ hardware-filter) ──
-    const phase1Ms = Math.round(timeoutMs * 0.6);
+    // ── Scan universel sans filtre UUID ──
+    // Le filtre serviceUUIDs sur Android peut entrer en conflit avec une connexion active
+    // ou ne retourner aucun résultat selon le firmware. Un scan sans filtre est plus fiable.
     try {
-      await BleManager.scan({ serviceUUIDs: [SERVICE_UUID], seconds: phase1Ms / 1000, allowDuplicates: true });
-      await new Promise((res) => setTimeout(res, phase1Ms));
+      await BleManager.stopScan().catch(() => {});
+      await BleManager.scan({ serviceUUIDs: [], seconds: timeoutMs / 1000 });
+      await new Promise((res) => setTimeout(res, timeoutMs));
       await BleManager.stopScan();
     } catch (e) {
-      console.log('[BleGateway] Phase 1 scan erreur:', e);
-    }
-
-    // ── Phase 2 : fallback sans filtre ──
-    const phase2Ms = timeoutMs - phase1Ms;
-    try {
-      await BleManager.scan({ serviceUUIDs: [], seconds: phase2Ms / 1000, allowDuplicates: true });
-      await new Promise((res) => setTimeout(res, phase2Ms));
-      await BleManager.stopScan();
-    } catch (e) {
-      console.log('[BleGateway] Phase 2 scan erreur:', e);
+      console.log('[BleGateway] Scan erreur:', e);
     }
 
     listener.remove();
@@ -273,6 +272,7 @@ export class BleGatewayClient {
   // ── Connect ──────────────────────────────────────────────────────
 
   async connect(deviceId: string): Promise<void> {
+    this.isConnecting = true;
     this.listeners.forEach((l) => l.remove());
     this.listeners = [];
     this.clearSelfInfoRetry();
@@ -282,6 +282,7 @@ export class BleGatewayClient {
     this.channelConfigs.clear();
 
     console.log(`[BleGateway] Connexion à ${deviceId}...`);
+    try {
 
     // ── 1. Connexion BLE ──
     await BleManager.connect(deviceId);
@@ -397,6 +398,9 @@ export class BleGatewayClient {
     this.sendSelfAdvert(1).catch((e) => console.warn('[BleGateway] sendSelfAdvert:', e));
 
     console.log('[BleGateway] Handshake terminé');
+    } finally {
+      this.isConnecting = false;
+    }
   }
 
   // ── Bonding explicite ────────────────────────────────────────────

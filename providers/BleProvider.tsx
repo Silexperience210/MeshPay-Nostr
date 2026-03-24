@@ -167,30 +167,28 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
         console.log('[BleProvider] BLE initialisé');
 
-        // Auto-reconnect au dernier device connu
-        try {
-          const lastId = await AsyncStorage.getItem(BLE_LAST_DEVICE_KEY);
-          if (lastId) {
-            console.log('[BleProvider] Auto-reconnect:', lastId);
-            await Promise.race([
-              client.connect(lastId),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('auto-reconnect timeout')), 10000)
-              ),
-            ]);
-            const device = client.getConnectedDevice();
-            const ch0    = client.getChannelConfig(0);
-            setState((prev) => ({
-              ...prev,
-              connected: true,
-              device,
-              channelConfigured: ch0?.configured || false,
-            }));
-            console.log('[BleProvider] Auto-reconnect réussi:', device?.name);
-          }
-        } catch {
-          console.log('[BleProvider] Auto-reconnect échoué');
-        }
+        // Auto-reconnect au dernier device connu — en arrière-plan (non bloquant)
+        // Délai 1.5s pour laisser l'app s'initialiser avant toute opération BLE
+        AsyncStorage.getItem(BLE_LAST_DEVICE_KEY).then((lastId) => {
+          if (!lastId) return;
+          console.log('[BleProvider] Auto-reconnect (background):', lastId);
+          setTimeout(() => {
+            client.connect(lastId)
+              .then(() => {
+                const device = client.getConnectedDevice();
+                const ch0    = client.getChannelConfig(0);
+                setState((prev) => ({
+                  ...prev,
+                  connected: true,
+                  device,
+                  channelConfigured: ch0?.configured || false,
+                }));
+                console.log('[BleProvider] Auto-reconnect réussi:', device?.name);
+              })
+              .catch(() => console.log('[BleProvider] Auto-reconnect échoué'));
+          }, 1500);
+        }).catch(() => {});
+
       } catch (err: any) {
         console.error('[BleProvider] Init error:', err);
         setState((prev) => ({ ...prev, error: err.message || 'BLE init failed' }));
