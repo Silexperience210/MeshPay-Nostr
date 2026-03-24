@@ -82,9 +82,9 @@ const APP_PROTOCOL_VERSION = 3;
 const RAW_PUSH_HEADER_SIZE = 3;   // [snr:int8][rssi:int8][reserved:uint8]
 const BLE_MAX_WRITE        = 169; // MTU 172 − 3 ATT overhead
 
-// Canal public par défaut (canal 0, secret = 32 zéros)
+// Canal public par défaut (canal 0, secret = 16 zéros — doc officielle MeshCore v1.13)
 const DEFAULT_CHANNEL_NAME   = 'public';
-const DEFAULT_CHANNEL_SECRET = new Uint8Array(32);
+const DEFAULT_CHANNEL_SECRET = new Uint8Array(16);
 
 // ── Types publics ──────────────────────────────────────────────────────
 
@@ -641,17 +641,18 @@ export class BleGatewayClient {
 
   /**
    * Configure un canal sur le device.
-   * Format CMD_SET_CHANNEL : [idx:1][name:32 null-padded][secret:32]
+   * Format CMD_SET_CHANNEL : [idx:1][name:32 null-padded][secret:16] — total 49 bytes
+   * Doc officielle MeshCore v1.13 : secret = 16 bytes. 32-byte variant → PACKET_ERROR.
    */
   async setChannel(channelIdx: number, name: string, secret: Uint8Array): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
     if (channelIdx < 0 || channelIdx > 7) throw new Error(`Canal invalide: ${channelIdx}`);
 
-    const payload   = new Uint8Array(1 + 32 + 32);
+    const payload   = new Uint8Array(1 + 32 + 16); // 49 bytes total
     payload[0]      = channelIdx;
     const nameBytes = new TextEncoder().encode(name);
     payload.set(nameBytes.slice(0, Math.min(nameBytes.length, 31)), 1); // null-padded 32B
-    payload.set(secret.slice(0, 32), 33);
+    payload.set(secret.slice(0, 16), 33);
 
     console.log(`[BleGateway] setChannel ${channelIdx}: "${name}"`);
     await this.sendFrame(CMD_SET_CHANNEL, payload);
@@ -659,7 +660,7 @@ export class BleGatewayClient {
     this.channelConfigs.set(channelIdx, {
       index: channelIdx,
       name,
-      secret: secret.slice(0, 32),
+      secret: secret.slice(0, 16),
       configured: true,
     });
   }
@@ -813,8 +814,8 @@ export class BleGatewayClient {
    *   [1]      txPower    (1B)
    *   [2]      maxTxPower (1B)
    *   [3..34]  publicKey  (32B)   ← PAS de byte "flags" entre maxTxPower et pubkey
-   *   [35..38] advLat     (int32 LE, ×1e-7)
-   *   [39..42] advLon     (int32 LE, ×1e-7)
+   *   [35..38] advLat     (int32 LE, ×1e-6)
+   *   [39..42] advLon     (int32 LE, ×1e-6)
    *   [43..46] multi_acks+adv_loc_policy+telemetry+manual_contacts
    *   [47..50] radioFreq  (uint32 LE, Hz)
    *   [51..54] radioBw    (uint32 LE, Hz)
@@ -854,8 +855,8 @@ export class BleGatewayClient {
 
     const info: BleDeviceInfo = {
       name, publicKey, txPower, radioFreqHz, radioBwHz, radioSf, radioCr,
-      advLat: advLatRaw / 1e7,
-      advLon: advLonRaw / 1e7,
+      advLat: advLatRaw / 1e6,
+      advLon: advLonRaw / 1e6,
     };
     this.deviceInfo = info;
     console.log('[BleGateway] SelfInfo:', {
@@ -897,8 +898,10 @@ export class BleGatewayClient {
       .map((b) => b.toString(16).padStart(2, '0')).join('');
     const pathLen  = payload[9];
     const txtType  = payload[10];
-    const ts       = new DataView(payload.buffer, payload.byteOffset).getUint32(11, true);
-    const text     = new TextDecoder().decode(payload.slice(15)).replace(/\0/g, '');
+    const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(11, true);
+    // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix before text
+    const textOffset = txtType === 2 ? 19 : 15;
+    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] DM de ${senderPubkeyPrefix} SNR=${snr}: "${text.slice(0, 40)}"`);
 
