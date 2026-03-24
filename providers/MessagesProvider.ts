@@ -291,7 +291,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           };
           
           saveMessage(msg);
-          updateConversationLastMessage(fromNodeId, result.message.slice(0, 50), msg.timestamp, true);
+          updateConversationLastMessage(fromNodeId, finalChunkText.slice(0, 50), msg.timestamp, true);
           
           setMessagesByConv(prev => ({
             ...prev,
@@ -519,54 +519,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
               [fromNodeId]: updatedMessages,
             };
           });
-        }
-      } else if (packet.type === (MeshCoreMessageType as any).KEY_ANNOUNCE) {
-        // ✅ Traiter l'annonce de clé publique
-        const fromNodeId = uint64ToNodeId(packet.fromNodeId);
-        const pubkeyHex = extractPubkeyFromAnnounce(packet);
-        if (!pubkeyHex) {
-          console.error('[MeshCore] KEY_ANNOUNCE invalide');
-          return;
-        }
-
-        console.log('[MeshCore] Clé publique reçue depuis', fromNodeId, ':', pubkeyHex.slice(0, 16) + '...');
-
-        // Sauvegarder la pubkey dans la conversation
-        setConversations(prev => {
-          const exists = prev.find(c => c.id === fromNodeId);
-          if (exists) {
-            // Mettre à jour la pubkey
-            const updated = prev.map(c =>
-              c.id === fromNodeId ? { ...c, peerPubkey: pubkeyHex, online: true } : c
-            );
-            // Persister
-            const updatedConv = updated.find(c => c.id === fromNodeId);
-            if (updatedConv) saveConversation(updatedConv);
-            return updated;
-          } else {
-            // Créer nouvelle conversation
-            const newConv: StoredConversation = {
-              id: fromNodeId,
-              name: fromNodeId,
-              isForum: false,
-              peerPubkey: pubkeyHex,
-              lastMessage: '',
-              lastMessageTime: packet.timestamp * 1000,
-              unreadCount: 0,
-              online: true,
-            };
-            saveConversation(newConv);
-            return [newConv, ...prev];
-          }
-        });
-        
-        // ✅ Répondre avec notre propre clé publique (échange bidirectionnel)
-        try {
-          const announcePacket = createKeyAnnouncePacket(identity.nodeId, identity.pubkeyHex);
-          await ble.sendPacket(announcePacket);
-          console.log('[MeshCore] Notre clé publique envoyée à', fromNodeId);
-        } catch (err) {
-          console.error('[MeshCore] Erreur envoi KEY_ANNOUNCE:', err);
         }
       } else if (packet.type === MeshCoreMessageType.POSITION) {
         // GPS LoRa : position reçue (radar géré par RadarProvider via Nostr presence)
@@ -798,7 +750,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         const encryptedPayload = encodeEncryptedPayload(enc);
 
         // Créer paquet MeshCore TEXT binaire avec payload chiffré
-        const messageId = (Date.now() % 0xFFFFFFFF);
+        const _randomId = new Uint32Array(1);
+        crypto.getRandomValues(_randomId);
+        const messageId = _randomId[0];
 
         const packet: MeshCorePacket = {
           version: 0x01,
