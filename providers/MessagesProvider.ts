@@ -549,6 +549,17 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [ble.connected, identity, handleIncomingMeshCorePacket]);
 
+  // Auto-join forum "public" dès connexion BLE — canal 0, broadcast LoRa (CMD_SEND_CHAN_MSG)
+  // joinForum est idempotente : vérifie existing avant de créer, skipAnnounce évite kind:40 Nostr
+  useEffect(() => {
+    if (!ble.connected) return;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    joinForum('public', 'Canal public MeshCore', undefined, true)
+      .catch(err => console.warn('[MeshCore] Auto-join public forum:', err));
+  // ble.connected only — joinForum est stable et idempotente, pas besoin de re-run sur chaque conversation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ble.connected]);
+
   // Charger les conversations depuis AsyncStorage
   useEffect(() => {
     listConversations().then(convs => {
