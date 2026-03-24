@@ -48,9 +48,13 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
   const [pinValue, setPinValue] = React.useState('123456');
   // Guard anti-setState sur composant démonté (modal fermé pendant scan)
   const isMountedRef = React.useRef(true);
+  const scanTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   React.useEffect(() => {
     isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
+    return () => {
+      isMountedRef.current = false;
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+    };
   }, []);
 
   const NUS_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
@@ -125,7 +129,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
 
       await BleManager.scan({ serviceUUIDs: [NUS_UUID], seconds: 8, allowDuplicates: false, scanMode: 2, matchMode: 1 } as any);
 
-      setTimeout(async () => {
+      scanTimerRef.current = setTimeout(async () => {
         sub.remove();
         try { await BleManager.stopScan(); } catch (_) {}
         if (!isMountedRef.current) return; // modal fermé pendant le scan
