@@ -128,37 +128,60 @@ export class BleGatewayClient {
     console.log('[BleGateway] Scan BLE actif...');
     const seen = new Set<string>();
 
+    const reportDevice = (peripheral: {
+      id: string;
+      name?: string;
+      rssi?: number;
+      advertising?: { localName?: string };
+    }) => {
+      const name: string =
+        peripheral.name ||
+        peripheral.advertising?.localName ||
+        '';
+
+      if (seen.has(peripheral.id) && !name) return;
+      seen.add(peripheral.id);
+
+      const displayName = name || `BLE (${peripheral.id.slice(0, 8)})`;
+      const isMeshCore =
+        displayName.toLowerCase().includes('meshcore') ||
+        displayName.toLowerCase().includes('whisper') ||
+        displayName.toLowerCase().includes('bitmesh') ||
+        displayName.toLowerCase().includes('lora');
+
+      console.log(`[BleGateway] Trouvé: "${displayName}" RSSI ${peripheral.rssi ?? '?'}`);
+
+      onDeviceFound({
+        id: peripheral.id,
+        name: displayName,
+        rssi: peripheral.rssi || -100,
+        type: isMeshCore ? 'companion' : 'gateway',
+      });
+    };
+
+    // ── 1. Inclure immédiatement les devices déjà bondés ──────────────
+    // Sur Android, un device bondé peut arrêter de broadcaster (directed advertising)
+    // et ne jamais apparaître dans un scan actif — même s'il est à portée.
+    try {
+      const bonded: any[] = await BleManager.getBondedPeripherals();
+      console.log(`[BleGateway] ${bonded.length} device(s) bondé(s) trouvé(s)`);
+      for (const p of bonded) {
+        reportDevice(p);
+      }
+    } catch (e) {
+      console.log('[BleGateway] getBondedPeripherals non supporté:', e);
+    }
+
+    // ── 2. Scan actif sans filtre UUID (plus fiable sur Android) ──────
     const listener = this.emitter.addListener(
       'BleManagerDiscoverPeripheral',
-      (peripheral: any) => {
-        const name: string =
-          peripheral.name ||
-          peripheral.advertising?.localName ||
-          '';
-
-        if (seen.has(peripheral.id) && !name) return;
-        seen.add(peripheral.id);
-
-        const displayName = name || `BLE (${peripheral.id.slice(0, 8)})`;
-        const isMeshCore =
-          displayName.startsWith('MeshCore-') ||
-          displayName.startsWith('Whisper-');
-
-        console.log(`[BleGateway] Trouvé: "${displayName}" RSSI ${peripheral.rssi}`);
-
-        onDeviceFound({
-          id: peripheral.id,
-          name: displayName,
-          rssi: peripheral.rssi || -100,
-          type: isMeshCore ? 'companion' : 'gateway',
-        });
-      }
+      reportDevice,
     );
 
-    // Scan sans filtre UUID (plus fiable sur Android)
     await BleManager.scan({
       serviceUUIDs: [],
       seconds: timeoutMs / 1000,
+      allowDuplicates: true,   // permet de récupérer le nom depuis les SCAN_RSP
       scanMode: 2 as any,
       matchMode: 1 as any,
       numberOfMatches: 3 as any,
