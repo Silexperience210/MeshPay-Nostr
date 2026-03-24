@@ -1,16 +1,22 @@
 /**
- * BLE Provider
+ * BLE Provider — MeshCore Companion Protocol v1.13
  *
- * Gère la connexion BLE au gateway ESP32 LoRa
- * Expose l'état BLE et les fonctions scan/connect/disconnect
- * 
- * V2.0: Utilise MessageRetryService pour persistance des messages
+ * Gère la connexion BLE au gateway MeshCore.
+ * Expose : scan, connexion, envoi/réception messages, contacts, canaux.
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BleGatewayClient, getBleGatewayClient, BleGatewayDevice, BleDeviceInfo } from '@/utils/ble-gateway';
+import {
+  BleGatewayClient,
+  getBleGatewayClient,
+  type BleGatewayDevice,
+  type BleDeviceInfo,
+  type MeshCoreContact,
+  type MeshCoreIncomingMsg,
+  type ChannelConfig,
+} from '@/utils/ble-gateway';
 import { type MeshCorePacket } from '@/utils/meshcore-protocol';
 import { getMessageRetryService } from '@/services/MessageRetryService';
 import { getBackgroundBleService } from '@/services/BackgroundBleService';
@@ -19,31 +25,49 @@ const BLE_LAST_DEVICE_KEY = 'ble_last_device_id';
 
 interface BleState {
   connected: boolean;
-  loraActive: boolean;  // true = au moins un paquet LoRa reçu/envoyé avec succès
+  loraActive: boolean;
   device: BleGatewayDevice | null;
-  deviceInfo: BleDeviceInfo | null;  // Infos parsées depuis SelfInfo (AppStart response)
+  deviceInfo: BleDeviceInfo | null;
   scanning: boolean;
   availableDevices: BleGatewayDevice[];
   error: string | null;
+  // Protocole natif MeshCore Companion
+  meshContacts: MeshCoreContact[];
+  currentChannel: number;
+  channelConfigured: boolean;
 }
 
 interface BleContextValue extends BleState {
+  // Scan et connexion
   scanForGateways: () => Promise<void>;
   connectToGateway: (deviceId: string) => Promise<void>;
   disconnectGateway: () => Promise<void>;
+
+  // BitMesh custom (CMD_SEND_RAW — firmware custom requis)
   sendPacket: (packet: MeshCorePacket, timeoutMs?: number) => Promise<void>;
   onPacket: (handler: (packet: MeshCorePacket) => void) => void;
-  confirmLoraActive: () => void;  // Appelé par MessagesProvider après réception d'un paquet BLE
+  confirmLoraActive: () => void;
+
+  // Protocole natif MeshCore Companion
+  sendDirectMessage: (pubkeyHex: string, text: string) => Promise<void>;
+  sendChannelMessage: (text: string) => Promise<void>;
+  setChannel: (idx: number) => void;
+  syncContacts: () => Promise<void>;
+  sendSelfAdvert: () => Promise<void>;
+  configureChannel: (index: number, name: string, secret: string) => Promise<void>;
+
+  // Callbacks messages entrants et confirmations
+  onBleMessage: (cb: (msg: MeshCoreIncomingMsg) => void) => () => void;
+  offBleMessage: () => void;
+  onSendConfirmed: (cb: (ackCode: number, roundTripMs: number) => void) => () => void;
 }
 
 const BleContext = createContext<BleContextValue | null>(null);
 
 export function useBle(): BleContextValue {
-  const context = useContext(BleContext);
-  if (!context) {
-    throw new Error('useBle must be used within BleProvider');
-  }
-  return context;
+  const ctx = useContext(BleContext);
+  if (!ctx) throw new Error('useBle must be used within BleProvider');
+  return ctx;
 }
 
 export function BleProvider({ children }: { children: React.ReactNode }) {
@@ -55,334 +79,368 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     scanning: false,
     availableDevices: [],
     error: null,
+    meshContacts: [],
+    currentChannel: 0,
+    channelConfigured: false,
   });
 
-  const clientRef = useRef<BleGatewayClient | null>(null);
-  const retryServiceRef = useRef(getMessageRetryService());
-  // Handler en attente : enregistré avant que le client BLE soit initialisé
+  const clientRef     = useRef<BleGatewayClient | null>(null);
+  const retryService  = useRef(getMessageRetryService());
   const pendingPacketHandlerRef = useRef<((packet: MeshCorePacket) => void) | null>(null);
-  // Ref pour accéder à state.connected dans les callbacks sans les recréer
-  const connectedRef = useRef(false);
+  const incomingMsgCallbackRef  = useRef<((msg: MeshCoreIncomingMsg) => void) | null>(null);
+  const connectedRef  = useRef(false);
   useEffect(() => { connectedRef.current = state.connected; }, [state.connected]);
 
+  // ── Initialisation BLE ───────────────────────────────────────────
+
   useEffect(() => {
-    // Initialiser le client BLE
-    const initBle = async () => {
+    const init = async () => {
       try {
-        // Demander les permissions BLE sur Android
         if (Platform.OS === 'android') {
-          await requestAndroidPermissions();
+          try { await requestAndroidPermissions(); }
+          catch (e) { console.warn('[BleProvider] Permissions BLE non accordées:', e); }
         }
 
         const client = getBleGatewayClient();
         await client.initialize();
         clientRef.current = client;
 
+        // SelfInfo reçue → device info + nom à jour
         client.onDeviceInfo((info) => {
-          setState((prev) => ({ ...prev, deviceInfo: info }));
+          console.log('[BleProvider] SelfInfo reçue:', info.name);
+          setState((prev) => ({
+            ...prev,
+            deviceInfo: info,
+            device: prev.device ? { ...prev.device, name: info.name } : null,
+          }));
         });
 
-        // Appliquer tout handler enregistré avant l'initialisation
+        // Message texte reçu via protocole Companion (DM ou canal)
+        client.onIncomingMessage((msg) => {
+          console.log(`[BleProvider] Message ${msg.type} reçu: "${msg.text.slice(0, 30)}"`);
+          setState((prev) => ({ ...prev, loraActive: true }));
+          incomingMsgCallbackRef.current?.(msg);
+        });
+
+        // Contact découvert (PUSH_ADVERT ou PUSH_NEW_ADVERT)
+        client.onContactDiscovered((contact) => {
+          setState((prev) => ({
+            ...prev,
+            meshContacts: [
+              ...prev.meshContacts.filter((c) => c.pubkeyHex !== contact.pubkeyHex),
+              contact,
+            ],
+          }));
+        });
+
+        // Liste complète contacts chargée (fin CMD_GET_CONTACTS)
+        client.onContacts((contacts) => {
+          console.log(`[BleProvider] ${contacts.length} contacts chargés`);
+          setState((prev) => ({ ...prev, meshContacts: contacts }));
+        });
+
+        // Livraison LoRa confirmée (PUSH_SEND_CONFIRMED)
+        client.onSendConfirmed((ackCode, rtt) => {
+          console.log(`[BleProvider] Message confirmé ACK:${ackCode} RTT:${rtt}ms`);
+        });
+
+        // Déconnexion détectée par le firmware
+        client.onDisconnect(() => {
+          console.log('[BleProvider] Déconnexion détectée');
+          setState((prev) => ({
+            ...prev,
+            connected: false,
+            loraActive: false,
+            device: null,
+            meshContacts: [],
+            channelConfigured: false,
+          }));
+        });
+
+        // Appliquer handler en attente (enregistré avant init)
         if (pendingPacketHandlerRef.current) {
           client.onMessage((packet) => {
-            setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+            setState((prev) => (prev.loraActive ? prev : { ...prev, loraActive: true }));
             pendingPacketHandlerRef.current?.(packet);
           });
-          console.log('[BleProvider] Handler en attente appliqué après init BLE');
         }
 
-        console.log('[BleProvider] BLE initialized');
+        console.log('[BleProvider] BLE initialisé');
 
-        // Auto-reconnect au dernier appareil connu
+        // Auto-reconnect au dernier device connu
         try {
-          const lastDeviceId = await AsyncStorage.getItem(BLE_LAST_DEVICE_KEY);
-          if (lastDeviceId) {
-            console.log('[BleProvider] Auto-reconnect à:', lastDeviceId);
-            await client.connect(lastDeviceId);
+          const lastId = await AsyncStorage.getItem(BLE_LAST_DEVICE_KEY);
+          if (lastId) {
+            console.log('[BleProvider] Auto-reconnect:', lastId);
+            await Promise.race([
+              client.connect(lastId),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('auto-reconnect timeout')), 10000)
+              ),
+            ]);
             const device = client.getConnectedDevice();
-            setState((prev) => ({ ...prev, connected: true, device }));
+            const ch0    = client.getChannelConfig(0);
+            setState((prev) => ({
+              ...prev,
+              connected: true,
+              device,
+              channelConfigured: ch0?.configured || false,
+            }));
             console.log('[BleProvider] Auto-reconnect réussi:', device?.name);
           }
-        } catch (reconnectErr) {
-          // Silencieux — l'appareil n'est peut-être pas à portée
-          console.log('[BleProvider] Auto-reconnect échoué (appareil hors portée)');
+        } catch {
+          console.log('[BleProvider] Auto-reconnect échoué');
         }
-      } catch (error: any) {
-        console.error('[BleProvider] Initialization error:', error);
-        setState((prev) => ({
-          ...prev,
-          error: error.message || 'Failed to initialize BLE',
-        }));
+      } catch (err: any) {
+        console.error('[BleProvider] Init error:', err);
+        setState((prev) => ({ ...prev, error: err.message || 'BLE init failed' }));
       }
     };
 
-    initBle();
-
-    // Cleanup au démontage
+    init();
     return () => {
-      if (clientRef.current) {
-        clientRef.current.disconnect().catch(console.error);
-      }
-      retryServiceRef.current.stop();
+      clientRef.current?.disconnect().catch(console.error);
+      retryService.current.stop();
     };
   }, []);
 
-  /**
-   * Démarre le service de retry et le background service quand BLE se reconnecte
-   */
   useEffect(() => {
     if (state.connected) {
-      // Démarrer le service de retry
-      retryServiceRef.current.start();
-      
-      // Enregistrer le background service
+      retryService.current.start();
       getBackgroundBleService().register().catch(console.error);
-      
-      console.log('[BleProvider] Services démarrés');
     } else {
-      retryServiceRef.current.stop();
+      retryService.current.stop();
     }
   }, [state.connected]);
 
-  /**
-   * Demande les permissions BLE sur Android
-   */
+  // ── Permissions Android ──────────────────────────────────────────
+
   const requestAndroidPermissions = async () => {
     if (Platform.OS !== 'android') return;
-
-    const apiLevel = Platform.Version;
-
-    if (apiLevel >= 31) {
-      // Android 12+ (API 31+)
+    if ((Platform.Version as number) >= 31) {
       const granted = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       ]);
-
       if (
         granted['android.permission.BLUETOOTH_SCAN'] !== 'granted' ||
         granted['android.permission.BLUETOOTH_CONNECT'] !== 'granted'
-      ) {
-        throw new Error('BLE permissions not granted');
-      }
+      ) throw new Error('BLE permissions not granted');
     } else {
-      // Android <12
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
       );
-
-      if (granted !== 'granted') {
-        throw new Error('Location permission required for BLE scanning');
-      }
+      if (granted !== 'granted') throw new Error('Location permission required for BLE scanning');
     }
   };
 
-  /**
-   * Scanne les gateways BLE disponibles.
-   * Si le client n'est pas encore initialisé (BT était off au démarrage),
-   * on re-tente l'initialisation avant de lancer le scan.
-   */
+  // ── Scan ─────────────────────────────────────────────────────────
+
   const scanForGateways = useCallback(async () => {
-    // Re-init si le client n'est pas prêt (BT off au démarrage, permissions tardives…)
     if (!clientRef.current) {
       try {
-        if (Platform.OS === 'android') {
-          await requestAndroidPermissions();
-        }
+        if (Platform.OS === 'android') await requestAndroidPermissions();
         const client = getBleGatewayClient();
         await client.initialize();
         clientRef.current = client;
-        client.onDeviceInfo((info) => {
-          setState((prev) => ({ ...prev, deviceInfo: info }));
-        });
-        setState((prev) => ({ ...prev, error: null }));
-      } catch (initErr: any) {
-        const msg = initErr.message || 'Bluetooth non disponible';
-        setState((prev) => ({ ...prev, error: msg }));
+        client.onDeviceInfo((info) => setState((p) => ({ ...p, deviceInfo: info })));
+        setState((p) => ({ ...p, error: null }));
+      } catch (e: any) {
+        const msg = e.message || 'Bluetooth non disponible';
+        setState((p) => ({ ...p, error: msg }));
         throw new Error(msg);
       }
     }
 
-    setState((prev) => ({ ...prev, scanning: true, availableDevices: [], error: null }));
-
+    setState((p) => ({ ...p, scanning: true, availableDevices: [], error: null }));
     try {
-      const foundDevices: BleGatewayDevice[] = [];
-
-      await clientRef.current.scanForGateways((device) => {
-        foundDevices.push(device);
-        setState((prev) => ({
-          ...prev,
-          availableDevices: [...foundDevices],
-        }));
-      }, 10000); // 10s scan
-
-      setState((prev) => ({ ...prev, scanning: false }));
-
-      console.log(`[BleProvider] Scan complete: ${foundDevices.length} devices found`);
-    } catch (error: any) {
-      console.error('[BleProvider] Scan error:', error);
-      setState((prev) => ({
-        ...prev,
-        scanning: false,
-        error: error.message || 'Scan failed',
-      }));
-      throw error;
+      const found: BleGatewayDevice[] = [];
+      await clientRef.current!.scanForGateways((device) => {
+        found.push(device);
+        setState((p) => ({ ...p, availableDevices: [...found] }));
+      }, 10000);
+      setState((p) => ({ ...p, scanning: false }));
+      console.log(`[BleProvider] Scan terminé: ${found.length} device(s)`);
+    } catch (err: any) {
+      setState((p) => ({ ...p, scanning: false, error: err.message || 'Scan failed' }));
+      throw err;
     }
   }, []);
 
-  /**
-   * Connecte à un gateway
-   */
-  const connectToGateway = useCallback(async (deviceId: string) => {
-    if (!clientRef.current) {
-      throw new Error('BLE not initialized');
-    }
+  // ── Connexion ────────────────────────────────────────────────────
 
-    setState((prev) => ({ ...prev, error: null }));
+  const connectToGateway = useCallback(async (deviceId: string) => {
+    if (!clientRef.current) throw new Error('BLE non initialisé');
+    setState((p) => ({ ...p, error: null }));
 
     const MAX_RETRIES = 3;
-    const RETRY_DELAYS_MS = [1000, 2000, 4000]; // backoff exponentiel
-
-    let lastError: any = null;
+    const DELAYS      = [1000, 2000, 4000];
+    let lastError: any;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
         if (attempt > 0) {
-          const delay = RETRY_DELAYS_MS[attempt - 1];
-          console.log(`[BleProvider] Retry ${attempt}/${MAX_RETRIES - 1} dans ${delay}ms…`);
-          setState((prev) => ({
-            ...prev,
-            error: `Retry ${attempt}/${MAX_RETRIES - 1}…`,
-          }));
-          await new Promise((res) => setTimeout(res, delay));
-          setState((prev) => ({ ...prev, error: null }));
+          const delay = DELAYS[attempt - 1];
+          console.log(`[BleProvider] Retry ${attempt}/${MAX_RETRIES - 1} dans ${delay}ms...`);
+          setState((p) => ({ ...p, error: `Retry ${attempt}/${MAX_RETRIES - 1}...` }));
+          await new Promise((r) => setTimeout(r, delay));
+          setState((p) => ({ ...p, error: null }));
         }
 
         await clientRef.current!.connect(deviceId);
 
         const device = clientRef.current!.getConnectedDevice();
-        setState((prev) => ({ ...prev, connected: true, device }));
-
-        // Persister l'ID pour auto-reconnect au prochain démarrage
+        const ch0    = clientRef.current!.getChannelConfig(0);
+        setState((p) => ({
+          ...p,
+          connected: true,
+          device,
+          meshContacts: [],
+          channelConfigured: ch0?.configured || false,
+        }));
         await AsyncStorage.setItem(BLE_LAST_DEVICE_KEY, deviceId);
-
-        console.log(`[BleProvider] Connecté à ${device?.name} (tentative ${attempt + 1})`);
-        return; // succès — sortir de la boucle
-
-      } catch (error: any) {
-        lastError = error;
-        const msg: string = error?.message ?? String(error);
-
-        // Erreur d'appairage : action utilisateur requise, inutile de retry
+        console.log(`[BleProvider] Connecté à ${device?.name}`);
+        return;
+      } catch (err: any) {
+        lastError = err;
+        const msg = String(err?.message ?? err ?? '').toLowerCase();
         const isAuthErr =
-          msg.includes('133') ||
-          msg.includes('insufficient') ||
-          msg.includes('authentication') ||
-          msg.includes('bonding') ||
-          msg.includes('pairing');
-
+          msg.includes('133') || msg.includes('insufficient') ||
+          msg.includes('authentication') || msg.includes('bonding') || msg.includes('pairing');
         if (isAuthErr) {
-          console.warn('[BleProvider] Erreur appairage — pas de retry automatique');
-          setState((prev) => ({
-            ...prev,
-            error: 'Appairage BLE requis. Allez dans Paramètres → Bluetooth, supprimez "MeshCore-..." puis relancez.',
-          }));
-          throw error; // remonter immédiatement sans retry
+          setState((p) => ({ ...p, error: 'Erreur appairage BLE. Vérifiez le PIN (défaut: 123456).' }));
+          throw err;
         }
-
-        console.warn(`[BleProvider] Échec tentative ${attempt + 1}/${MAX_RETRIES}:`, msg);
+        console.warn(`[BleProvider] Tentative ${attempt + 1}/${MAX_RETRIES} échouée:`, msg);
       }
     }
 
-    // Toutes les tentatives épuisées
-    const finalMsg: string = lastError?.message ?? String(lastError) ?? 'Connection failed';
-    console.error(`[BleProvider] Connexion échouée après ${MAX_RETRIES} tentatives`);
-    setState((prev) => ({ ...prev, error: finalMsg }));
+    const finalMsg = lastError?.message ?? String(lastError) ?? 'Connection failed';
+    setState((p) => ({ ...p, error: finalMsg }));
     throw lastError;
   }, []);
 
-  /**
-   * Déconnecte du gateway
-   */
+  // ── Déconnexion ──────────────────────────────────────────────────
+
   const disconnectGateway = useCallback(async () => {
     if (!clientRef.current) return;
-
     try {
       await clientRef.current.disconnect();
-
-      // Effacer l'ID persisté (déconnexion volontaire = pas de reconnect)
       await AsyncStorage.removeItem(BLE_LAST_DEVICE_KEY);
-
-      setState((prev) => ({
-        ...prev,
+      setState((p) => ({
+        ...p,
         connected: false,
         loraActive: false,
         device: null,
+        meshContacts: [],
+        currentChannel: 0,
+        channelConfigured: false,
       }));
-
-      console.log('[BleProvider] Disconnected');
-    } catch (error: any) {
-      console.error('[BleProvider] Disconnect error:', error);
-      setState((prev) => ({
-        ...prev,
-        error: error.message || 'Disconnect failed',
-      }));
+      console.log('[BleProvider] Déconnecté');
+    } catch (err: any) {
+      setState((p) => ({ ...p, error: err.message || 'Disconnect failed' }));
     }
   }, []);
 
-  /**
-   * Envoie un paquet MeshCore via BLE → LoRa avec timeout
-   * Si déconnecté, ajoute à la file d'attente persistante
-   */
+  // ── BitMesh custom (CMD_SEND_RAW) ────────────────────────────────
+
   const sendPacket = useCallback(async (packet: MeshCorePacket, timeoutMs = 10000) => {
     if (!clientRef.current || !connectedRef.current) {
-      // Si déconnecté, ajouter à la file persistante
       const msgId = `pending-${Date.now()}`;
-      await retryServiceRef.current.queueMessage(msgId, packet);
-      console.log(`[BleProvider] Message mis en file d'attente persistante: ${msgId}`);
+      await retryService.current.queueMessage(msgId, packet);
+      console.log(`[BleProvider] Message en file d'attente: ${msgId}`);
       return;
     }
-
     try {
-      // Timeout pour éviter le blocage
       await Promise.race([
         clientRef.current.sendPacket(packet),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('BLE timeout')), timeoutMs)
-        )
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('BLE timeout')), timeoutMs)),
       ]);
-    } catch (error) {
-      // En cas d'erreur, mettre en file d'attente pour retry
+    } catch (err) {
       const msgId = `retry-${Date.now()}`;
-      await retryServiceRef.current.queueMessage(msgId, packet);
-      console.log(`[BleProvider] Échec envoi, message en file d'attente: ${msgId}`);
-      throw error;
+      await retryService.current.queueMessage(msgId, packet);
+      throw err;
     }
   }, []);
 
-  /**
-   * Enregistre un handler pour les paquets entrants.
-   * Chaque appel remplace le handler précédent (design single-handler).
-   */
   const onPacket = useCallback((handler: (packet: MeshCorePacket) => void) => {
     pendingPacketHandlerRef.current = handler;
     if (clientRef.current) {
       clientRef.current.onMessage((packet) => {
-        setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+        setState((p) => (p.loraActive ? p : { ...p, loraActive: true }));
         pendingPacketHandlerRef.current?.(packet);
       });
     }
   }, []);
 
-  /**
-   * Marque explicitement LoRa comme actif
-   */
   const confirmLoraActive = useCallback(() => {
-    setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+    setState((p) => (p.loraActive ? p : { ...p, loraActive: true }));
   }, []);
 
-  // Valeur stable : ne force pas de re-render des consommateurs si l'état n'a pas changé
+  // ── Protocole natif MeshCore Companion ──────────────────────────
+
+  const sendDirectMessage = useCallback(async (pubkeyHex: string, text: string) => {
+    if (!clientRef.current || !connectedRef.current) throw new Error('BLE non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    if (!/^[0-9a-fA-F]{12,}$/.test(hexClean)) throw new Error('Clé publique invalide');
+    await clientRef.current.sendDirectMessage(hexClean, text);
+    setState((p) => (p.loraActive ? p : { ...p, loraActive: true }));
+  }, []);
+
+  const sendChannelMessage = useCallback(async (text: string) => {
+    if (!clientRef.current || !connectedRef.current) throw new Error('BLE non connecté');
+    await clientRef.current.sendChannelMessage(state.currentChannel, text);
+    setState((p) => (p.loraActive ? p : { ...p, loraActive: true }));
+  }, [state.currentChannel]);
+
+  const setChannel = useCallback((idx: number) => {
+    setState((p) => ({
+      ...p,
+      currentChannel: idx,
+      channelConfigured: clientRef.current?.getChannelConfig(idx)?.configured || false,
+    }));
+  }, []);
+
+  const syncContacts = useCallback(async () => {
+    if (!clientRef.current || !connectedRef.current) return;
+    await clientRef.current.getContacts();
+  }, []);
+
+  const sendSelfAdvert = useCallback(async () => {
+    if (!clientRef.current || !connectedRef.current) return;
+    await clientRef.current.sendSelfAdvert(1);
+  }, []);
+
+  const configureChannel = useCallback(async (index: number, name: string, secret: string) => {
+    if (!clientRef.current || !connectedRef.current) throw new Error('BLE non connecté');
+    const secretBytes = new Uint8Array(32);
+    const encoded     = new TextEncoder().encode(secret);
+    secretBytes.set(encoded.slice(0, 32));
+    await clientRef.current.setChannel(index, name, secretBytes);
+    if (index === state.currentChannel) {
+      setState((p) => ({ ...p, channelConfigured: true }));
+    }
+  }, [state.currentChannel]);
+
+  // ── Callbacks messages entrants ──────────────────────────────────
+
+  const onBleMessage = useCallback((cb: (msg: MeshCoreIncomingMsg) => void): (() => void) => {
+    incomingMsgCallbackRef.current = cb;
+    return () => { incomingMsgCallbackRef.current = null; };
+  }, []);
+
+  const offBleMessage = useCallback(() => {
+    incomingMsgCallbackRef.current = null;
+  }, []);
+
+  const onSendConfirmed = useCallback((cb: (ackCode: number, rtt: number) => void): (() => void) => {
+    clientRef.current?.onSendConfirmed(cb);
+    return () => { clientRef.current?.onSendConfirmed(() => {}); };
+  }, []);
+
+  // ── Context value ─────────────────────────────────────────────────
+
   const contextValue = useMemo<BleContextValue>(() => ({
     ...state,
     scanForGateways,
@@ -391,7 +449,23 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     sendPacket,
     onPacket,
     confirmLoraActive,
-  }), [state, scanForGateways, connectToGateway, disconnectGateway, sendPacket, onPacket, confirmLoraActive]);
+    sendDirectMessage,
+    sendChannelMessage,
+    setChannel,
+    syncContacts,
+    sendSelfAdvert,
+    configureChannel,
+    onBleMessage,
+    offBleMessage,
+    onSendConfirmed,
+  }), [
+    state,
+    scanForGateways, connectToGateway, disconnectGateway,
+    sendPacket, onPacket, confirmLoraActive,
+    sendDirectMessage, sendChannelMessage, setChannel,
+    syncContacts, sendSelfAdvert, configureChannel,
+    onBleMessage, offBleMessage, onSendConfirmed,
+  ]);
 
   return <BleContext.Provider value={contextValue}>{children}</BleContext.Provider>;
 }
