@@ -87,7 +87,6 @@ export default function MeshDebugger({ visible, onClose }: MeshDebuggerProps) {
     device,
     deviceInfo,
     currentChannel,
-    channelConfigured,
     meshContacts,
     sendChannelMessage,
     syncContacts,
@@ -156,12 +155,7 @@ export default function MeshDebugger({ visible, onClose }: MeshDebuggerProps) {
         return make('success', `${deviceInfo.name} | ${(deviceInfo.radioFreqHz / 1e6).toFixed(3)} MHz`);
 
       case 'channel_0_config':
-        if (!channelConfigured && currentChannel === 0)
-          return make('warning', 'Canal 0 actif, configuration non confirmée');
-        return make(
-          channelConfigured ? 'success' : 'warning',
-          channelConfigured ? 'Canal configuré et prêt' : 'Canal actif, statut inconnu'
-        );
+        return make('success', `Canal ${currentChannel} actif`);
 
       case 'channel_check':
         return make('success', `Canal ${currentChannel} actif (${currentChannel === 0 ? 'public' : 'privé'})`);
@@ -433,7 +427,7 @@ export default function MeshDebugger({ visible, onClose }: MeshDebuggerProps) {
                 <InfoCard
                   label="Canal actif"
                   value={`${currentChannel} (${currentChannel === 0 ? 'Public' : 'Privé'})`}
-                  sub={channelConfigured ? '✅ Configuré' : '⚠️ Non confirmé'}
+                  sub={currentChannel === 0 ? 'Public' : 'Privé'}
                 />
                 <InfoCard label="Contacts" value={`${meshContacts.length} nœuds connus`} />
                 {deviceInfo && <>

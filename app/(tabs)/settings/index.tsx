@@ -68,6 +68,7 @@ import * as Location from 'expo-location';
 import { testMempoolConnection } from '@/utils/mempool';
 import { UpdateChecker } from '@/components/UpdateChecker';
 import NfcBackupModal from '@/components/NfcBackupModal';
+import GatewayScanModal from '@/components/GatewayScanModal';
 import { testMintConnection, formatMintUrl } from '@/utils/cashu';
 import { type GatewayRelayJob } from '@/utils/gateway';
 
@@ -1751,13 +1752,8 @@ export default function SettingsScreen() {
   const { identity, setDisplayName, contacts, addContact, removeContact, toggleFavorite } = useMessages();
   const {
     connected: btEnabled,
-    scanning: bleScanning,
-    availableDevices: bleDevices,
     device: bleDevice,
     deviceInfo: bleDeviceInfo,
-    error: bleError,
-    scanForGateways,
-    connectToGateway,
     disconnectGateway,
   } = useBle();
   const [showBleModal, setShowBleModal] = useState(false);
@@ -1895,102 +1891,7 @@ export default function SettingsScreen() {
       <NpubQRModal visible={showNpubQR} onClose={() => setShowNpubQR(false)} />
 
       {/* ── BLE Gateway Modal ── */}
-      <Modal visible={showBleModal} transparent animationType="slide" onRequestClose={() => setShowBleModal(false)}>
-        <View style={styles.bleModalOverlay}>
-          <View style={styles.bleModalSheet}>
-            <View style={styles.bleModalHandle} />
-            <TouchableOpacity style={styles.bleModalClose} onPress={() => setShowBleModal(false)} activeOpacity={0.7}>
-              <X size={20} color={Colors.textMuted} />
-            </TouchableOpacity>
-
-            <View style={styles.bleModalHeader}>
-              <Bluetooth size={24} color={Colors.blue} />
-              <Text style={styles.bleModalTitle}>Gateway LoRa (BLE)</Text>
-            </View>
-
-            {/* Connecté */}
-            {btEnabled && bleDevice ? (
-              <View style={styles.bleConnectedBox}>
-                <View style={styles.bleConnectedRow}>
-                  <View style={styles.bleDot} />
-                  <Text style={styles.bleConnectedName}>{bleDevice.name ?? bleDevice.id}</Text>
-                </View>
-                {bleDeviceInfo && (
-                  <Text style={styles.bleDeviceInfo}>
-                    {`${(bleDeviceInfo.radioFreqHz / 1_000_000).toFixed(1)} MHz · SF${bleDeviceInfo.radioSf} · ${bleDeviceInfo.name}`}
-                  </Text>
-                )}
-                <TouchableOpacity
-                  style={styles.bleDisconnectBtn}
-                  onPress={async () => {
-                    await disconnectGateway();
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.bleDisconnectBtnText}>Déconnecter</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <>
-                {/* Bouton scan */}
-                <TouchableOpacity
-                  style={[styles.bleScanBtn, bleScanning && styles.bleScanBtnDisabled]}
-                  onPress={() => { if (!bleScanning) scanForGateways(); }}
-                  activeOpacity={0.7}
-                  disabled={bleScanning}
-                >
-                  {bleScanning
-                    ? <ActivityIndicator color={Colors.black} size="small" />
-                    : <><Bluetooth size={16} color={Colors.black} /><Text style={styles.bleScanBtnText}>Scanner les appareils</Text></>
-                  }
-                </TouchableOpacity>
-
-                {bleScanning && (
-                  <Text style={styles.bleScanningHint}>Scan en cours (10s)…</Text>
-                )}
-
-                {/* Liste des devices trouvés */}
-                {bleDevices.length > 0 && (
-                  <View style={styles.bleDeviceList}>
-                    {bleDevices.map((d) => (
-                      <TouchableOpacity
-                        key={d.id}
-                        style={styles.bleDeviceItem}
-                        onPress={async () => {
-                          try {
-                            await connectToGateway(d.id);
-                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                            setShowBleModal(false);
-                          } catch {
-                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-                          }
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Bluetooth size={14} color={Colors.blue} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.bleDeviceItemName}>{d.name ?? 'Appareil sans nom'}</Text>
-                          <Text style={styles.bleDeviceItemId}>{d.id}</Text>
-                        </View>
-                        <ChevronRight size={14} color={Colors.textMuted} />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
-                {!bleScanning && bleDevices.length === 0 && (
-                  <Text style={styles.bleNoDevices}>Aucun gateway détecté. Vérifiez que l'ESP32 est allumé et à portée.</Text>
-                )}
-              </>
-            )}
-
-            {!!bleError && (
-              <Text style={styles.bleErrorText}>{bleError}</Text>
-            )}
-          </View>
-        </View>
-      </Modal>
+      <GatewayScanModal visible={showBleModal} onClose={() => setShowBleModal(false)} />
 
       <ConnectionModeSelector />
 
