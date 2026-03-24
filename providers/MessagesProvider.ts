@@ -740,41 +740,6 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     type: MessageType,
     id: MeshIdentity
   ) => {
-    const isDM = topic.startsWith('meshcore/dm/');
-    const isForum = convId.startsWith('forum:');
-
-    // Transport BLE (LoRa) — uniquement pour les DMs (pas les forums)
-    if (ble.connected && isDM && !isForum) {
-      try {
-        // ✅ FIX: Encoder le payload chiffré au lieu du texte en clair
-        const encryptedPayload = encodeEncryptedPayload(enc);
-
-        // Créer paquet MeshCore TEXT binaire avec payload chiffré
-        const _randomId = new Uint32Array(1);
-        crypto.getRandomValues(_randomId);
-        const messageId = _randomId[0];
-
-        const packet: MeshCorePacket = {
-          version: 0x01,
-          type: MeshCoreMessageType.TEXT,
-          flags: MeshCoreFlags.ENCRYPTED,
-          ttl: 10,
-          messageId,
-          fromNodeId: nodeIdToUint64(id.nodeId),
-          toNodeId: nodeIdToUint64(convId),
-          timestamp: Math.floor(Date.now() / 1000),
-          subMeshId: 0,
-          payload: encryptedPayload,
-        };
-
-        await ble.sendPacket(packet);
-        console.log('[MeshCore] Paquet chiffré envoyé via BLE → LoRa:', convId);
-      } catch (err) {
-        console.error('[MeshCore] Erreur envoi BLE:', err);
-        throw err;
-      }
-    }
-
     // Sauvegarder localement
     const msg: StoredMessage = {
       id: msgId,
@@ -827,9 +792,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!ble.connected && !nostrClient.isConnected) {
       throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
     }
-    // Forums accessibles uniquement si Nostr disponible
-    if (isForum_ && !nostrClient.isConnected) {
-      throw new Error('Forums indisponibles hors ligne — connectez-vous via Nostr');
+    // Forums : BLE (flood LoRa) ou Nostr — au moins un doit être dispo
+    if (isForum_ && !ble.connected && !nostrClient.isConnected) {
+      throw new Error('Forums indisponibles — connectez un gateway BLE ou Nostr');
     }
 
     // ✅ Validation taille message
@@ -917,6 +882,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (isForum) {
       const channelName = convId.slice(6);
 
+      // Broadcast LoRa (flood) via MeshCore Companion — CMD_SEND_CHAN_MSG (0x03)
+      if (ble.connected) {
+        try {
+          await ble.sendChannelMessage(text);
+          console.log('[MeshCore] Broadcast flood canal LoRa:', channelName);
+        } catch (bleErr) {
+          console.warn('[MeshCore] Flood BLE échoué (Nostr fallback):', bleErr);
+        }
+      }
+
       // Chiffrer avec PSK si forum privé
       const psk = forumPsks.current.get(channelName);
       const payload = psk
@@ -924,8 +899,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         : text;
 
       // Nostr (NIP-28 kind:42 sur channel déterministe)
-      const channelId = deriveChannelId(channelName);
-      await nostrClient.publishChannelMessage(channelId, payload);
+      if (nostrClient.isConnected) {
+        const channelId = deriveChannelId(channelName);
+        await nostrClient.publishChannelMessage(channelId, payload);
+      }
       // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
       const msg: StoredMessage = {
         id: msgId,
@@ -977,6 +954,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       if (!conv?.peerPubkey) {
         throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
       }
+      // Protocole natif MeshCore Companion — CMD_SEND_TXT_MSG (0x02)
+      await ble.sendDirectMessage(conv.peerPubkey, text);
+      console.log('[MeshCore] DM envoyé via CMD_SEND_TXT_MSG → Companion:', convId);
       const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
       publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
     } else if (!nostrClient.isConnected) {
