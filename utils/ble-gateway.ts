@@ -117,9 +117,18 @@ export class BleGatewayClient {
   // ── Scan ──────────────────────────────────────────────────────────
 
   /**
-   * Scan BLE actif — montre TOUS les appareils (filtre par nom ensuite).
-   * meshcore-open scanne sans filtre de service UUID (plus fiable sur Android
-   * car certains firmware mettent le UUID dans le scan response, pas l'ADV).
+   * Scan BLE actif — deux phases :
+   *
+   * Phase 1 (6s) : filtre sur Nordic UART Service UUID.
+   *   Sur Android 13+, les scans non filtrés sont throttlés silencieusement.
+   *   Un scan avec UUID permet le hardware-filtering natif → résultats fiables.
+   *   Source doc officielle : companion_protocol.md §BLE Connection.
+   *
+   * Phase 2 (4s) : scan sans filtre UUID en fallback (firmware custom sans NUS UUID
+   *   dans l'ADV primaire, ou device dont le service UUID est dans le SCAN_RSP).
+   *
+   * Phase 0 (avant scan) : inclure les devices déjà bondés — un device bondé
+   *   utilise la directed advertising et n'apparaît jamais dans un scan normal.
    */
   async scanForGateways(
     onDeviceFound: (device: BleGatewayDevice) => void,
@@ -159,12 +168,10 @@ export class BleGatewayClient {
       });
     };
 
-    // ── 1. Inclure immédiatement les devices déjà bondés ──────────────
-    // Sur Android, un device bondé peut arrêter de broadcaster (directed advertising)
-    // et ne jamais apparaître dans un scan actif — même s'il est à portée.
+    // ── Phase 0 : devices déjà bondés (directed advertising → invisible au scan) ──
     try {
       const bonded: any[] = await BleManager.getBondedPeripherals();
-      console.log(`[BleGateway] ${bonded.length} device(s) bondé(s) trouvé(s)`);
+      console.log(`[BleGateway] ${bonded.length} device(s) bondé(s)`);
       for (const p of bonded) {
         reportDevice(p);
       }
@@ -172,23 +179,39 @@ export class BleGatewayClient {
       console.log('[BleGateway] getBondedPeripherals non supporté:', e);
     }
 
-    // ── 2. Scan actif sans filtre UUID (plus fiable sur Android) ──────
-    const listener = this.emitter.addListener(
-      'BleManagerDiscoverPeripheral',
-      reportDevice,
-    );
+    const listener = this.emitter.addListener('BleManagerDiscoverPeripheral', reportDevice);
 
-    await BleManager.scan({
-      serviceUUIDs: [],
-      seconds: timeoutMs / 1000,
-      allowDuplicates: true,   // permet de récupérer le nom depuis les SCAN_RSP
-      scanMode: 2 as any,
-      matchMode: 1 as any,
-      numberOfMatches: 3 as any,
-    });
+    // ── Phase 1 : scan filtré sur Service UUID Nordic UART (6s) ──────
+    // Méthode recommandée par la doc officielle MeshCore companion_protocol.md
+    // Android hardware-filter → pas de throttling sur Android 13+
+    const phase1Ms = Math.round(timeoutMs * 0.6);
+    try {
+      await BleManager.scan({
+        serviceUUIDs: [SERVICE_UUID],
+        seconds: phase1Ms / 1000,
+        allowDuplicates: true,
+      });
+      await new Promise((res) => setTimeout(res, phase1Ms));
+      await BleManager.stopScan();
+    } catch (e) {
+      console.log('[BleGateway] Phase 1 scan erreur:', e);
+    }
 
-    await new Promise((res) => setTimeout(res, timeoutMs));
-    await BleManager.stopScan();
+    // ── Phase 2 : fallback scan sans filtre (4s) ──────────────────────
+    // Pour firmware custom qui ne met pas le UUID dans l'ADV primaire.
+    const phase2Ms = timeoutMs - phase1Ms;
+    try {
+      await BleManager.scan({
+        serviceUUIDs: [],
+        seconds: phase2Ms / 1000,
+        allowDuplicates: true,
+      });
+      await new Promise((res) => setTimeout(res, phase2Ms));
+      await BleManager.stopScan();
+    } catch (e) {
+      console.log('[BleGateway] Phase 2 scan erreur:', e);
+    }
+
     listener.remove();
     console.log(`[BleGateway] Scan terminé — ${seen.size} device(s)`);
   }
@@ -399,36 +422,50 @@ export class BleGatewayClient {
 
   /**
    * Envoie un DM texte via CMD_SEND_TXT_MSG (0x02).
-   * Compatible avec le firmware MeshCore standard (Companion protocol).
-   * Le firmware gère le chiffrement E2E et le routing multi-hop.
+   * Compatible avec le firmware MeshCore standard v1.13 (Companion protocol).
    *
-   * @param pubkeyHex - Clé publique du destinataire (32 bytes hex = 64 chars)
-   * @param text      - Texte en clair (le firmware chiffre pour le destinataire)
-   * @param expectAck - Si true, demande un ACK au firmware
+   * Format exact selon MyMesh.cpp handleCmdFrame() :
+   *   [cmd=2][txt_type:1][attempt:1][timestamp:4 LE][pub_key_prefix:6][text...]
+   *
+   * Le firmware recherche le contact par les 6 premiers bytes de sa pubkey
+   * via lookupContactByPubKey(). Le destinataire doit être dans les contacts.
+   *
+   * @param pubkeyHex - Clé publique du destinataire (min 12 hex chars = 6 bytes)
+   * @param text      - Texte en clair
+   * @param attempt   - Numéro de tentative (0 = premier envoi)
    */
-  async sendDirectMessage(pubkeyHex: string, text: string, expectAck = false): Promise<void> {
+  async sendDirectMessage(pubkeyHex: string, text: string, attempt = 0): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
 
-    // Accepter les deux formats : 64 chars (x-only 32B) ou 66 chars (compressée 02/03 + 32B)
-    // Le firmware attend toujours le x-coordinate sur 32 bytes (sans byte de parité)
+    // Accepter 64 chars (x-only 32B) ou 66 chars (compressée 02/03 + 32B)
     const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
     const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
     const textBytes = new TextEncoder().encode(text);
 
-    // Format CMD_SEND_TXT_MSG : [pubkey:32][flags:1][text...]
-    const flags = expectAck ? 0x01 : 0x00;
-    const payload = new Uint8Array(32 + 1 + textBytes.length);
-    payload.set(pubkeyBytes.slice(0, 32), 0);
-    payload[32] = flags;
-    payload.set(textBytes, 33);
+    // Timestamp courant (uint32 LE)
+    const ts = Math.floor(Date.now() / 1000);
+    const tsBuf = new Uint8Array(4);
+    new DataView(tsBuf.buffer).setUint32(0, ts, true);  // little-endian
 
-    console.log(`[BleGateway] sendDirectMessage → CMD_SEND_TXT_MSG (${text.length}B)`);
+    // Format firmware : [txt_type=0][attempt][timestamp:4][pub_key_prefix:6][text...]
+    const payload = new Uint8Array(1 + 1 + 4 + 6 + textBytes.length);
+    let i = 0;
+    payload[i++] = 0;          // txt_type = TXT_TYPE_PLAIN
+    payload[i++] = attempt & 0xFF;
+    payload.set(tsBuf, i); i += 4;
+    payload.set(pubkeyBytes.slice(0, 6), i); i += 6;
+    payload.set(textBytes, i);
+
+    console.log(`[BleGateway] sendDirectMessage → CMD_SEND_TXT_MSG prefix=${hexClean.slice(0, 12)} (${text.length}B)`);
     await this.sendFrame(CMD_SEND_TXT_MSG, payload);
   }
 
   /**
    * Envoie un message sur un canal via CMD_SEND_CHAN_MSG (0x03).
-   * Compatible avec le firmware MeshCore standard (Companion protocol).
+   * Compatible avec le firmware MeshCore standard v1.13 (Companion protocol).
+   *
+   * Format exact selon companion_protocol.md §Send Channel Message :
+   *   [cmd=3][reserved=0][channelIdx:1][timestamp:4 LE][text...]
    *
    * @param channelIdx - Index du canal (0 = canal public par défaut)
    * @param text       - Texte du message
@@ -438,10 +475,17 @@ export class BleGatewayClient {
 
     const textBytes = new TextEncoder().encode(text);
 
-    // Format CMD_SEND_CHAN_MSG : [channelIdx:1][text...]
-    const payload = new Uint8Array(1 + textBytes.length);
-    payload[0] = channelIdx & 0xFF;
-    payload.set(textBytes, 1);
+    // Timestamp courant (uint32 LE)
+    const ts = Math.floor(Date.now() / 1000);
+    const tsBuf = new Uint8Array(4);
+    new DataView(tsBuf.buffer).setUint32(0, ts, true);  // little-endian
+
+    // Format firmware : [reserved=0][channelIdx][timestamp:4][text...]
+    const payload = new Uint8Array(1 + 1 + 4 + textBytes.length);
+    payload[0] = 0;             // reserved
+    payload[1] = channelIdx & 0xFF;
+    payload.set(tsBuf, 2);
+    payload.set(textBytes, 6);
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
     await this.sendFrame(CMD_SEND_CHAN_MSG, payload);

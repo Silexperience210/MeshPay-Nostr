@@ -12,8 +12,9 @@ import {
   FlatList,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
-import { Bluetooth, X, Wifi, CheckCircle2 } from 'lucide-react-native';
+import { Bluetooth, X, Wifi, CheckCircle2, Link } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { useBle } from '@/providers/BleProvider';
 import { type BleGatewayDevice } from '@/utils/ble-gateway';
@@ -40,18 +41,24 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
   };
 
   const [connecting, setConnecting] = React.useState(false);
+  const [directId, setDirectId] = React.useState('');
 
   const handleConnect = async (deviceId: string) => {
     setConnecting(true);
     try {
       await connectToGateway(deviceId);
-      onClose(); // Fermer le modal après connexion
+      onClose();
     } catch (err) {
       console.error('Connection error:', err);
-      // L'erreur est affichée via ble.error (BleProvider)
     } finally {
       setConnecting(false);
     }
+  };
+
+  const handleDirectConnect = async () => {
+    const id = directId.trim();
+    if (!id) return;
+    await handleConnect(id);
   };
 
   return (
@@ -130,7 +137,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
             <Text style={styles.listTitle}>Appareils BLE détectés ({availableDevices.length})</Text>
             {availableDevices.length === 0 && !scanning ? (
               <Text style={styles.emptyText}>
-                Aucun appareil trouvé. Vérifiez que votre device MeshCore Companion est allumé et à proximité, et que le firmware BLE est installé.
+                Aucun appareil trouvé. Vérifiez que votre device MeshCore est allumé et à proximité.
               </Text>
             ) : (
               <FlatList
@@ -143,6 +150,31 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
               />
             )}
           </View>
+
+          {/* Connexion directe par ID/MAC — fallback debug */}
+          {!connecting && (
+            <View style={styles.directContainer}>
+              <Text style={styles.directLabel}>Connexion directe (debug)</Text>
+              <View style={styles.directRow}>
+                <TextInput
+                  style={styles.directInput}
+                  value={directId}
+                  onChangeText={setDirectId}
+                  placeholder="MAC ou Device ID"
+                  placeholderTextColor={Colors.textMuted}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={[styles.directBtn, !directId.trim() && styles.directBtnDisabled]}
+                  onPress={handleDirectConnect}
+                  disabled={!directId.trim()}
+                >
+                  <Link size={16} color={Colors.background} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -377,5 +409,45 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     fontFamily: 'monospace',
+  },
+  directContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: `${Colors.accent}20`,
+  },
+  directLabel: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+  directRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  directInput: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: Colors.text,
+    fontSize: 13,
+    fontFamily: 'monospace',
+    borderWidth: 1,
+    borderColor: `${Colors.accent}30`,
+  },
+  directBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  directBtnDisabled: {
+    opacity: 0.4,
   },
 });
