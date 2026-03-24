@@ -545,26 +545,26 @@ export class BleGatewayClient {
         }
         break;
       case RESP_DIRECT_MSG:
-        // DM reçu via firmware standard MeshCore Companion (CMD_SEND_TXT_MSG path)
-        // Format : [fromPubkey:32][snr:1][rssi:1][text...]
-        if (payload.length > 34) {
-          const fromPubkeyHex = Array.from(payload.slice(0, 32))
+        // PACKET_CONTACT_MSG_RECV_V3 (0x10) — firmware v1.13 companion protocol
+        // Format : [SNR:1][reserved:2][pub_key_prefix:6][path_len:1][txt_type:1][timestamp:4LE][text...]
+        if (payload.length > 15) {
+          const snrDm = (payload[0] << 24 >> 24) / 4;
+          const fromPubkeyHex = Array.from(payload.slice(3, 9))
             .map(b => b.toString(16).padStart(2, '0')).join('');
-          const text = new TextDecoder().decode(payload.slice(34));
-          console.log(`[BleGateway] DirectMsg de ${fromPubkeyHex.slice(0, 16)}…: "${text.slice(0, 40)}"`);
+          const text = new TextDecoder().decode(payload.slice(15));
+          console.log(`[BleGateway] DirectMsg SNR=${snrDm} de ${fromPubkeyHex}…: "${text.slice(0, 40)}"`);
           this.deliverCompanionTextPacket(fromPubkeyHex, text, false);
         }
         break;
       case RESP_CHANNEL_MSG:
-        // Message canal reçu via firmware standard MeshCore Companion
-        // Format : [channelIdx:1][fromPubkey:32][snr:1][rssi:1][text...]
-        if (payload.length > 36) {
-          const channelIdx = payload[0];
-          const fromPubkeyHex = Array.from(payload.slice(1, 33))
-            .map(b => b.toString(16).padStart(2, '0')).join('');
-          const text = new TextDecoder().decode(payload.slice(35));
-          console.log(`[BleGateway] ChannelMsg ch=${channelIdx} de ${fromPubkeyHex.slice(0, 16)}…: "${text.slice(0, 40)}"`);
-          this.deliverCompanionTextPacket(fromPubkeyHex, text, true, channelIdx);
+        // PACKET_CHANNEL_MSG_RECV_V3 (0x11) — firmware v1.13 companion protocol
+        // Format : [SNR:1][reserved:2][channelIdx:1][path_len:1][txt_type:1][timestamp:4LE][text...]
+        if (payload.length > 10) {
+          const snrCh = (payload[0] << 24 >> 24) / 4;
+          const channelIdx = payload[3];
+          const text = new TextDecoder().decode(payload.slice(10));
+          console.log(`[BleGateway] ChannelMsg SNR=${snrCh} ch=${channelIdx}: "${text.slice(0, 40)}"`);
+          this.deliverCompanionTextPacket('', text, true, channelIdx);
         }
         break;
       default:
@@ -579,19 +579,18 @@ export class BleGatewayClient {
    *   [0]      type       (1B)
    *   [1]      txPower    (1B)
    *   [2]      maxTxPower (1B)
-   *   [3]      flags      (1B)
-   *   [4..35]  publicKey  (32B)
-   *   [36..39] advLat     (int32 LE)
-   *   [40..43] advLon     (int32 LE)
-   *   [44..47] reserved(3)+manualAddContacts(1)
-   *   [48..51] radioFreq  (uint32 LE, Hz)
-   *   [52..55] radioBw    (uint32 LE, Hz)
-   *   [56]     radioSf    (uint8)
-   *   [57]     radioCr    (uint8)
-   *   [58+]    name       (UTF-8, null-terminated)
+   *   [3..34]  publicKey  (32B)
+   *   [35..38] advLat     (int32 LE)
+   *   [39..42] advLon     (int32 LE)
+   *   [43..46] multi_acks+adv_loc_policy+telemetry+manual_contacts
+   *   [47..50] radioFreq  (uint32 LE, Hz)
+   *   [51..54] radioBw    (uint32 LE, Hz)
+   *   [55]     radioSf    (uint8)
+   *   [56]     radioCr    (uint8)
+   *   [57+]    name       (UTF-8, null-terminated)
    */
   private parseSelfInfo(payload: Uint8Array): void {
-    if (payload.length < 58) {
+    if (payload.length < 57) {
       console.warn('[BleGateway] SelfInfo trop court:', payload.length);
       return;
     }
@@ -601,7 +600,6 @@ export class BleGatewayClient {
     /* type */      off++;
     const txPower = payload[off++];
     /* maxTx */     off++;
-    /* flags */     off++;
 
     const pubkeyBytes = payload.slice(off, off + 32); off += 32;
     const publicKey   = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -652,9 +650,13 @@ export class BleGatewayClient {
     try {
       // Construire un MeshCorePacket synthétique depuis le message companion
       // Le fromNodeId est dérivé des 8 premiers bytes de la pubkey du sender
-      const pubkeyBytes = new Uint8Array(fromPubkeyHex.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
-      const view = new DataView(pubkeyBytes.buffer, pubkeyBytes.byteOffset);
-      const fromNodeId = view.getBigUint64(0, false);
+      // Pad pubkey prefix (6 bytes from V3) to 8 bytes for BigUint64 read
+      const rawPubkeyBytes = fromPubkeyHex
+        ? new Uint8Array(fromPubkeyHex.match(/.{1,2}/g)!.map(b => parseInt(b, 16)))
+        : new Uint8Array(0);
+      const padded = new Uint8Array(8);
+      padded.set(rawPubkeyBytes.slice(0, Math.min(rawPubkeyBytes.length, 8)));
+      const fromNodeId = new DataView(padded.buffer).getBigUint64(0, false);
 
       const randomId = new Uint32Array(1);
       crypto.getRandomValues(randomId);
