@@ -62,8 +62,9 @@ const SF_VALUES = [7, 8, 9, 10, 11, 12];
 // Coding rates
 const CR_VALUES = [{ label: '4/5', v: 5 }, { label: '4/6', v: 6 }, { label: '4/7', v: 7 }, { label: '4/8', v: 8 }];
 
-// Flood scope labels
-const FLOOD_SCOPE_LABELS = ['Local (0)', '1 hop', '2 hops', '3 hops', '4 hops', 'Max (5)'];
+// Flood scope presets (0-5 officiels + custom jusqu'à 21)
+const FLOOD_SCOPE_PRESETS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 21];
+const floodLabel = (n: number) => n === 0 ? 'Local' : `${n} hop${n > 1 ? 's' : ''}`;
 
 export default function DeviceSettingsModal({ visible, onClose }: DeviceSettingsModalProps) {
   const ble = useBle();
@@ -88,6 +89,7 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
 
   // Flood
   const [floodScope, setFloodScope] = useState(3);
+  const [floodCustom, setFloodCustom] = useState('');
 
   // Init depuis deviceInfo
   useEffect(() => {
@@ -103,60 +105,90 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
   }, [info, visible]);
 
   const handleSaveRadio = useCallback(async () => {
+    if (!ble.connected) {
+      Alert.alert('Erreur', 'Gateway non connecté — reconnectez via le scanner BLE');
+      return;
+    }
     setSaving(true);
     try {
       await ble.setRadioParams(freqHz, bwHz, sf, cr);
       await ble.setTxPower(txPower);
-      Alert.alert('Radio', 'Paramètres radio sauvegardés');
+      Alert.alert('Radio appliquée', `${(freqHz/1e6).toFixed(3)} MHz · BW ${bwHz/1000}kHz · SF${sf} · ${txPower}dBm\nRedémarrez le gateway pour que les changements soient permanents.`);
     } catch (e: any) {
-      Alert.alert('Erreur', e.message || 'Impossible de sauvegarder');
+      Alert.alert('Erreur radio', e.message || String(e));
     } finally {
       setSaving(false);
     }
   }, [ble, freqHz, bwHz, sf, cr, txPower]);
 
   const handleSaveDevice = useCallback(async () => {
-    if (!advertName.trim()) return;
+    if (!advertName.trim()) {
+      Alert.alert('Erreur', 'Le nom ne peut pas être vide');
+      return;
+    }
+    if (!ble.connected) {
+      Alert.alert('Erreur', 'Gateway non connecté — reconnectez via le scanner BLE');
+      return;
+    }
     setSaving(true);
     try {
       await ble.setAdvertName(advertName.trim());
-      Alert.alert('Nom', 'Nom mis à jour');
+      Alert.alert('Nom mis à jour', `Le device s'annoncera sous "${advertName.trim()}".\nRedémarrez pour appliquer.`);
     } catch (e: any) {
-      Alert.alert('Erreur', e.message);
+      Alert.alert('Erreur sauvegarde nom', e.message || String(e));
     } finally {
       setSaving(false);
     }
   }, [ble, advertName]);
 
   const handleSaveGps = useCallback(async () => {
+    if (!ble.connected) {
+      Alert.alert('Erreur', 'Gateway non connecté — reconnectez via le scanner BLE');
+      return;
+    }
     const latN = parseFloat(lat);
     const lonN = parseFloat(lon);
     if (isNaN(latN) || isNaN(lonN)) {
-      Alert.alert('GPS', 'Coordonnées invalides');
+      Alert.alert('GPS', 'Coordonnées invalides (ex: 48.856614)');
+      return;
+    }
+    if (latN < -90 || latN > 90 || lonN < -180 || lonN > 180) {
+      Alert.alert('GPS', 'Hors limites — lat ±90, lon ±180');
       return;
     }
     setSaving(true);
     try {
       await ble.setAdvertLatLon(latN, lonN);
-      Alert.alert('GPS', 'Position mise à jour');
+      Alert.alert('GPS mis à jour', `${latN.toFixed(6)}, ${lonN.toFixed(6)}`);
     } catch (e: any) {
-      Alert.alert('Erreur', e.message);
+      Alert.alert('Erreur GPS', e.message || String(e));
     } finally {
       setSaving(false);
     }
   }, [ble, lat, lon]);
 
   const handleSaveFlood = useCallback(async () => {
+    if (!ble.connected) {
+      Alert.alert('Erreur', 'Gateway non connecté — reconnectez via le scanner BLE');
+      return;
+    }
+    // Valeur custom en priorité si saisie
+    const customVal = parseInt(floodCustom, 10);
+    const scopeToSend = (!isNaN(customVal) && floodCustom.trim() !== '') ? customVal : floodScope;
+    if (scopeToSend < 0 || scopeToSend > 127) {
+      Alert.alert('Flood', 'Valeur hors limites (0-127)');
+      return;
+    }
     setSaving(true);
     try {
-      await ble.setFloodScope(floodScope);
-      Alert.alert('Flood', `Portée flood : ${FLOOD_SCOPE_LABELS[floodScope]}`);
+      await ble.setFloodScope(scopeToSend);
+      Alert.alert('Flood appliqué', `Portée : ${floodLabel(scopeToSend)}`);
     } catch (e: any) {
-      Alert.alert('Erreur', e.message);
+      Alert.alert('Erreur flood', e.message || String(e));
     } finally {
       setSaving(false);
     }
-  }, [ble, floodScope]);
+  }, [ble, floodScope, floodCustom]);
 
   const handleReboot = useCallback(() => {
     Alert.alert(
@@ -194,6 +226,13 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
               <X size={20} color={Colors.textMuted} />
             </TouchableOpacity>
           </View>
+
+          {/* Banner non connecté */}
+          {!ble.connected && (
+            <View style={styles.warnRow}>
+              <Text style={styles.warnText}>Gateway non connecté — les paramètres ne peuvent pas être sauvegardés</Text>
+            </View>
+          )}
 
           {/* Device info row */}
           {info && (
@@ -299,7 +338,7 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
                   ))}
                 </View>
 
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveRadio} disabled={saving}>
+                <TouchableOpacity style={[styles.saveBtn, !ble.connected && styles.saveBtnDisabled]} onPress={handleSaveRadio} disabled={saving || !ble.connected}>
                   {saving ? <ActivityIndicator color="#000" size="small" /> : <Save size={16} color="#000" />}
                   <Text style={styles.saveBtnText}>Appliquer radio</Text>
                 </TouchableOpacity>
@@ -320,7 +359,7 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
                 />
                 <Text style={styles.hint}>{advertName.length}/31 caractères</Text>
 
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveDevice} disabled={saving || !advertName.trim()}>
+                <TouchableOpacity style={[styles.saveBtn, (!ble.connected || !advertName.trim()) && styles.saveBtnDisabled]} onPress={handleSaveDevice} disabled={saving || !ble.connected || !advertName.trim()}>
                   {saving ? <ActivityIndicator color="#000" size="small" /> : <Save size={16} color="#000" />}
                   <Text style={styles.saveBtnText}>Sauvegarder le nom</Text>
                 </TouchableOpacity>
@@ -356,7 +395,7 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
                   placeholderTextColor={Colors.textMuted}
                   keyboardType="decimal-pad"
                 />
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveGps} disabled={saving}>
+                <TouchableOpacity style={[styles.saveBtn, !ble.connected && styles.saveBtnDisabled]} onPress={handleSaveGps} disabled={saving || !ble.connected}>
                   {saving ? <ActivityIndicator color="#000" size="small" /> : <MapPin size={16} color="#000" />}
                   <Text style={styles.saveBtnText}>Mettre à jour la position</Text>
                 </TouchableOpacity>
@@ -368,25 +407,35 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
               <View>
                 <Text style={styles.sectionLabel}>Portée des messages broadcast</Text>
                 <Text style={styles.hint}>
-                  Définit le nombre maximum de sauts LoRa pour les messages flood (canal public).
-                  Plus la valeur est haute, plus le message se propage loin — mais consomme plus d'énergie.
+                  Nombre de sauts LoRa max pour les flood (canal public). Plus c'est haut, plus loin — mais consomme plus d'énergie. Valeur active : <Text style={{ color: Colors.accent, fontWeight: '700' }}>{floodCustom.trim() !== '' ? floodCustom : floodScope} hop(s)</Text>
                 </Text>
                 <View style={styles.floodGrid}>
-                  {FLOOD_SCOPE_LABELS.map((label, idx) => (
+                  {FLOOD_SCOPE_PRESETS.map((val) => (
                     <TouchableOpacity
-                      key={idx}
-                      style={[styles.floodBtn, floodScope === idx && styles.floodBtnActive]}
-                      onPress={() => setFloodScope(idx)}
+                      key={val}
+                      style={[styles.floodBtn, floodScope === val && floodCustom === '' && styles.floodBtnActive]}
+                      onPress={() => { setFloodScope(val); setFloodCustom(''); }}
                     >
-                      <Text style={[styles.floodBtnText, floodScope === idx && styles.floodBtnTextActive]}>
-                        {label}
+                      <Text style={[styles.floodBtnText, floodScope === val && floodCustom === '' && styles.floodBtnTextActive]}>
+                        {floodLabel(val)}
                       </Text>
                     </TouchableOpacity>
                   ))}
                 </View>
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveFlood} disabled={saving}>
+                <Text style={styles.sectionLabel}>Valeur personnalisée (0–127)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={floodCustom}
+                  onChangeText={setFloodCustom}
+                  placeholder="Ex: 21"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                  maxLength={3}
+                />
+                <Text style={styles.hint}>Laissez vide pour utiliser la valeur sélectionnée ci-dessus</Text>
+                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveFlood} disabled={saving || !ble.connected}>
                   {saving ? <ActivityIndicator color="#000" size="small" /> : <Wifi size={16} color="#000" />}
-                  <Text style={styles.saveBtnText}>Appliquer</Text>
+                  <Text style={styles.saveBtnText}>Appliquer flood</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -613,5 +662,21 @@ const styles = StyleSheet.create({
   floodBtnTextActive: {
     color: Colors.accent,
     fontWeight: '700',
+  },
+  warnRow: {
+    backgroundColor: Colors.redDim,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.red,
+  },
+  warnText: {
+    color: Colors.red,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  saveBtnDisabled: {
+    opacity: 0.4,
   },
 });

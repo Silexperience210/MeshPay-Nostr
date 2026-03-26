@@ -184,7 +184,26 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook(() => {
       setChangeAddresses(deriveChangeAddresses(loadQuery.data, 20));
       setIsInitialized(true);
     } else if (loadQuery.isFetched) {
-      setIsInitialized(false);
+      // Aucun wallet existant — auto-générer pour que l'identité MeshCore soit dispo immédiatement
+      // L'utilisateur peut sauvegarder ou remplacer la phrase depuis les Paramètres
+      console.log('[WalletSeed] Aucun wallet trouvé — génération automatique...');
+      (async () => {
+        try {
+          const newMnemonic = generateMnemonic(12);
+          await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
+          await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+          setMnemonic(newMnemonic);
+          const info = deriveWalletInfo(newMnemonic);
+          setWalletInfo(info);
+          setReceiveAddresses(deriveReceiveAddresses(newMnemonic, 20));
+          setChangeAddresses(deriveChangeAddresses(newMnemonic, 20));
+          setIsInitialized(true);
+          console.log('[WalletSeed] Wallet auto-généré et sauvegardé');
+        } catch (err) {
+          console.error('[WalletSeed] Erreur génération auto:', err);
+          setIsInitialized(false);
+        }
+      })();
     }
   }, [loadQuery.data, loadQuery.isFetched]);
 
