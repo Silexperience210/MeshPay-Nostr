@@ -49,13 +49,19 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
   // Guard anti-setState sur composant démonté (modal fermé pendant scan)
   const isMountedRef = React.useRef(true);
   const scanTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Subscription BLE discovery — doit être dans un ref pour cleanup propre
+  const discoverSubRef = React.useRef<{ remove: () => void } | null>(null);
+
+  // Reset isMountedRef à chaque fois que la visibilité change
   React.useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      if (scanTimerRef.current) { clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+      discoverSubRef.current?.remove(); discoverSubRef.current = null;
+      BleManager.stopScan().catch(() => {});
     };
-  }, []);
+  }, [visible]);
 
   const NUS_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 
@@ -85,11 +91,25 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
     }
   };
 
-  // ── Scan unifié (même code debug et scan normal) ─────────────────
+  // ── Détection type device ─────────────────────────────────────────
+  const detectDeviceType = (name: string): BleGatewayDevice['type'] => {
+    const n = name.toLowerCase();
+    if (
+      n.startsWith('meshcore') || n.startsWith('whisper') ||
+      n.startsWith('lora') || n.startsWith('bitmesh') ||
+      n.includes('mesh') || n.includes('lora')
+    ) return 'companion';
+    return 'gateway';
+  };
+
+  // ── Scan unifié (même code debug et scan normal) ──────────────────
+  // Phase 1 : scan filtré NUS UUID (6s) — détecte devices qui annoncent le service
+  // Phase 2 : si 0 résultat, fallback sans filtre (4s) — firmware sans NUS dans primary ADV
+  // Phase 0 : pré-charge les devices déjà bondés (directed advertising invisible au scan)
   const runScan = async (debugMode: boolean) => {
     try {
       console.log('=== SCAN BLE START ===');
-      // Demander et vérifier les permissions avant de scanner
+
       const permsOk = await requestPerms();
       if (!permsOk) {
         Alert.alert(
@@ -109,55 +129,101 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
       setLocalScanning(true);
       setLocalDevices([]);
       setPendingDevice(null);
+
       const found: Map<string, BleGatewayDevice> = new Map();
 
-      const sub = BleManager.onDiscoverPeripheral((dev: any) => {
+      const reportDevice = (dev: any) => {
         if (!dev?.id) return;
-        const name: string = dev.name || dev.advertising?.localName || '';
-        const displayName = name || `BLE (${dev.id.slice(0, 8)})`;
-        if (!found.has(dev.id)) {
+        const name: string = dev.name || dev.advertising?.localName || dev.localName || '';
+        const displayName = name || `BLE ${dev.id.slice(-5)}`;
+        if (!found.has(dev.id) || name) { // mise à jour si on récupère le nom
           found.set(dev.id, {
             id: dev.id,
             name: displayName,
             rssi: dev.rssi || -100,
-            type: (displayName.startsWith('MeshCore-') || displayName.startsWith('Whisper-'))
-              ? 'companion' : 'gateway',
+            type: detectDeviceType(displayName),
           });
+          if (isMountedRef.current) {
+            setLocalDevices(Array.from(found.values()).sort((a, b) => b.rssi - a.rssi));
+          }
           console.log('📱 TROUVÉ:', displayName, dev.id, dev.rssi);
         }
+      };
+
+      // ── Phase 0 : devices déjà bondés (directed adv, invisibles au scan actif) ──
+      try {
+        const bonded: any[] = await BleManager.getBondedPeripherals();
+        console.log(`[Scan] ${bonded.length} device(s) bondé(s)`);
+        for (const p of bonded) reportDevice(p);
+      } catch (e) {
+        console.log('[Scan] getBondedPeripherals non supporté:', e);
+      }
+
+      // Arrêter tout scan précédent
+      discoverSubRef.current?.remove();
+      discoverSubRef.current = null;
+      await BleManager.stopScan().catch(() => {});
+
+      // Enregistrer le handler de découverte
+      discoverSubRef.current = BleManager.onDiscoverPeripheral(reportDevice);
+
+      // ── Phase 1 : scan filtré NUS UUID (6s) ──
+      console.log('[Scan] Phase 1 — filtré NUS UUID');
+      await BleManager.scan(
+        { serviceUUIDs: [NUS_UUID], seconds: 6, allowDuplicates: false, scanMode: 2, matchMode: 1 } as any
+      );
+
+      // Attendre fin phase 1
+      await new Promise<void>((res) => {
+        scanTimerRef.current = setTimeout(res, 6500);
       });
 
-      await BleManager.scan({ serviceUUIDs: [NUS_UUID], seconds: 8, allowDuplicates: false, scanMode: 2, matchMode: 1 } as any);
+      if (!isMountedRef.current) return;
 
-      scanTimerRef.current = setTimeout(async () => {
-        sub.remove();
-        try { await BleManager.stopScan(); } catch (_) {}
-        if (!isMountedRef.current) return; // modal fermé pendant le scan
-        const devices = Array.from(found.values());
-        console.log('=== Scan terminé ===', devices.length, 'device(s)');
+      // ── Phase 2 : fallback sans filtre (4s) si rien trouvé ──
+      if (found.size === 0) {
+        console.log('[Scan] Phase 2 — fallback sans filtre UUID');
+        await BleManager.stopScan().catch(() => {});
+        await BleManager.scan(
+          { serviceUUIDs: [], seconds: 4, allowDuplicates: false, scanMode: 2 } as any
+        );
+        await new Promise<void>((res) => {
+          scanTimerRef.current = setTimeout(res, 4500);
+        });
+        if (!isMountedRef.current) return;
+      }
 
+      await BleManager.stopScan().catch(() => {});
+      discoverSubRef.current?.remove();
+      discoverSubRef.current = null;
+
+      const devices = Array.from(found.values()).sort((a, b) => b.rssi - a.rssi);
+      console.log('=== Scan terminé ===', devices.length, 'device(s)');
+
+      if (isMountedRef.current) {
         setLocalDevices(devices);
         setLocalScanning(false);
+      }
 
-        if (debugMode) {
-          if (devices.length > 0) {
-            Alert.alert(
-              `${devices.length} device(s) trouvé(s)`,
-              devices.map(d => `• ${d.name} (${d.rssi} dBm)`).join('\n'),
-              [
-                { text: 'Fermer', style: 'cancel' },
-                {
-                  text: `Connecter → ${devices[0].name}`,
-                  onPress: () => setPendingDevice(devices[0]),
-                },
-              ]
-            );
-          } else {
-            Alert.alert('Aucun device trouvé', 'Vérifiez que votre MeshCore est allumé et à proximité.');
-          }
+      if (debugMode) {
+        if (devices.length > 0) {
+          Alert.alert(
+            `${devices.length} device(s) trouvé(s)`,
+            devices.map(d => `• ${d.name} (${d.rssi} dBm)`).join('\n'),
+            [
+              { text: 'Fermer', style: 'cancel' },
+              {
+                text: `Connecter → ${devices[0].name}`,
+                onPress: () => setPendingDevice(devices[0]),
+              },
+            ]
+          );
+        } else {
+          Alert.alert('Aucun device trouvé', 'Vérifiez que votre MeshCore est allumé et à proximité.');
         }
-      }, 8500);
+      }
     } catch (err: any) {
+      if (!isMountedRef.current) return;
       setLocalScanning(false);
       console.error('❌ ERREUR SCAN:', err);
       Alert.alert('Scan impossible', err.message || 'Vérifiez que le Bluetooth est activé.');
