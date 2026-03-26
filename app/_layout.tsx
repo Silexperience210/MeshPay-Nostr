@@ -23,6 +23,7 @@ import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -143,6 +144,7 @@ function AppContent() {
 
 export default function RootLayout() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <AppSettingsContext>
         <WalletSeedContext>
@@ -171,5 +173,6 @@ export default function RootLayout() {
         </WalletSeedContext>
       </AppSettingsContext>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

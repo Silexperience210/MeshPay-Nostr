@@ -49,7 +49,6 @@ import {
   decodeEncryptedPayload,
   encodeMeshCorePacket,
   decodeMeshCorePacket,
-  createKeyAnnouncePacket,
   extractPubkeyFromAnnounce,
   extractPosition,
   createPingPacket,
@@ -167,15 +166,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   }, [mnemonic, identity]);
 
-  // Envoyer un PING BLE dès que la connexion BLE est établie + identité dispo
-  // → permet à BleProvider de confirmer loraActive=true si le device répond
+  // Annoncer notre présence sur le mesh dès connexion BLE (MeshCore Companion standard)
+  // sendSelfAdvert() = CMD_SEND_SELF_ADV (0x07) — compris par tout firmware MeshCore
   useEffect(() => {
     if (ble.connected && identity) {
-      const pingPacket = createPingPacket(identity.nodeId);
-      ble.sendPacket(pingPacket).catch(() => {
-        // Silencieux — le PING est un test optionnel
-      });
-      console.log('[MeshCore] PING envoyé pour vérifier relay LoRa');
+      ble.sendSelfAdvert().catch(() => {});
+      console.log('[MeshCore] SelfAdvert envoyé à la connexion BLE');
     }
   }, [ble.connected, identity]);
 
@@ -298,19 +294,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
           }));
           
-          // Envoyer ACK
-          try {
-            const { createAckPacket } = await import('@/utils/meshcore-protocol');
-            const ackPacket = createAckPacket(
-              identity.nodeId,
-              fromNodeId,
-              packet.messageId
-            );
-            await ble.sendPacket(ackPacket);
-          } catch (ackErr) {
-            console.error('[MeshCore] Erreur envoi ACK:', ackErr);
-          }
-          
+          // ACK géré par MeshCore Companion firmware — pas besoin d'en envoyer un
         } else if (result.progress) {
           console.log('[MeshCore] Chunk reçu:', result.progress, '%');
         }
@@ -404,15 +388,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
               }
               console.warn(`[MeshCore] Pubkey inconnue pour ${fromNodeId} — paquet bufferisé (${existing.length + 1}/5)`);
             }
-            // Envoyer KEY_ANNOUNCE pour demander la pubkey
-            try {
-              const { createKeyAnnouncePacket } = await import('@/utils/meshcore-protocol');
-              const requestPacket = createKeyAnnouncePacket(identity.nodeId, identity.pubkeyHex);
-              await ble.sendPacket(requestPacket);
-              console.log('[MeshCore] KEY_ANNOUNCE envoyé pour demander la pubkey');
-            } catch (err) {
-              console.error('[MeshCore] Erreur envoi KEY_ANNOUNCE:', err);
-            }
+            // Envoyer SelfAdvert pour annoncer notre présence (MeshCore Companion)
+            ble.sendSelfAdvert().catch(err =>
+              console.warn('[MeshCore] Erreur SelfAdvert (demande pubkey pair):', err)
+            );
             return;
           }
 
@@ -445,20 +424,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         saveMessage(msg);
         updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
 
-        // ✅ Envoyer ACK de confirmation
-        try {
-          const { createAckPacket } = await import('@/utils/meshcore-protocol');
-          const ackPacket = createAckPacket(
-            identity.nodeId,
-            fromNodeId,
-            packet.messageId
-          );
-          await ble.sendPacket(ackPacket);
-          console.log('[MeshCore] ACK envoyé pour message', packet.messageId);
-        } catch (ackErr) {
-          console.error('[MeshCore] Erreur envoi ACK:', ackErr);
-        }
-
+        // ACK géré par MeshCore Companion firmware
         setMessagesByConv(prev => ({
           ...prev,
           [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
@@ -541,11 +507,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[MeshCore] Connexion BLE établie, enregistrement handler');
       ble.onPacket(handleIncomingMeshCorePacket);
 
-      // ✅ Envoyer notre clé publique en broadcast pour que les pairs puissent nous chiffrer des messages
-      const keyAnnounce = createKeyAnnouncePacket(identity.nodeId, identity.pubkeyHex);
-      ble.sendPacket(keyAnnounce)
-        .then(() => console.log('[MeshCore] KEY_ANNOUNCE envoyé (broadcast)'))
-        .catch(err => console.error('[MeshCore] Erreur envoi KEY_ANNOUNCE:', err));
+      // Annoncer notre présence via SelfAdvert (CMD 0x07 — compris par MeshCore Companion)
+      ble.sendSelfAdvert()
+        .then(() => console.log('[MeshCore] SelfAdvert envoyé (broadcast)'))
+        .catch(err => console.warn('[MeshCore] Erreur SelfAdvert:', err));
     }
   }, [ble.connected, identity, handleIncomingMeshCorePacket]);
 
@@ -820,8 +785,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const msgId = generateMsgId();
     const ts = Date.now();
 
-    // ✅ Utiliser chunking si message trop long (uniquement DM, pas forum)
-    if (!isForum && chunkManagerRef.current.needsChunking(text)) {
+    // Utiliser chunking si message trop long — uniquement DM hors BLE (BitMesh/autre)
+    // En mode BLE (MeshCore Companion), la fragmentation UART est transparente
+    if (!isForum && !ble.connected && chunkManagerRef.current.needsChunking(text)) {
       console.log('[Messages] Utilisation du chunking pour message long');
 
       // Chiffrer AVANT le chunking si la pubkey du pair est connue
