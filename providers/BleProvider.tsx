@@ -38,7 +38,7 @@ interface BleState {
   meshContacts: MeshCoreContact[]; // contacts syncés du device MeshCore
   batteryVolts: number | null;     // tension batterie gateway (V)
   neighbours: MeshCoreNeighbour[]; // voisins directs (1-hop)
-  lastStats: MeshCoreStats | null; // dernières stats reçues
+  allStats: Record<string, MeshCoreStats>; // stats par type: 'core'|'radio'|'packets'
 }
 
 interface BleContextValue extends BleState {
@@ -93,7 +93,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     meshContacts: [],
     batteryVolts: null,
     neighbours: [],
-    lastStats: null,
+    allStats: {},
   });
 
   const clientRef = useRef<BleGatewayClient | null>(null);
@@ -154,9 +154,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
           setState((prev) => ({ ...prev, batteryVolts: volts }));
         });
 
-        // Callback : stats
+        // Callback : stats — stockées par type pour ne pas écraser les autres
         client.onStats((stats) => {
-          setState((prev) => ({ ...prev, lastStats: stats }));
+          setState((prev) => ({ ...prev, allStats: { ...prev.allStats, [stats.type]: stats } }));
         });
 
         // Callback : voisins

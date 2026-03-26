@@ -257,8 +257,8 @@ export default function MeshStatsModal({ visible, onClose, onContactAction }: Me
                 <Text style={styles.sectionLabel}>
                   Stats {tab === 'core' ? 'Core' : tab === 'radio' ? 'Radio' : 'Paquets'}
                 </Text>
-                {ble.lastStats && ble.lastStats.type === tab ? (
-                  Object.entries(ble.lastStats.raw).map(([key, val]) => (
+                {ble.allStats[tab] ? (
+                  Object.entries(ble.allStats[tab]!.raw).map(([key, val]) => (
                     <StatRow key={key} label={key.replace('field_', 'Champ ')} value={val} />
                   ))
                 ) : (

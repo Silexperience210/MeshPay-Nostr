@@ -405,7 +405,9 @@ export class BleGatewayClient {
       'BleManagerDidUpdateValueForCharacteristic',
       (data: any) => {
         if (data.peripheral !== deviceId) return;
-        if (data.characteristic?.toLowerCase() !== RX_UUID.toLowerCase()) return;
+        // react-native-ble-manager peut retourner UUID court ('6e400003') ou complet
+        const charLower = (data.characteristic || '').toLowerCase();
+        if (!charLower.startsWith('6e400003')) return;
         this.handleFrame(new Uint8Array(data.value));
       }
     );
@@ -657,11 +659,11 @@ export class BleGatewayClient {
     const tsBuf = new Uint8Array(4);
     new DataView(tsBuf.buffer).setUint32(0, ts, true);
 
-    const payload = new Uint8Array(1 + 1 + 4 + textBytes.length);
-    payload[0] = 0;                  // reserved
-    payload[1] = channelIdx & 0xFF;
-    payload.set(tsBuf, 2);
-    payload.set(textBytes, 6);
+    // Format officiel MeshCore: [channel_idx:1][timestamp:4LE][text_bytes...]
+    const payload = new Uint8Array(1 + 4 + textBytes.length);
+    payload[0] = channelIdx & 0xFF;
+    payload.set(tsBuf, 1);
+    payload.set(textBytes, 5);
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
     await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
@@ -1317,8 +1319,8 @@ export class BleGatewayClient {
     const lonRaw       = view.getInt32(139, true);
     const contact: MeshCoreContact = {
       publicKey: pubkeyBytes, pubkeyHex, pubkeyPrefix, name, lastSeen,
-      lat: latRaw !== 0 ? latRaw / 1e7 : undefined,
-      lng: lonRaw !== 0 ? lonRaw / 1e7 : undefined,
+      lat: latRaw !== 0 ? latRaw / 1e6 : undefined,
+      lng: lonRaw !== 0 ? lonRaw / 1e6 : undefined,
     };
     this.pendingContacts.push(contact);
     this.contactDiscoveredCallback?.(contact);
