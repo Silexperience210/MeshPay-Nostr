@@ -636,7 +636,8 @@ export class BleGatewayClient {
 
   /**
    * Envoie un message canal via CMD_SEND_CHAN_MSG (0x03) — firmware standard v1.13.
-   * Format : [reserved=0:1][channelIdx:1][timestamp:4LE][text...]
+   * Format officiel : [txt_type:1][channel_idx:1][timestamp:4LE][text...]
+   * Source : meshcore.js library sendCommandSendChannelTxtMsg
    */
   async sendChannelMessage(channelIdx: number, text: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
@@ -659,11 +660,13 @@ export class BleGatewayClient {
     const tsBuf = new Uint8Array(4);
     new DataView(tsBuf.buffer).setUint32(0, ts, true);
 
-    // Format officiel MeshCore: [channel_idx:1][timestamp:4LE][text_bytes...]
-    const payload = new Uint8Array(1 + 4 + textBytes.length);
-    payload[0] = channelIdx & 0xFF;
-    payload.set(tsBuf, 1);
-    payload.set(textBytes, 5);
+    // Format officiel : [txt_type:1][channel_idx:1][timestamp:4LE][text...]
+    const payload = new Uint8Array(1 + 1 + 4 + textBytes.length);
+    let i = 0;
+    payload[i++] = 0;               // txt_type = TXT_TYPE_PLAIN
+    payload[i++] = channelIdx & 0xFF;
+    payload.set(tsBuf, i);      i += 4;
+    payload.set(textBytes, i);
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
     await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
@@ -932,11 +935,15 @@ export class BleGatewayClient {
         break;
 
       case RESP_DIRECT_MSG_OLD:
-        // Format v2 — ignoré, remplacé par RESP_DIRECT_MSG_V3 (0x10)
+        // Format library v1.11 : [pubKeyPrefix:6][pathLen:1][txtType:1][timestamp:4LE][text...]
+        // Utilisé par certains firmware comme fallback (sans SNR)
+        this.parseDirectMsgLegacy(payload);
         break;
 
       case RESP_CHANNEL_MSG_OLD:
-        // Format v2 — ignoré, remplacé par RESP_CHANNEL_MSG_V3 (0x11)
+        // Format library v1.11 : [channelIdx:1][pathLen:1][txtType:1][timestamp:4LE][text...]
+        // Utilisé par certains firmware comme fallback (sans SNR)
+        this.parseChannelMsgLegacy(payload);
         break;
 
       case RESP_CURR_TIME:
@@ -1182,6 +1189,47 @@ export class BleGatewayClient {
 
     const msg: MeshCoreIncomingMsg = {
       type: 'channel', channelIdx, senderPubkeyPrefix: '', pathLen, txtType, timestamp: ts, text, snr,
+    };
+    this.incomingMessageCallback?.(msg);
+    this.deliverCompanionTextPacket('', text, true, channelIdx);
+  }
+
+  private parseDirectMsgLegacy(payload: Uint8Array): void {
+    // Format library v1.11 (code=7) : [pubKeyPrefix:6][pathLen:1][txtType:1][timestamp:4LE][text...]
+    if (payload.length < 12) {
+      console.warn('[BleGateway] RESP_DIRECT_MSG_OLD trop court:', payload.length);
+      return;
+    }
+    const senderPubkeyPrefix = Array.from(payload.slice(0, 6))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+    const pathLen = payload[6];
+    const txtType = payload[7];
+    const ts      = new DataView(payload.buffer, payload.byteOffset).getUint32(8, true);
+    const text    = new TextDecoder().decode(payload.slice(12)).replace(/\0/g, '');
+
+    console.log(`[BleGateway] DM (legacy) de ${senderPubkeyPrefix}: "${text.slice(0, 40)}"`);
+    const msg: MeshCoreIncomingMsg = {
+      type: 'direct', senderPubkeyPrefix, pathLen, txtType, timestamp: ts, text,
+    };
+    this.incomingMessageCallback?.(msg);
+    this.deliverCompanionTextPacket(senderPubkeyPrefix, text, false);
+  }
+
+  private parseChannelMsgLegacy(payload: Uint8Array): void {
+    // Format library v1.11 (code=8) : [channelIdx:1][pathLen:1][txtType:1][timestamp:4LE][text...]
+    if (payload.length < 8) {
+      console.warn('[BleGateway] RESP_CHANNEL_MSG_OLD trop court:', payload.length);
+      return;
+    }
+    const channelIdx = payload[0];
+    const pathLen    = payload[1];
+    const txtType    = payload[2];
+    const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(3, true);
+    const text       = new TextDecoder().decode(payload.slice(7)).replace(/\0/g, '');
+
+    console.log(`[BleGateway] Canal (legacy) ch=${channelIdx}: "${text.slice(0, 40)}"`);
+    const msg: MeshCoreIncomingMsg = {
+      type: 'channel', channelIdx, senderPubkeyPrefix: '', pathLen, txtType, timestamp: ts, text,
     };
     this.incomingMessageCallback?.(msg);
     this.deliverCompanionTextPacket('', text, true, channelIdx);
