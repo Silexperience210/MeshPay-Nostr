@@ -42,21 +42,37 @@ const TX_UUID      = MESHCORE_BLE.TX_CHAR_UUID; // 6e400002  App → Device (WRI
 const RX_UUID      = MESHCORE_BLE.RX_CHAR_UUID; // 6e400003  Device → App (NOTIFY)
 
 // ── Command codes (App → Device) ──────────────────────────────────────
-const CMD_APP_START       = 1;   // Handshake principal
-const CMD_SEND_TXT_MSG    = 2;   // DM texte → routing firmware standard
-const CMD_SEND_CHAN_MSG   = 3;   // Message canal (broadcast)
-const CMD_GET_CONTACTS    = 4;   // Demander la liste des contacts
-const CMD_SET_TIME        = 6;   // Sync horloge après SelfInfo
-const CMD_SEND_SELF_ADV   = 7;   // S'annoncer sur le mesh
-const CMD_SYNC_NEXT_MSG   = 10;  // Récupérer le message suivant en file
-const CMD_GET_BATT_STORAGE = 20; // Batterie / stockage
-const CMD_DEVICE_QUERY    = 22;  // Premier handshake (version protocole)
-const CMD_SEND_RAW        = 25;  // Raw bytes LoRa (BitMesh custom firmware)
-const CMD_GET_CHANNEL     = 31;  // Lire config canal N
-const CMD_SET_CHANNEL     = 32;  // Écrire config canal N
+const CMD_APP_START         = 1;   // Handshake principal
+const CMD_SEND_TXT_MSG      = 2;   // DM texte → routing firmware standard
+const CMD_SEND_CHAN_MSG      = 3;   // Message canal (broadcast)
+const CMD_GET_CONTACTS       = 4;   // Demander la liste des contacts
+const CMD_SET_TIME           = 6;   // Sync horloge après SelfInfo
+const CMD_SEND_SELF_ADV      = 7;   // S'annoncer sur le mesh
+const CMD_SET_ADVERT_NAME    = 8;   // Changer le nom du device
+const CMD_ADD_UPDATE_CONTACT = 9;   // Ajouter / mettre à jour un contact
+const CMD_SYNC_NEXT_MSG      = 10;  // Récupérer le message suivant en file
+const CMD_SET_RADIO_PARAMS   = 11;  // Paramètres radio LoRa (freq/BW/SF/CR)
+const CMD_SET_TX_POWER       = 12;  // Puissance TX (dBm)
+const CMD_RESET_PATH         = 13;  // Réinitialiser la route vers un contact
+const CMD_SET_ADVERT_LATLON  = 14;  // Définir position GPS d'annonce
+const CMD_REMOVE_CONTACT     = 15;  // Supprimer un contact
+const CMD_EXPORT_CONTACT     = 17;  // Exporter un contact (binaire)
+const CMD_IMPORT_CONTACT     = 18;  // Importer un contact (binaire)
+const CMD_REBOOT             = 19;  // Redémarrer le device
+const CMD_GET_BATTERY        = 20;  // Batterie / stockage
+const CMD_DEVICE_QUERY       = 22;  // Premier handshake (version protocole)
+const CMD_SEND_RAW           = 25;  // Raw bytes LoRa (BitMesh custom firmware)
+const CMD_SEND_LOGIN         = 26;  // Connexion room server (mot de passe)
+const CMD_SEND_STATUS_REQ    = 27;  // Demander le statut d'un contact
+const CMD_SEND_BINARY_REQ    = 50;  // Requête binaire (voisins, télémétrie)
+const CMD_SET_FLOOD_SCOPE    = 54;  // Définir la portée flood (hops max)
+const CMD_GET_STATS          = 56;  // Statistiques device (core/radio/paquets)
+const CMD_GET_CHANNEL        = 31;  // Lire config canal N
+const CMD_SET_CHANNEL        = 32;  // Écrire config canal N
 
 // ── Response / push codes (Device → App) ──────────────────────────────
 const RESP_OK               = 0;
+const RESP_ERR              = 1;
 const RESP_CONTACTS_START   = 2;   // Début liste contacts
 const RESP_CONTACT          = 3;   // Un contact
 const RESP_END_CONTACTS     = 4;   // Fin liste contacts
@@ -64,19 +80,32 @@ const RESP_SELF_INFO        = 5;   // Pubkey, params radio, nom
 const RESP_SENT             = 6;   // Message accepté par firmware
 const RESP_DIRECT_MSG_OLD   = 7;   // DM v2 — ignoré (V3 = 0x10)
 const RESP_CHANNEL_MSG_OLD  = 8;   // Canal v2 — ignoré (V3 = 0x11)
+const RESP_CURR_TIME        = 9;   // Heure courante device
 const RESP_NO_MORE_MSGS     = 10;  // File vide
-const RESP_BATT_STORAGE     = 12;  // Batterie / stockage
+const RESP_EXPORT_CONTACT   = 11;  // Contact exporté (binaire)
+const RESP_BATT_STORAGE     = 12;  // Batterie (float32 LE, volts)
 const RESP_DEVICE_INFO      = 13;  // Firmware / modèle
+const RESP_DISABLED         = 15;  // Commande désactivée sur ce device
 const RESP_DIRECT_MSG_V3    = 0x10; // PACKET_CONTACT_MSG_RECV_V3
 const RESP_CHANNEL_MSG_V3   = 0x11; // PACKET_CHANNEL_MSG_RECV_V3
 const RESP_CHANNEL_INFO     = 18;  // Info canal N
 const RESP_CUSTOM_VARS      = 21;  // Variables custom
+const RESP_STATS            = 24;  // Statistiques device (core/radio/packets)
 const RESP_RADIO_SETTINGS   = 25;  // Paramètres radio
 const PUSH_ADVERT           = 0x80; // Advertisement nœud reçu
+const PUSH_PATH_UPDATED     = 0x81; // Route mise à jour vers un contact
 const PUSH_SEND_CONFIRMED   = 0x82; // Livraison LoRa confirmée
 const PUSH_MSG_WAITING      = 0x83; // Message en file → appeler syncNextMessage()
 const PUSH_RAW_DATA         = 0x84; // Données LoRa brutes (BitMesh custom)
+const PUSH_LOGIN_SUCCESS    = 0x85; // Connexion room server réussie
+const PUSH_LOGIN_FAIL       = 0x86; // Connexion room server échouée
+const PUSH_STATUS_RESPONSE  = 0x87; // Statut d'un contact (réponse ping)
+const PUSH_TRACE_DATA       = 0x89; // Données trace path
 const PUSH_NEW_ADVERT       = 0x8A; // Nouveau nœud découvert
+const PUSH_BINARY_RESPONSE  = 0x8C; // Réponse binaire (voisins, télémétrie)
+
+// Types de requêtes binaires (CMD_SEND_BINARY_REQ)
+const BINARY_REQ_NEIGHBOURS = 0x06;
 
 const APP_PROTOCOL_VERSION = 3;
 const RAW_PUSH_HEADER_SIZE = 3;   // [snr:int8][rssi:int8][reserved:uint8]
@@ -106,12 +135,34 @@ export interface BleDeviceInfo {
   name: string;
   publicKey: string;   // hex 64 chars (32 bytes)
   txPower: number;     // dBm
+  maxTxPower: number;  // dBm max supporté
   radioFreqHz: number; // Hz
   radioBwHz: number;   // Hz
   radioSf: number;
   radioCr: number;
   advLat: number;
   advLon: number;
+}
+
+export interface MeshCoreStats {
+  type: 'core' | 'radio' | 'packets';
+  raw: Record<string, number>;
+}
+
+export interface MeshCoreNeighbour {
+  pubkeyPrefix: string; // 12 hex chars
+  name: string;
+  rssi: number;
+  snr: number;
+  lastHeard: number;    // unix timestamp
+  txPower?: number;
+}
+
+export interface MeshCoreStatusResponse {
+  pubkeyPrefix: string;
+  batteryVoltage?: number;
+  text?: string;
+  rawPayload?: Uint8Array;
 }
 
 export interface MeshCoreContact {
@@ -162,6 +213,13 @@ export class BleGatewayClient {
   private contactsCallback:          ((contacts: MeshCoreContact[]) => void) | null = null;
   private sendConfirmedCallback:     ((ackCode: number, roundTripMs: number) => void) | null = null;
   private disconnectCallback:        (() => void) | null = null;
+  private batteryCallback:           ((volts: number) => void) | null = null;
+  private statsCallback:             ((stats: MeshCoreStats) => void) | null = null;
+  private neighboursCallback:        ((neighbours: MeshCoreNeighbour[]) => void) | null = null;
+  private statusResponseCallback:    ((status: MeshCoreStatusResponse) => void) | null = null;
+  private pathUpdatedCallback:       ((pubkeyPrefix: string) => void) | null = null;
+  private loginResultCallback:       ((success: boolean) => void) | null = null;
+  private exportContactCallback:     ((data: Uint8Array) => void) | null = null;
 
   // Gestion contacts
   private pendingContacts: MeshCoreContact[] = [];
@@ -665,6 +723,134 @@ export class BleGatewayClient {
     });
   }
 
+  // ── Commandes device ─────────────────────────────────────────────
+
+  /** Changer le nom d'annonce du device sur le mesh */
+  async setAdvertName(name: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const nameBytes = new TextEncoder().encode(name.slice(0, 31) + '\0');
+    await this.sendFrame(CMD_SET_ADVERT_NAME, nameBytes);
+    console.log(`[BleGateway] SetAdvertName: "${name}"`);
+  }
+
+  /** Définir la puissance TX (dBm) */
+  async setTxPower(dbm: number): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_SET_TX_POWER, new Uint8Array([dbm & 0xFF]));
+    console.log(`[BleGateway] SetTxPower: ${dbm} dBm`);
+  }
+
+  /**
+   * Paramètres radio LoRa — [freq:4LE uint32 Hz][bw:4LE uint32 Hz][sf:1][cr:1]
+   * cr : 5=CR4/5, 6=CR4/6, 7=CR4/7, 8=CR4/8
+   */
+  async setRadioParams(freqHz: number, bwHz: number, sf: number, cr: number): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const payload = new Uint8Array(10);
+    const view = new DataView(payload.buffer);
+    view.setUint32(0, freqHz, true);
+    view.setUint32(4, bwHz, true);
+    payload[8] = sf & 0xFF;
+    payload[9] = cr & 0xFF;
+    await this.sendFrame(CMD_SET_RADIO_PARAMS, payload);
+    console.log(`[BleGateway] SetRadioParams: ${(freqHz/1e6).toFixed(3)} MHz BW=${bwHz/1000}kHz SF${sf} CR4/${cr}`);
+  }
+
+  /** Définir position GPS d'annonce [lat:4LE int32 × 1e6][lon:4LE int32 × 1e6] */
+  async setAdvertLatLon(lat: number, lon: number): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const payload = new Uint8Array(8);
+    const view = new DataView(payload.buffer);
+    view.setInt32(0, Math.round(lat * 1e6), true);
+    view.setInt32(4, Math.round(lon * 1e6), true);
+    await this.sendFrame(CMD_SET_ADVERT_LATLON, payload);
+    console.log(`[BleGateway] SetAdvertLatLon: ${lat.toFixed(6)}, ${lon.toFixed(6)}`);
+  }
+
+  /** Réinitialiser la route vers un contact (pubkey hex 64) */
+  async resetPath(pubkeyHex: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_RESET_PATH, prefix);
+    console.log(`[BleGateway] ResetPath: ${hexClean.slice(0, 12)}...`);
+  }
+
+  /** Supprimer un contact (pubkey hex 64) */
+  async removeContact(pubkeyHex: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_REMOVE_CONTACT, prefix);
+    console.log(`[BleGateway] RemoveContact: ${hexClean.slice(0, 12)}...`);
+  }
+
+  /** Exporter un contact (binaire) — réponse via onExportContact */
+  async exportContact(pubkeyHex: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_EXPORT_CONTACT, pubkeyBytes);
+  }
+
+  /** Importer un contact depuis les données exportées */
+  async importContact(data: Uint8Array): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_IMPORT_CONTACT, data);
+  }
+
+  /** Demander la tension de batterie — réponse via onBattery */
+  async getBattery(): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_GET_BATTERY, new Uint8Array(0));
+  }
+
+  /** Redémarrer le device */
+  async reboot(): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_REBOOT, new Uint8Array(0));
+    console.log('[BleGateway] Reboot envoyé');
+  }
+
+  /** Définir la portée flood (0=local, 1=single-hop, N=N-hops) */
+  async setFloodScope(scope: number): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_SET_FLOOD_SCOPE, new Uint8Array([scope & 0xFF]));
+    console.log(`[BleGateway] SetFloodScope: ${scope}`);
+  }
+
+  /** Statistiques device — type: 0=core, 1=radio, 2=packets. Réponse via onStats */
+  async getStats(type: 0 | 1 | 2 = 0): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_GET_STATS, new Uint8Array([type]));
+  }
+
+  /** Liste des voisins directs (1-hop) — réponse via onNeighbours */
+  async getNeighbours(): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    await this.sendFrame(CMD_SEND_BINARY_REQ, new Uint8Array([BINARY_REQ_NEIGHBOURS]));
+  }
+
+  /** Connexion à un room server via mot de passe — [prefix:6][password...] */
+  async sendLogin(pubkeyHex: string, password: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    const passBytes = new TextEncoder().encode(password);
+    const payload = new Uint8Array(6 + passBytes.length);
+    payload.set(prefix, 0);
+    payload.set(passBytes, 6);
+    await this.sendFrame(CMD_SEND_LOGIN, payload);
+  }
+
+  /** Ping statut d'un contact — réponse via onStatusResponse */
+  async sendStatusReq(pubkeyHex: string): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_SEND_STATUS_REQ, prefix);
+  }
+
   // ── Callbacks publics ────────────────────────────────────────────
 
   onMessage(handler: MessageHandler): void            { this.messageHandler = handler; }
@@ -674,6 +860,13 @@ export class BleGatewayClient {
   onContacts(cb: (contacts: MeshCoreContact[]) => void): void     { this.contactsCallback = cb; }
   onSendConfirmed(cb: (ackCode: number, rtt: number) => void): void { this.sendConfirmedCallback = cb; }
   onDisconnect(cb: () => void): void                  { this.disconnectCallback = cb; }
+  onBattery(cb: (volts: number) => void): void        { this.batteryCallback = cb; }
+  onStats(cb: (stats: MeshCoreStats) => void): void   { this.statsCallback = cb; }
+  onNeighbours(cb: (n: MeshCoreNeighbour[]) => void): void { this.neighboursCallback = cb; }
+  onStatusResponse(cb: (s: MeshCoreStatusResponse) => void): void { this.statusResponseCallback = cb; }
+  onPathUpdated(cb: (prefix: string) => void): void   { this.pathUpdatedCallback = cb; }
+  onLoginResult(cb: (success: boolean) => void): void { this.loginResultCallback = cb; }
+  onExportContact(cb: (data: Uint8Array) => void): void { this.exportContactCallback = cb; }
 
   getDeviceInfo(): BleDeviceInfo | null    { return this.deviceInfo; }
   isConnected(): boolean                   { return this.connectedId !== null; }
@@ -696,6 +889,10 @@ export class BleGatewayClient {
 
     switch (code) {
       case RESP_OK:
+        break;
+
+      case RESP_ERR:
+        console.warn(`[BleGateway] RESP_ERR code=${payload[0]}`);
         break;
 
       case 0x01:
@@ -740,16 +937,40 @@ export class BleGatewayClient {
         // Format v2 — ignoré, remplacé par RESP_CHANNEL_MSG_V3 (0x11)
         break;
 
+      case RESP_CURR_TIME:
+        if (payload.length >= 4) {
+          const deviceTime = new DataView(payload.buffer, payload.byteOffset).getUint32(0, true);
+          console.log(`[BleGateway] RESP_CURR_TIME: ${new Date(deviceTime * 1000).toISOString()}`);
+        }
+        break;
+
       case RESP_NO_MORE_MSGS:
         console.log('[BleGateway] RESP_NO_MORE_MSGS — file vide');
         break;
 
+      case RESP_EXPORT_CONTACT:
+        console.log(`[BleGateway] RESP_EXPORT_CONTACT: ${payload.length}B`);
+        this.exportContactCallback?.(payload);
+        break;
+
       case RESP_BATT_STORAGE:
-        console.log('[BleGateway] RESP_BATT_STORAGE reçu');
+        if (payload.length >= 4) {
+          const volts = new DataView(payload.buffer, payload.byteOffset).getFloat32(0, true);
+          console.log(`[BleGateway] Batterie: ${volts.toFixed(2)}V`);
+          this.batteryCallback?.(volts);
+        }
         break;
 
       case RESP_DEVICE_INFO:
         console.log('[BleGateway] RESP_DEVICE_INFO reçu');
+        break;
+
+      case RESP_DISABLED:
+        console.log('[BleGateway] RESP_DISABLED — commande non supportée sur ce firmware');
+        break;
+
+      case RESP_STATS:
+        this.parseStats(payload);
         break;
 
       case RESP_DIRECT_MSG_V3:
@@ -780,6 +1001,14 @@ export class BleGatewayClient {
         this.parsePushAdvert(payload);
         break;
 
+      case PUSH_PATH_UPDATED:
+        if (payload.length >= 6) {
+          const prefix = Array.from(payload.slice(0, 6)).map((b) => b.toString(16).padStart(2, '0')).join('');
+          console.log(`[BleGateway] PUSH_PATH_UPDATED: ${prefix}`);
+          this.pathUpdatedCallback?.(prefix);
+        }
+        break;
+
       case PUSH_SEND_CONFIRMED:
         this.parseSendConfirmed(payload);
         break;
@@ -788,6 +1017,28 @@ export class BleGatewayClient {
         // Device signale qu'un message est en attente — OBLIGATOIRE de le récupérer
         console.log('[BleGateway] PUSH_MSG_WAITING → syncNextMessage()');
         this.syncNextMessage().catch((e) => console.warn('[BleGateway] syncNextMessage:', e));
+        break;
+
+      case PUSH_LOGIN_SUCCESS:
+        console.log('[BleGateway] PUSH_LOGIN_SUCCESS — room server connecté');
+        this.loginResultCallback?.(true);
+        break;
+
+      case PUSH_LOGIN_FAIL:
+        console.log('[BleGateway] PUSH_LOGIN_FAIL — connexion room server refusée');
+        this.loginResultCallback?.(false);
+        break;
+
+      case PUSH_STATUS_RESPONSE:
+        this.parseStatusResponse(payload);
+        break;
+
+      case PUSH_TRACE_DATA:
+        console.log(`[BleGateway] PUSH_TRACE_DATA: ${payload.length}B`);
+        break;
+
+      case PUSH_BINARY_RESPONSE:
+        this.parseBinaryResponse(payload);
         break;
 
       case PUSH_RAW_DATA:
@@ -831,9 +1082,9 @@ export class BleGatewayClient {
     const view = new DataView(payload.buffer, payload.byteOffset);
     let off = 0;
 
-    /* type */      off++;
-    const txPower = payload[off++];
-    /* maxTx */     off++;
+    /* type */         off++;
+    const txPower    = payload[off++];
+    const maxTxPower = payload[off++];
     // IMPORTANT : PAS de byte "flags" ici — pubkey commence directement à off=3
 
     const pubkeyBytes = payload.slice(off, off + 32); off += 32;
@@ -854,7 +1105,7 @@ export class BleGatewayClient {
       .trim() || 'MeshCore';
 
     const info: BleDeviceInfo = {
-      name, publicKey, txPower, radioFreqHz, radioBwHz, radioSf, radioCr,
+      name, publicKey, txPower, maxTxPower, radioFreqHz, radioBwHz, radioSf, radioCr,
       advLat: advLatRaw / 1e6,
       advLon: advLonRaw / 1e6,
     };
@@ -960,6 +1211,70 @@ export class BleGatewayClient {
     } else {
       console.log(`[BleGateway] Canal ${channelIdx} non configuré (${payload.length}B)`);
     }
+  }
+
+  private parseStats(payload: Uint8Array): void {
+    if (payload.length < 1) return;
+    const typeIdx = payload[0]; // 0=core, 1=radio, 2=packets
+    const types: Array<'core' | 'radio' | 'packets'> = ['core', 'radio', 'packets'];
+    const type = types[typeIdx] ?? 'core';
+    // Format : [type:1][key=value pairs as uint32 LE, 4B each]
+    const view = new DataView(payload.buffer, payload.byteOffset);
+    const raw: Record<string, number> = {};
+    for (let i = 1; i + 3 < payload.length; i += 4) {
+      raw[`field_${(i - 1) / 4}`] = view.getUint32(i, true);
+    }
+    console.log(`[BleGateway] Stats [${type}]:`, raw);
+    this.statsCallback?.({ type, raw });
+  }
+
+  /**
+   * Réponse binaire (CMD_SEND_BINARY_REQ) — type encodé dans premier byte
+   * GetNeighbours (0x06) : [type:1][count:1][entry...] par entry:
+   *   [pubkey_prefix:6][snr:int8][rssi:int8][tx_power:1][last_heard:4LE]
+   */
+  private parseBinaryResponse(payload: Uint8Array): void {
+    if (payload.length < 2) return;
+    const reqType = payload[0];
+
+    if (reqType === BINARY_REQ_NEIGHBOURS) {
+      const count = payload[1];
+      const neighbours: MeshCoreNeighbour[] = [];
+      let off = 2;
+      for (let i = 0; i < count && off + 12 <= payload.length; i++) {
+        const prefix = Array.from(payload.slice(off, off + 6))
+          .map((b) => b.toString(16).padStart(2, '0')).join('');
+        off += 6;
+        const snr      = (payload[off++] << 24 >> 24) / 4;
+        const rssi     = payload[off++] << 24 >> 24;
+        const txPower  = payload[off++];
+        const lastHeard = off + 3 < payload.length
+          ? new DataView(payload.buffer, payload.byteOffset + off).getUint32(0, true) : 0;
+        off += 4;
+        neighbours.push({ pubkeyPrefix: prefix, name: `Node-${prefix.slice(0, 6).toUpperCase()}`, snr, rssi, txPower, lastHeard });
+      }
+      console.log(`[BleGateway] Voisins (${neighbours.length}):`, neighbours.map((n) => n.pubkeyPrefix));
+      this.neighboursCallback?.(neighbours);
+    } else {
+      console.log(`[BleGateway] BinaryResponse type=0x${reqType.toString(16)} (${payload.length}B)`);
+    }
+  }
+
+  private parseStatusResponse(payload: Uint8Array): void {
+    if (payload.length < 6) return;
+    const prefix = Array.from(payload.slice(0, 6))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+    let batteryVoltage: number | undefined;
+    let text: string | undefined;
+    if (payload.length >= 10) {
+      const v = new DataView(payload.buffer, payload.byteOffset).getFloat32(6, true);
+      if (v > 0 && v < 20) batteryVoltage = v; // valeur raisonnable en volts
+    }
+    if (payload.length > 10) {
+      text = new TextDecoder().decode(payload.slice(10)).replace(/\0/g, '').trim();
+    }
+    console.log(`[BleGateway] StatusResponse ${prefix}: batt=${batteryVoltage?.toFixed(2)}V`);
+    this.statusResponseCallback?.({ pubkeyPrefix: prefix, batteryVoltage, text, rawPayload: payload });
   }
 
   private parsePushAdvert(payload: Uint8Array): void {

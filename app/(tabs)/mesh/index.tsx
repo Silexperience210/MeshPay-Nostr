@@ -43,6 +43,8 @@ import { formatTime } from '@/utils/helpers';
 import MeshRadar from '@/components/MeshRadar';
 import GatewayScanModal from '@/components/GatewayScanModal';
 import UsbSerialScanModal from '@/components/UsbSerialScanModal';
+import DeviceSettingsModal from '@/components/DeviceSettingsModal';
+import MeshStatsModal from '@/components/MeshStatsModal';
 import { useBle } from '@/providers/BleProvider';
 import { useUsbSerial } from '@/providers/UsbSerialProvider';
 
@@ -591,12 +593,14 @@ export default function MeshScreen() {
   const [showDetail, setShowDetail] = useState(false);
   const [showGatewayModal, setShowGatewayModal] = useState(false);
   const [showUsbModal, setShowUsbModal] = useState(false);
+  const [showDeviceSettings, setShowDeviceSettings] = useState(false);
+  const [showStats, setShowStats] = useState(false);
   const { settings } = useAppSettings();
   const isInternetOnly = settings.connectionMode === 'internet';
   const { identity } = useMessages();
   const { radarPeers } = useRadar();
   const { isConnected: nostrConnected } = useNostr();
-  const { connected: bleConnected, device: bleDevice, deviceInfo } = useBle();
+  const { connected: bleConnected, device: bleDevice, deviceInfo, batteryVolts, resetPath, removeContact: removeBleContact, sendStatusReq } = useBle();
   const { gatewayState } = useGateway();
 
   const filteredPeers = useMemo(() => {
@@ -808,9 +812,47 @@ export default function MeshScreen() {
         </TouchableOpacity>
       )}
 
+      {/* Boutons device settings + stats (si BLE connecté) */}
+      {bleConnected && (
+        <>
+          <TouchableOpacity
+            style={[styles.gatewayFloatingBtn, { bottom: 160, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent }]}
+            onPress={() => setShowDeviceSettings(true)}
+            activeOpacity={0.8}
+          >
+            <Activity size={16} color={Colors.accent} />
+            <Text style={[styles.gatewayFloatingText, { color: Colors.accent }]}>Config</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.gatewayFloatingBtn, { bottom: 220, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.cyan }]}
+            onPress={() => setShowStats(true)}
+            activeOpacity={0.8}
+          >
+            <Cpu size={16} color={Colors.cyan} />
+            <Text style={[styles.gatewayFloatingText, { color: Colors.cyan }]}>
+              Stats{batteryVolts != null ? ` ${batteryVolts.toFixed(1)}V` : ''}
+            </Text>
+          </TouchableOpacity>
+        </>
+      )}
+
       <NodeDetailModal peer={selectedPeer} visible={showDetail} onClose={handleCloseDetail} />
       <GatewayScanModal visible={showGatewayModal} onClose={() => setShowGatewayModal(false)} />
       <UsbSerialScanModal visible={showUsbModal} onClose={() => setShowUsbModal(false)} />
+      <DeviceSettingsModal visible={showDeviceSettings} onClose={() => setShowDeviceSettings(false)} />
+      <MeshStatsModal
+        visible={showStats}
+        onClose={() => setShowStats(false)}
+        onContactAction={async (pubkeyHex, action) => {
+          try {
+            if (action === 'resetPath') await resetPath(pubkeyHex);
+            else if (action === 'remove') await removeBleContact(pubkeyHex);
+            else if (action === 'status') await sendStatusReq(pubkeyHex);
+          } catch (e: any) {
+            console.warn('[MeshScreen] Contact action:', e.message);
+          }
+        }}
+      />
     </ScrollView>
   );
 }

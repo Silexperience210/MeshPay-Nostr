@@ -18,6 +18,9 @@ import {
   BleDeviceInfo,
   MeshCoreContact,
   MeshCoreIncomingMsg,
+  MeshCoreStats,
+  MeshCoreNeighbour,
+  MeshCoreStatusResponse,
 } from '@/utils/ble-gateway';
 import { type MeshCorePacket } from '@/utils/meshcore-protocol';
 import { getMessageRetryService } from '@/services/MessageRetryService';
@@ -33,6 +36,9 @@ interface BleState {
   error: string | null;
   currentChannel: number;          // 0=public, 1-N=privé chiffré
   meshContacts: MeshCoreContact[]; // contacts syncés du device MeshCore
+  batteryVolts: number | null;     // tension batterie gateway (V)
+  neighbours: MeshCoreNeighbour[]; // voisins directs (1-hop)
+  lastStats: MeshCoreStats | null; // dernières stats reçues
 }
 
 interface BleContextValue extends BleState {
@@ -41,13 +47,29 @@ interface BleContextValue extends BleState {
   sendPacket: (packet: MeshCorePacket, timeoutMs?: number) => Promise<void>;
   onPacket: (handler: (packet: MeshCorePacket) => void) => void;
   confirmLoraActive: () => void;
-  // Protocole natif MeshCore Companion
+  // Protocole natif MeshCore Companion — messages
   sendDirectMessage: (pubkeyHex: string, text: string) => Promise<void>;
   sendChannelMessage: (text: string) => Promise<void>; // utilise currentChannel
   setChannel: (idx: number) => void;
   syncContacts: () => Promise<void>;
   sendSelfAdvert: () => Promise<void>;
   onBleMessage: (cb: (msg: MeshCoreIncomingMsg) => void) => void;
+  // Protocole natif MeshCore Companion — device settings
+  setAdvertName: (name: string) => Promise<void>;
+  setTxPower: (dbm: number) => Promise<void>;
+  setRadioParams: (freqHz: number, bwHz: number, sf: number, cr: number) => Promise<void>;
+  setAdvertLatLon: (lat: number, lon: number) => Promise<void>;
+  setFloodScope: (scope: number) => Promise<void>;
+  reboot: () => Promise<void>;
+  getBattery: () => Promise<void>;
+  getStats: (type?: 0 | 1 | 2) => Promise<void>;
+  getNeighbours: () => Promise<void>;
+  // Protocole natif MeshCore Companion — contacts
+  resetPath: (pubkeyHex: string) => Promise<void>;
+  removeContact: (pubkeyHex: string) => Promise<void>;
+  exportContact: (pubkeyHex: string) => Promise<void>;
+  sendStatusReq: (pubkeyHex: string) => Promise<void>;
+  sendLogin: (pubkeyHex: string, password: string) => Promise<void>;
 }
 
 const BleContext = createContext<BleContextValue | null>(null);
@@ -69,6 +91,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     error: null,
     currentChannel: 0,
     meshContacts: [],
+    batteryVolts: null,
+    neighbours: [],
+    lastStats: null,
   });
 
   const clientRef = useRef<BleGatewayClient | null>(null);
@@ -122,6 +147,31 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         // Callback : confirmation ACK reçu
         client.onSendConfirmed((ackCode, rtt) => {
           console.log(`[BleProvider] Message confirmé ACK:${ackCode} RTT:${rtt}ms`);
+        });
+
+        // Callback : batterie
+        client.onBattery((volts) => {
+          setState((prev) => ({ ...prev, batteryVolts: volts }));
+        });
+
+        // Callback : stats
+        client.onStats((stats) => {
+          setState((prev) => ({ ...prev, lastStats: stats }));
+        });
+
+        // Callback : voisins
+        client.onNeighbours((neighbours) => {
+          setState((prev) => ({ ...prev, neighbours }));
+        });
+
+        // Callback : path updated
+        client.onPathUpdated((prefix) => {
+          console.log(`[BleProvider] Path mis à jour pour ${prefix}`);
+        });
+
+        // Callback : login result room server
+        client.onLoginResult((success) => {
+          console.log(`[BleProvider] Login room server: ${success ? 'OK' : 'FAIL'}`);
         });
 
         // Callback : déconnexion BLE — met à jour l'état React
@@ -355,6 +405,85 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     incomingMessageCallbackRef.current = cb;
   };
 
+  // ── Device settings ──────────────────────────────────────────────
+
+  const setAdvertName = async (name: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.setAdvertName(name);
+  };
+
+  const setTxPower = async (dbm: number) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.setTxPower(dbm);
+  };
+
+  const setRadioParams = async (freqHz: number, bwHz: number, sf: number, cr: number) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.setRadioParams(freqHz, bwHz, sf, cr);
+  };
+
+  const setAdvertLatLon = async (lat: number, lon: number) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.setAdvertLatLon(lat, lon);
+  };
+
+  const setFloodScope = async (scope: number) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.setFloodScope(scope);
+  };
+
+  const reboot = async () => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.reboot();
+  };
+
+  const getBattery = async () => {
+    if (!clientRef.current || !state.connected) return;
+    await clientRef.current.getBattery();
+  };
+
+  const getStats = async (type: 0 | 1 | 2 = 0) => {
+    if (!clientRef.current || !state.connected) return;
+    await clientRef.current.getStats(type);
+  };
+
+  const getNeighbours = async () => {
+    if (!clientRef.current || !state.connected) return;
+    await clientRef.current.getNeighbours();
+  };
+
+  // ── Contact actions ──────────────────────────────────────────────
+
+  const resetPath = async (pubkeyHex: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.resetPath(pubkeyHex);
+  };
+
+  const removeContact = async (pubkeyHex: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.removeContact(pubkeyHex);
+    // Retirer du state local
+    setState((prev) => ({
+      ...prev,
+      meshContacts: prev.meshContacts.filter((c) => c.pubkeyHex !== pubkeyHex),
+    }));
+  };
+
+  const exportContact = async (pubkeyHex: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.exportContact(pubkeyHex);
+  };
+
+  const sendStatusReq = async (pubkeyHex: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.sendStatusReq(pubkeyHex);
+  };
+
+  const sendLogin = async (pubkeyHex: string, password: string) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.sendLogin(pubkeyHex, password);
+  };
+
   const contextValue: BleContextValue = {
     ...state,
     connectToGateway,
@@ -367,6 +496,20 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setChannel,
     syncContacts,
     sendSelfAdvert,
+    setAdvertName,
+    setTxPower,
+    setRadioParams,
+    setAdvertLatLon,
+    setFloodScope,
+    reboot,
+    getBattery,
+    getStats,
+    getNeighbours,
+    resetPath,
+    removeContact,
+    exportContact,
+    sendStatusReq,
+    sendLogin,
     onBleMessage,
   };
 
