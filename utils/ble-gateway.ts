@@ -111,9 +111,14 @@ const APP_PROTOCOL_VERSION = 3;
 const RAW_PUSH_HEADER_SIZE = 3;   // [snr:int8][rssi:int8][reserved:uint8]
 const BLE_MAX_WRITE        = 169; // MTU 172 − 3 ATT overhead
 
-// Canal public par défaut (canal 0, secret = 16 zéros — doc officielle MeshCore v1.13)
+// Canal public par défaut (canal 0).
+// Clé officielle MeshCore public channel (companion_protocol.md) : 8b3387e9c5cdea6ac9e5edbaa115cd72
+// IMPORTANT : NOT all-zeros — using zeros corrupts the T-Beam channel config and breaks LoRa decryption.
 const DEFAULT_CHANNEL_NAME   = 'public';
-const DEFAULT_CHANNEL_SECRET = new Uint8Array(16);
+const DEFAULT_CHANNEL_SECRET = new Uint8Array([
+  0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a,
+  0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72,
+]);
 
 // ── Types publics ──────────────────────────────────────────────────────
 
