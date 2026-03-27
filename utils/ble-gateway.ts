@@ -459,6 +459,9 @@ export class BleGatewayClient {
     // Récupérer les contacts (nœuds connus)
     this.getContacts().catch((e) => console.warn('[BleGateway] getContacts:', e));
 
+    // Récupérer les messages mis en file pendant la déconnexion (doc : CMD_SYNC_NEXT_MESSAGE requis à l'init)
+    this.syncNextMessage().catch((e) => console.warn('[BleGateway] syncNextMessage initial:', e));
+
     // S'annoncer sur le mesh
     this.sendSelfAdvert(1).catch((e) => console.warn('[BleGateway] sendSelfAdvert:', e));
 
@@ -905,10 +908,6 @@ export class BleGatewayClient {
         console.warn(`[BleGateway] RESP_ERR code=${payload[0]}`);
         break;
 
-      case 0x01:
-        // ACK AppStart probable
-        break;
-
       case RESP_CONTACTS_START: {
         this.pendingContacts = [];
         if (payload.length >= 4) {
@@ -1213,7 +1212,9 @@ export class BleGatewayClient {
     const pathLen = payload[6];
     const txtType = payload[7];
     const ts      = new DataView(payload.buffer, payload.byteOffset).getUint32(8, true);
-    const text    = new TextDecoder().decode(payload.slice(12)).replace(/\0/g, '');
+    // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix avant le texte (doc officielle)
+    const textOffset = txtType === 2 ? 16 : 12;
+    const text    = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] DM (legacy) de ${senderPubkeyPrefix}: "${text.slice(0, 40)}"`);
     const msg: MeshCoreIncomingMsg = {
