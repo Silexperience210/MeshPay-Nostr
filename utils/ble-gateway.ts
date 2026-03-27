@@ -923,7 +923,8 @@ export class BleGatewayClient {
         break;
 
       case PUSH_NEW_ADVERT:
-        this.parseContact(payload);
+        // Advertisement (~46B), pas un contact complet (147B) — utiliser parsePushAdvert
+        this.parsePushAdvert(payload);
         break;
 
       case RESP_END_CONTACTS:
@@ -1188,7 +1189,9 @@ export class BleGatewayClient {
     const pathLen    = payload[4];
     const txtType    = payload[5];
     const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(6, true);
-    const text       = new TextDecoder().decode(payload.slice(10)).replace(/\0/g, '');
+    // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix avant le texte
+    const textOffset = txtType === 2 ? 14 : 10;
+    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] Canal ch=${channelIdx} SNR=${snr}: "${text.slice(0, 40)}"`);
 
@@ -1334,24 +1337,47 @@ export class BleGatewayClient {
 
   private parsePushAdvert(payload: Uint8Array): void {
     if (payload.length < 32) return;
-    const pubkeyBytes = payload.slice(0, 32);
-    const pubkeyHex   = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const pubkeyBytes  = payload.slice(0, 32);
+    const pubkeyHex    = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
     const pubkeyPrefix = pubkeyHex.slice(0, 12);
-    console.log(`[BleGateway] PUSH_ADVERT: ${pubkeyPrefix}...`);
+
+    // Layout PUSH_ADVERT / PUSH_NEW_ADVERT :
+    // [pubkey:32][type:1][txPower:1][maxTxPower:1][advLat:4LE int32][advLon:4LE int32][reserved:2][name:null-terminated]
+    // Name commence à l'offset 45
+    const NAME_OFFSET = 45;
+    let name = `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
+    if (payload.length > NAME_OFFSET) {
+      const parsed = new TextDecoder().decode(payload.slice(NAME_OFFSET)).replace(/\0/g, '').trim();
+      if (parsed.length > 0) name = parsed;
+    }
+
+    let lat: number | undefined;
+    let lng: number | undefined;
+    if (payload.length >= 43) {
+      const view = new DataView(payload.buffer, payload.byteOffset);
+      const latRaw = view.getInt32(35, true);
+      const lonRaw = view.getInt32(39, true);
+      if (latRaw !== 0) lat = latRaw / 1e6;
+      if (lonRaw !== 0) lng = lonRaw / 1e6;
+    }
+
+    console.log(`[BleGateway] PUSH_ADVERT: "${name}" ${pubkeyPrefix}...`);
     const contact: MeshCoreContact = {
-      publicKey: pubkeyBytes, pubkeyHex, pubkeyPrefix,
-      name: `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`,
+      publicKey: pubkeyBytes, pubkeyHex, pubkeyPrefix, name,
       lastSeen: Math.floor(Date.now() / 1000),
+      lat, lng,
     };
     this.contactDiscoveredCallback?.(contact);
   }
 
   private parseSendConfirmed(payload: Uint8Array): void {
-    if (payload.length < 8) return;
-    const view        = new DataView(payload.buffer, payload.byteOffset);
-    const ackCode     = view.getUint32(0, true);
-    const roundTripMs = view.getUint32(4, true);
-    console.log(`[BleGateway] PUSH_SEND_CONFIRMED ACK:${ackCode} RTT:${roundTripMs}ms`);
+    // Format firmware : [result:1][round_trip_ms:4LE] — total 5 bytes (rtt optionnel)
+    if (payload.length < 1) return;
+    const ackCode     = payload[0];
+    const roundTripMs = payload.length >= 5
+      ? new DataView(payload.buffer, payload.byteOffset).getUint32(1, true)
+      : 0;
+    console.log(`[BleGateway] PUSH_SEND_CONFIRMED result=${ackCode} RTT:${roundTripMs}ms`);
     this.sendConfirmedCallback?.(ackCode, roundTripMs);
   }
 
