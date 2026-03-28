@@ -350,6 +350,53 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       }
 
       if (packet.type === MeshCoreMessageType.TEXT) {
+        // ── Canal LoRa (broadcast forum) : deliverCompanionTextPacket → fromNodeId = 0n ──
+        // subMeshId = channelIdx (0 = "public", 1 = 2ème forum rejoint, etc.)
+        if (packet.fromNodeId === 0n) {
+          const channelIdx = (packet as any).subMeshId ?? 0;
+          const forumList = [...joinedForums.current];
+          const channelName = forumList[channelIdx] ?? forumList[0] ?? 'public';
+          const convId = `forum:${channelName}`;
+          let plaintext = extractTextFromPacket(packet);
+          // Déchiffrer si forum privé (PSK connue)
+          const psk = forumPsks.current.get(channelName);
+          if (psk) {
+            try {
+              const parsed = JSON.parse(plaintext) as { v: number; nonce: string; ct: string };
+              plaintext = decryptForumWithKey(parsed, psk);
+            } catch { /* message en clair ou PSK incorrecte — garder tel quel */ }
+          }
+          const msgId = `mc-ch-${packet.messageId}`;
+
+          if (recentMsgIds.current.has(msgId)) return;
+          addToDedup(msgId);
+
+          const msg: StoredMessage = {
+            id: msgId,
+            conversationId: convId,
+            fromNodeId: 'lora',
+            fromPubkey: '',
+            text: plaintext,
+            type: 'text',
+            timestamp: packet.timestamp * 1000,
+            isMine: false,
+            status: 'delivered',
+          };
+          saveMessage(msg);
+          updateConversationLastMessage(convId, plaintext.slice(0, 50), msg.timestamp, true);
+          setMessagesByConv(prev => ({
+            ...prev,
+            [convId]: [...(prev[convId] ?? []), msg],
+          }));
+          setConversations(prev => prev.map(c =>
+            c.id === convId
+              ? { ...c, lastMessage: plaintext.slice(0, 50), lastMessageTime: msg.timestamp, unreadCount: c.unreadCount + 1 }
+              : c
+          ));
+          console.log('[MeshCore] Canal LoRa → forum:', channelName, '|', plaintext.slice(0, 40));
+          return;
+        }
+
         const fromNodeId = uint64ToNodeId(packet.fromNodeId);
 
         let plaintext: string;
