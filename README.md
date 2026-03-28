@@ -1,197 +1,182 @@
 <div align="center">
 
-# 🥜🌐 MeshPay 📶⚡
+# 🥜🌐 MeshPay-Nostr 📶⚡
 
-### Messagerie P2P Incensurable | Identité Bitcoin Proof | Wallet Cashu #1 | LoRa Mesh
+### Messagerie P2P Incensurable | Identité Bitcoin Proof | Wallet Cashu | LoRa Mesh | Marketplace Décentralisée
 
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-blue.svg)](https://github.com/Silexperience210/BitMesh)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-blue.svg)](https://github.com/Silexperience210/MeshPay-Nostr)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/Silexperience210/BitMesh)](https://github.com/Silexperience210/BitMesh/releases)
+[![Release](https://img.shields.io/github/v/release/Silexperience210/MeshPay-Nostr)](https://github.com/Silexperience210/MeshPay-Nostr/releases)
 [![Cashu](https://img.shields.io/badge/Cashu-9.5%2F10-gold)](https://cashu.space)
 
-[![Bitcoin](https://img.shields.io/badge/Bitcoin-Identity%20Proof-orange?logo=bitcoin)](https://github.com/Silexperience210/BitMesh)
+[![Bitcoin](https://img.shields.io/badge/Bitcoin-Identity%20Proof-orange?logo=bitcoin)](https://github.com/Silexperience210/MeshPay-Nostr)
 [![LoRa](https://img.shields.io/badge/LoRa-Uncensorable-brightgreen?logo=semtech)](https://lora-alliance.org/)
-[![MeshCore](https://img.shields.io/badge/MeshCore-P2P%20Protocol-blueviolet)](https://github.com/meshcore-dev/MeshCore)
+[![MeshCore](https://img.shields.io/badge/MeshCore-BLE%20V3-blueviolet)](https://github.com/meshcore-dev/MeshCore)
+[![Nostr](https://img.shields.io/badge/Nostr-NIP--15%2F17%2F1985-purple)](https://nostr.com)
 
-**BitMesh** est la **première messagerie P2P incensurable** avec **identité Bitcoin proof** et **wallet Cashu #1**. Aucun serveur, aucune censure, communication garantie même sans internet.
+**MeshPay-Nostr** est la **première messagerie P2P incensurable** combinant **identité Bitcoin proof**, **wallet Cashu**, **marketplace décentralisée NIP-15** et **commerce local via LoRa Mesh**. Aucun serveur, aucune censure, fonctionne même sans internet.
 
-[📦 Télécharger APK](https://github.com/Silexperience210/BitMesh/releases/latest) • [📖 Documentation](#documentation) • [🚀 Roadmap](#roadmap)
+[📦 Télécharger APK](https://github.com/Silexperience210/MeshPay-Nostr/releases/latest) • [📖 Documentation](#documentation) • [🚀 Roadmap](#roadmap)
 
 </div>
 
 ---
 
-## 🔥 Ce qui rend MeshPay UNIQUE
+## 🔥 Ce qui rend MeshPay-Nostr UNIQUE
 
 ### 🛡️ Messagerie Incensurable
-- **Aucun serveur central** - Communication directe P2P
-- **LoRa Mesh** - Fonctionne sans internet (5-20 km)
-- **BLE Gateway** - Connexion directe appareil-à-appareil
-- **Résistant à la censure** - Impossible à bloquer
+- **Aucun serveur central** — Communication directe P2P
+- **LoRa Mesh** — Fonctionne sans internet (5–20 km)
+- **BLE Gateway** — Connexion directe appareil-à-appareil
+- **Résistant à la censure** — Impossible à bloquer
 
 ### 🆔 Identité Bitcoin Proof
-- **NodeId dérivé de votre wallet** - MESH-XXXX unique
-- **Clés Bitcoin = Identité** - Pas de compte, pas de pseudo
-- **Vérification cryptographique** - Impossible d'usurper
-- **Display name optionnel** - Anonymat préservé
+- **NodeId dérivé de votre wallet** — MESH-XXXX unique
+- **Clés Bitcoin = Identité** — Pas de compte, pas de pseudo
+- **Vérification cryptographique** — Impossible d'usurper
+- **BIP-85 isolation** — Bitcoin / Nostr / MeshCore indépendants
 
-### 💬 Forums P2P Décentralisés
-- **Création de forums publics** - Annoncés sur le réseau
-- **Découverte automatique** - Forums voisins détectés
-- **Chiffrement de bout en bout** - Seuls les membres peuvent lire
-- **Pas de modération centralisée** - Communautés autonomes
+### 🛒 Marketplace Décentralisée (NEW v3.0.7)
+- **NIP-15** — Stalls (kind:30017) et produits (kind:30018) publiés sur Nostr
+- **Commerce LoRa local** — Annonces ~60 bytes diffusées sur le mesh sans internet
+- **Paiement intégré** — Cashu eCash, Lightning BOLT11, on-chain Bitcoin
+- **Commandes chiffrées** — DMs NIP-17 Gift Wrap entre acheteur et vendeur
+- **Réputation NIP-1985** — Avis 1–5 étoiles publiés on-chain, impossibles à falsifier
+- **Notifications push** — Nouvelles commandes, paiements, avis en temps réel
+- **Gestion stock** — Quantité fixe ou illimitée, zones de livraison personnalisées
 
 ### 💰 Wallet Cashu #1 (9.5/10)
-- **Mint/Melt/Swap complet** - Tous les NUTs implémentés
-- **Atomic swaps** - BTC↔Cashu trustless
-- **Notifications** - Alertes quand token reçu
-
----
-
-## 🏆 BitMesh vs Concurrence
-
-| Feature | MeshPay | Signal | Telegram | Cashu.me |
-|---------|---------|--------|----------|----------|
-| **Sans serveur** | ✅ P2P | ❌ Centralisé | ❌ Centralisé | ✅ |
-| **Sans internet** | ✅ LoRa | ❌ | ❌ | ❌ |
-| **Identité Bitcoin** | ✅ | ❌ | ❌ | ❌ |
-| **Wallet intégré** | ✅ Cashu | ❌ | ❌ | ✅ |
-| **Forums P2P** | ✅ | ❌ | ✅ Centralisés | ❌ |
-| **Censure-résistant** | ✅ | ⚠️ | ❌ | ✅ |
-
-**BitMesh = Seule solution combinant messagerie incensurable + identité Bitcoin + wallet Cashu**
+- **Mint/Melt/Swap complet** — Tous les NUTs implémentés
+- **Atomic swaps** — BTC↔Cashu trustless
+- **P2PK tokens** — Verrouillables à une clé (NUT-11)
 
 ---
 
 ## ✨ Fonctionnalités Complètes
 
 ### 📡 Communication
-- ✅ **DMs chiffrés E2E** - ECDH secp256k1 + AES-GCM-256 (transport mesh)
-- ✅ **DMs Nostr NIP-44** - ChaCha20-Poly1305 + HKDF (remplace NIP-04 AES-CBC)
-- ✅ **Gift Wrap NIP-17** - Sender anonymisé, timestamp aléatoire ±2 jours
-- ✅ **Forums publics** - Chiffrement déterministe par nom
-- ✅ **Forums privés PSK** - Clé aléatoire 256 bits, partagée via DM chiffré
-- ✅ **LoRa longue portée** - 868/915MHz, 5-20 km
-- ✅ **BLE proximité** - 10-100m, sans infrastructure
-- ✅ **Multi-hop routing** - Jusqu'à 10 sauts
-- ✅ **Messages auto-destruct** - Effacement après 24h
+- ✅ **DMs chiffrés E2E** — ECDH secp256k1 + AES-GCM-256 (transport mesh)
+- ✅ **DMs Nostr NIP-44** — ChaCha20-Poly1305 + HKDF
+- ✅ **Gift Wrap NIP-17** — Sender anonymisé, timestamp aléatoire ±2 jours
+- ✅ **Forums publics** — Chiffrement déterministe par nom
+- ✅ **Forums privés PSK** — Clé aléatoire 256 bits, partagée via DM chiffré
+- ✅ **LoRa longue portée** — 868/915 MHz, 5–20 km
+- ✅ **BLE proximité** — 10–100 m, sans infrastructure
+- ✅ **Multi-hop routing** — Jusqu'à 10 sauts
+- ✅ **Messages auto-destruct** — Effacement après 24 h
+
+### 🛒 Marketplace (v3.0.7)
+- ✅ **Onglet Shop dédié** — Browse / Ma boutique / Commandes
+- ✅ **Publication Nostr NIP-15** — Stall + produits diffusés sur les relays
+- ✅ **Broadcast LoRa local** — `SHOP:{id,name,price,stock,pubkey}` compact
+- ✅ **TTL LoRa 30 min** — Produits expirés retirés automatiquement
+- ✅ **Checkout 3 étapes** — Livraison → Paiement → Confirmation
+- ✅ **Zones de livraison** — Coût variable par région (France, Europe, Monde)
+- ✅ **Flux vendeur** — Envoi info paiement (BOLT11 / BTC / Cashu token)
+- ✅ **Flux acheteur** — Copie paiement, suivi statut commande
+- ✅ **Avis post-livraison** — ReviewModal 5 étoiles + commentaire 500 chars
+- ✅ **Réputation produit/vendeur** — Moyenne étoiles affichée sur ProductCard
+- ✅ **Notifications push** — Canaux Android `shop_orders` / `shop_reviews`
+- ✅ **Images produit** — Alerte si URI locale (non accessible publiquement)
 
 ### 🆔 Identité & Sécurité
-- ✅ **NodeId unique** - Dérivé cryptographiquement du wallet (SHA256 de la pubkey)
-- ✅ **BIP-85 identity isolation** - Seeds Bitcoin/Nostr/MeshCore cryptographiquement indépendants
-- ✅ **Anti-usurpation** - Vérification signature obligatoire
-- ✅ **Display name personnalisable** - Optionnel, changeable
-- ✅ **Status en ligne** - Présence temps réel
-- ✅ **Radar de pairs** - Carte GPS des utilisateurs proches
+- ✅ **NodeId unique** — Dérivé cryptographiquement du wallet (SHA256 pubkey)
+- ✅ **BIP-85 identity isolation** — Seeds Bitcoin/Nostr/MeshCore indépendants
+- ✅ **Anti-usurpation** — Vérification signature obligatoire
+- ✅ **Display name** — Optionnel, changeable
+- ✅ **Status en ligne** — Présence temps réel
+- ✅ **Radar de pairs** — Carte GPS des utilisateurs proches
 
 ### 💰 Wallet Cashu Avancé
-- ✅ **Mint/Melt/Swap** - NUTs 03, 04, 05
-- ✅ **P2PK** - Tokens verrouillables (NUT-11)
-- ✅ **DLEQ proofs** - Vérification cryptographique (NUT-12)
-- ✅ **QR animés** - Gros tokens en plusieurs parties (NUT-16)
-- ✅ **Atomic swaps** - Échange BTC↔Cashu trustless
-- ✅ **Notifications** - Alertes tokens reçus
-- ✅ **Backup/Restore** - Export JSON
+- ✅ **Mint/Melt/Swap** — NUTs 03, 04, 05
+- ✅ **P2PK** — Tokens verrouillables (NUT-11)
+- ✅ **DLEQ proofs** — Vérification cryptographique (NUT-12)
+- ✅ **QR animés** — Gros tokens en plusieurs parties (NUT-16)
+- ✅ **Atomic swaps** — Échange BTC↔Cashu trustless
+- ✅ **Backup/Restore** — Export JSON
 
-### 🗺️ Découverte & Réseau
-- ✅ **Forums découverts** - Annonces automatiques
-- ✅ **GPS positioning** - Partage position optionnel
-- ✅ **Distance & bearing** - Calcul vers autres pairs
-- ✅ **Signal strength** - Qualité de connexion
+### 📡 BLE MeshCore V3
+- ✅ **Nordic UART (NUS)** — Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
+- ✅ **Battery** — `RESP_BATT_STORAGE` uint16 millivolts (fix v3.0.7)
+- ✅ **Stats parsées** — CORE / RADIO / PACKETS layouts corrects (fix v3.0.7)
+- ✅ **Settings LoRa** — Fréquence / SF / TX Power liés aux vraies valeurs BLE (fix v3.0.7)
 
 ---
 
-## 🌟 Pourquoi MeshPay ?
+## 🏆 MeshPay-Nostr vs Concurrence
 
-### Communication d'urgence
-- Catastrophes naturelles (inondations, tremblements de terre)
-- Zones de conflit (censure, coupure internet)
-- Zones isolées (montagnes, déserts, océans)
-
-### Souveraineté numérique
-- Aucune entreprise ne contrôle vos données
-- Aucun gouvernement ne peut censurer
-- Vos clés = Votre identité = Vos fonds
-
-### Crypto-économie P2P
-- Paiements sans intermédiaire
-- Forums communautaires autonomes
-- Économie locale sans banque
+| Feature | MeshPay-Nostr | Signal | Telegram | OpenBazaar |
+|---------|--------------|--------|----------|------------|
+| **Sans serveur** | ✅ P2P | ❌ Centralisé | ❌ Centralisé | ⚠️ |
+| **Sans internet** | ✅ LoRa | ❌ | ❌ | ❌ |
+| **Identité Bitcoin** | ✅ | ❌ | ❌ | ❌ |
+| **Wallet intégré** | ✅ Cashu+LN | ❌ | ❌ | ⚠️ |
+| **Marketplace P2P** | ✅ NIP-15 | ❌ | ❌ | ✅ |
+| **Commerce hors-ligne** | ✅ LoRa | ❌ | ❌ | ❌ |
+| **Réputation on-chain** | ✅ NIP-1985 | ❌ | ❌ | ⚠️ |
+| **Censure-résistant** | ✅ | ⚠️ | ❌ | ⚠️ |
 
 ---
 
 ## ⚡ État Actuel (Mars 2026)
 
-### ✅ V2.7 - CYPHERPUNK HARDENED
+### ✅ v3.0.7 — MARKETPLACE + BLE HARDENED
 
 | Module | Status |
 |--------|--------|
 | Messagerie P2P (LoRa/BLE) | ✅ 100% |
-| **Chiffrement DMs — NIP-44 (ChaCha20-Poly1305)** | ✅ **Mis à jour** |
-| **Forums privés — PSK aléatoire 256 bits** | ✅ **Mis à jour** |
-| **Identité — BIP-85 isolation (Bitcoin/Nostr/Mesh)** | ✅ **Mis à jour** |
-| Identité Bitcoin Proof | ✅ 100% |
+| Chiffrement NIP-44 (ChaCha20-Poly1305) | ✅ 100% |
+| Forums privés PSK 256 bits | ✅ 100% |
+| Identité BIP-85 (Bitcoin/Nostr/Mesh) | ✅ 100% |
 | Wallet Cashu complet | ✅ 100% |
-| Gift Wrap NIP-17 (sender anonymisé) | ✅ 100% |
+| Gift Wrap NIP-17 | ✅ 100% |
 | GPS Radar | ✅ 100% |
 | Multi-hop routing | ✅ 100% |
-| Atomic swaps | ✅ 100% |
-| **Tests unitaires** | ✅ **84 tests** |
+| **Marketplace NIP-15 (Shop tab)** | ✅ **NEW** |
+| **Commerce LoRa local (SHOP: prefix)** | ✅ **NEW** |
+| **Checkout Cashu/LN/onchain** | ✅ **NEW** |
+| **Réputation NIP-1985** | ✅ **NEW** |
+| **Notifications push (shop_orders/reviews)** | ✅ **NEW** |
+| **Fix BLE battery (uint16 mv)** | ✅ **Fixed** |
+| **Fix parseStats CORE/RADIO/PACKETS** | ✅ **Fixed** |
+| **Fix LoRa Settings (fréq/SF/TX réels)** | ✅ **Fixed** |
 
 ---
 
-## 🔒 Sécurité — Audit Cypherpunk Mars 2026
+## 🔒 Sécurité — Audit Cypherpunk
 
-### Corrections appliquées (v2.7 — Cypherpunk Hardened)
+### Corrections appliquées (v2.7)
 
-#### Chiffrement messagerie
 | Composant | Correction |
 |-----------|------------|
-| `nostr-client.ts` | **NIP-44 v2** remplace NIP-04 — ChaCha20-Poly1305 (AEAD) + HKDF + padding longueur |
-| `nostr-client.ts` | Suppression AES-256-CBC (NIP-04) — élimine vulnérabilité padding oracle |
-| `encryption.ts` | `generateForumKey()` — PSK 256 bits aléatoire pour forums privés |
-| `encryption.ts` | `encryptForumWithKey(msg, psk)` — chiffrement forums avec clé secrète réelle |
-| `encryption.ts` | `deriveForumKey()` conservé uniquement pour forums explicitement publics |
+| `nostr-client.ts` | **NIP-44 v2** — ChaCha20-Poly1305 + HKDF + padding |
+| `encryption.ts` | `generateForumKey()` — PSK 256 bits aléatoire |
+| `identity.ts` | **BIP-85** — seeds enfants isolés par domaine |
+| `cashu.ts` | Rejection sampling + `crypto.getRandomValues` + HTTPS forcé |
+| `bitcoin-tx.ts` | Clés privées effacées (`fill(0)`) dans `finally` |
+| `BitcoinProvider.ts` | Mutex `isSendingRef` anti-TOCTOU |
+| `mempool.ts` | Sanity check frais — plafond 1 000 sat/vB |
 
-#### Isolation d'identité
-| Composant | Correction |
-|-----------|------------|
-| `identity.ts` | **BIP-85** — seeds enfants isolés : `deriveBip85Seed(masterSeed, index)` |
-| `identity.ts` | `BIP85_DOMAIN` : Bitcoin(0), Nostr(1), MeshCore(2) — compromission d'un domaine n'affecte pas les autres |
-| `identity.ts` | `deriveMeshSeedBip85()` — seed mesh dérivé indépendamment du wallet BTC |
+### TODO — Améliorations futures
 
-#### Audit wallet (v1.0.11 — historique)
-| Composant | Correction |
-|-----------|------------|
-| `cashu.ts` | Rejection sampling (blinding factor sans biais modulaire) |
-| `cashu.ts` | `crypto.getRandomValues` remplace `Math.random` (atomic swap ID) |
-| `cashu.ts` | HTTPS forcé pour toutes les URLs mint (anti MITM) |
-| `cashu.ts` | Validation keyset ID après `fetchMintKeys` |
-| `bitcoin-tx.ts` | Clés privées effacées en mémoire (`fill(0)`) dans un bloc `finally` |
-| `bitcoin-tx.ts` | Gardes `Number.isSafeInteger` sur tous les montants |
-| `BitcoinProvider.ts` | Mutex `isSendingRef` anti-envoi concurrent (TOCTOU) |
-| `mempool.ts` | Sanity check frais API — plafond 1 000 sat/vB (anti-MITM) |
-
-### 🗓️ TODO — Améliorations architecturales futures
-
-- **[ ] Forward secrecy DMs** (`encryption.ts`) — Ratchet simplifié (ECDH éphémère + HKDF par message) pour que la compromission d'une clé ne permette pas de déchiffrer les messages passés.
-- **[ ] BigInt non-zéroable** (`cashu.ts`) — Le facteur aveugle `r` (BigInt) ne peut pas être mis à zéro comme un `Uint8Array`. Refactoriser pour travailler avec des tableaux d'octets et effacer la mémoire après usage.
-- **[ ] Mnémonique en React state** (`BitcoinProvider.ts`) — Visible dans les heap dumps. Solution : déverrouillage biométrique par transaction via module natif.
-- **[ ] Mode strict DLEQ** (`cashu.ts`) — Ajouter un mode rejetant les proofs sans DLEQ pour les mints non-fiables (NUT-12).
-- **[ ] Passphrase BIP39** (`WalletSeedProvider.ts`) — Support du 25e mot BIP39 à l'import/génération.
-- **[ ] Relay Tor/i2p** (`nostr-client.ts`) — Option relay over Tor pour masquer les IPs et les métadonnées de connexion.
-- **[ ] Timestamp noise** (`nostr-client.ts`) — Quantifier les `created_at` à la minute pour compliquer la corrélation temporelle.
+- **[ ] Forward secrecy DMs** — Ratchet ECDH éphémère par message
+- **[ ] BigInt non-zéroable** (`cashu.ts`) — Refactoriser blinding factor en `Uint8Array`
+- **[ ] Mnémonique en React state** — Déverrouillage biométrique natif
+- **[ ] Mode strict DLEQ** — Rejeter proofs sans DLEQ (NUT-12)
+- **[ ] Passphrase BIP39** — Support 25e mot à l'import/génération
+- **[ ] Relay Tor/i2p** — Masquer IPs et métadonnées de connexion
+- **[ ] Timestamp noise** — Quantifier `created_at` à la minute
 
 ---
 
 ## 📦 Installation
 
 ```bash
-# Télécharger APK
-wget https://github.com/Silexperience210/BitMesh/releases/latest/download/BitMesh-v2.5.apk
+# Télécharger la dernière release
+wget https://github.com/Silexperience210/MeshPay-Nostr/releases/latest/download/MeshPay-Nostr.apk
 
-# Installer
-adb install BitMesh-v2.5.apk
+# Installer via ADB
+adb install MeshPay-Nostr.apk
 ```
 
 ---
@@ -209,20 +194,29 @@ Votre NodeId MESH-XXXX est automatiquement créé.
 Messages → + → Discover → Sélectionner un forum
 ```
 
-### 3. Envoyer un message
+### 3. Ouvrir la marketplace
 ```
-Sélectionner conversation → Taper message → Send
+Onglet Shop → Browse produits Nostr & LoRa locaux
 ```
-Fonctionne même sans internet (LoRa/BLE) !
 
-### 4. Recevoir/envoyer Cashu
+### 4. Vendre un produit
+```
+Shop → Ma boutique → + Produit → Publier sur Nostr ou Broadcaster en LoRa
+```
+
+### 5. Acheter et payer
+```
+Shop → Sélectionner produit → Checkout → Cashu / Lightning / Bitcoin
+```
+
+### 6. Recevoir/envoyer Cashu
 ```
 Messages → Attacher token → ou Wallet → Melt
 ```
 
 ---
 
-## 💝 Soutenir MeshPay 
+## 💝 Soutenir MeshPay
 
 **Cashu:** `silexperience@minibits.cash`
 
@@ -232,14 +226,14 @@ Vos dons financent le développement open-source.
 
 ## 📜 Licence
 
-MIT License - Voir [LICENSE](./LICENSE)
+MIT License — Voir [LICENSE](./LICENSE)
 
 ---
 
 <div align="center">
 
-**Fait avec ❤️ par la communauté BitMesh**
+**Fait avec ❤️ par la communauté MeshPay-Nostr**
 
-[⭐ Star ce repo](https://github.com/Silexperience210/MeshPay) • [🐛 Signaler un bug](https://github.com/Silexperience210/MeshPay/issues)
+[⭐ Star ce repo](https://github.com/Silexperience210/MeshPay-Nostr) • [🐛 Signaler un bug](https://github.com/Silexperience210/MeshPay-Nostr/issues)
 
 </div>
