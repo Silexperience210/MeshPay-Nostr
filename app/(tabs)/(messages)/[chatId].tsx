@@ -594,7 +594,7 @@ export default function ChatScreen() {
   const { chatId } = useLocalSearchParams<{ chatId: string }>();
   const convId = decodeURIComponent(chatId ?? '');
   const { settings, isLoRaMode } = useAppSettings();
-  const { conversations, messagesByConv, sendMessage, sendAudio, sendImage, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation } = useMessages();
+  const { conversations, messagesByConv, sendMessage, sendAudio, sendImage, sendCashu, loadConversationMessages, markRead, deleteMessage, contacts, startConversation, joinedForumsList } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
   const ble = useBle();
 
@@ -664,6 +664,17 @@ export default function ChatScreen() {
       startConversation(convId).catch(() => {});
     }
   }, [convId]);
+
+  // Auto-switch canal LoRa quand on entre dans un forum
+  useEffect(() => {
+    if (!isForum || !ble.connected) return;
+    const channelName = convId.slice(6);
+    const idx = joinedForumsList.indexOf(channelName);
+    if (idx >= 0) {
+      ble.setChannel(idx);
+      console.log('[Chat] Canal LoRa → ch' + idx + ' (' + channelName + ')');
+    }
+  }, [isForum, convId, ble.connected, joinedForumsList]);
 
   // Scroll vers le bas à chaque nouveau message
   useEffect(() => {
@@ -1068,17 +1079,24 @@ export default function ChatScreen() {
           </TouchableOpacity>
 
           {/* TextInput — toujours présent */}
-          <TextInput
-            style={styles.textInput}
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder={isRecording ? '' : isForum ? 'Message au forum...' : 'Message chiffré E2E...'}
-            placeholderTextColor={Colors.textMuted}
-            multiline
-            maxLength={500}
-            editable={!isRecording}
-            onSubmitEditing={handleSend}
-          />
+          <View style={{ flex: 1 }}>
+            <TextInput
+              style={styles.textInput}
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder={isRecording ? '' : isForum ? 'Message au forum...' : 'Message chiffré E2E...'}
+              placeholderTextColor={Colors.textMuted}
+              multiline
+              maxLength={isForum && ble.connected ? 120 : 500}
+              editable={!isRecording}
+              onSubmitEditing={handleSend}
+            />
+            {isForum && ble.connected && inputText.length > 80 && (
+              <Text style={{ fontSize: 10, color: inputText.length >= 120 ? '#FF4757' : Colors.textMuted, textAlign: 'right', paddingRight: 4, marginTop: -2 }}>
+                {120 - inputText.length}
+              </Text>
+            )}
+          </View>
 
           {/* Bouton Send ou Mic — seul switch autorisé */}
           {inputText.trim() && !isRecording ? (

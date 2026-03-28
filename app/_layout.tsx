@@ -87,9 +87,11 @@ function AppContent() {
 
   useEffect(() => {
     // Deep link : tap sur une notification boutique → naviguer vers Shop > Commandes
-    const unsub = addNotificationResponseListener((type) => {
+    const unsub = addNotificationResponseListener((type, data) => {
       if (type === 'new_order' || type === 'order_status' || type === 'payment_info') {
         router.push('/(tabs)/shop/orders');
+      } else if (type === 'forum_message' && data.channelName) {
+        router.push(`/(tabs)/(messages)/${encodeURIComponent(`forum:${data.channelName}`)}`);
       }
     });
     return unsub;

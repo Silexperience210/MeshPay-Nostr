@@ -29,6 +29,7 @@ import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
+import { notifyForumMessage } from '@/utils/notifications';
 import { useNostr } from '@/providers/NostrProvider';
 // MeshIdentity utilisé comme type de paramètre pour publishAndStore
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
@@ -74,6 +75,7 @@ export interface MessagesState {
   sendCashu: (convId: string, token: string, amountSats: number) => Promise<void>;
   loadConversationMessages: (convId: string) => Promise<void>;
   startConversation: (peerNodeId: string, peerName?: string, peerPubkey?: string) => Promise<void>;
+  joinedForumsList: string[];
   joinForum: (channelName: string, description?: string, pskHex?: string, skipAnnounce?: boolean) => Promise<void>;
   leaveForum: (channelName: string) => void;
   markRead: (convId: string) => Promise<void>;
@@ -103,6 +105,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const conversationsRef = useRef<StoredConversation[]>([]);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
   const joinedForums = useRef<Set<string>>(new Set());
+  const [joinedForumsList, setJoinedForumsList] = useState<string[]>([]);
   // PSKs chargées en mémoire : channelName → pskHex (évite les appels AsyncStorage dans les callbacks)
   const forumPsks = useRef<Map<string, string>>(new Map());
   // MeshRouter : deduplication + routing table + TTL (remplace le Set manuel)
@@ -381,18 +384,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             timestamp: packet.timestamp * 1000,
             isMine: false,
             status: 'delivered',
+            transport: 'lora',
           };
           saveMessage(msg);
-          updateConversationLastMessage(convId, plaintext.slice(0, 50), msg.timestamp, true);
+          updateConversationLastMessage(convId, `📡 ${plaintext.slice(0, 48)}`, msg.timestamp, true);
           setMessagesByConv(prev => ({
             ...prev,
             [convId]: [...(prev[convId] ?? []), msg],
           }));
           setConversations(prev => prev.map(c =>
             c.id === convId
-              ? { ...c, lastMessage: plaintext.slice(0, 50), lastMessageTime: msg.timestamp, unreadCount: c.unreadCount + 1 }
+              ? { ...c, lastMessage: `📡 ${plaintext.slice(0, 48)}`, lastMessageTime: msg.timestamp, unreadCount: c.unreadCount + 1 }
               : c
           ));
+          notifyForumMessage(channelName, '📡 LoRa', plaintext).catch(() => {});
           console.log('[MeshCore] Canal LoRa → forum:', channelName, '|', plaintext.slice(0, 40));
           return;
         }
@@ -586,6 +591,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       try {
         const saved: string[] = JSON.parse(raw);
         saved.forEach(ch => joinedForums.current.add(ch));
+        setJoinedForumsList([...joinedForums.current]);
         // Charger les PSKs connues en mémoire
         const psks = await loadAllPsks(saved);
         psks.forEach((psk, ch) => forumPsks.current.set(ch, psk));
@@ -645,10 +651,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       timestamp: ts,
       isMine: false,
       status: 'delivered',
+      transport: 'nostr',
     };
 
     saveMessage(msg).catch(() => {});
-    updateConversationLastMessage(convId, `${fromId.slice(0, 8)}: ${event.content.slice(0, 40)}`, ts, true).catch(() => {});
+    const preview = `${fromId.slice(0, 8)}: ${plaintext.slice(0, 40)}`;
+    updateConversationLastMessage(convId, preview, ts, true).catch(() => {});
+    notifyForumMessage(channelName, fromId.slice(0, 10), plaintext).catch(() => {});
 
     setMessagesByConv(prev => ({
       ...prev,
@@ -659,7 +668,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       prev.map(c => c.id === convId
         ? {
             ...c,
-            lastMessage: `${fromId.slice(0, 8)}: ${event.content.slice(0, 40)}`,
+            lastMessage: preview,
             lastMessageTime: ts,
             unreadCount: c.unreadCount + 1,
           }
@@ -1156,6 +1165,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const joinForum = useCallback(async (channelName: string, description?: string, pskHex?: string, skipAnnounce?: boolean): Promise<void> => {
     const convId = `forum:${channelName}`;
     joinedForums.current.add(channelName);
+    setJoinedForumsList([...joinedForums.current]);
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
 
     // Stocker la PSK en mémoire + AsyncStorage si forum privé
@@ -1228,6 +1238,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // Quitter un forum
   const leaveForum = useCallback((channelName: string): void => {
     joinedForums.current.delete(channelName);
+    setJoinedForumsList([...joinedForums.current]);
     AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
     // Supprimer la PSK si forum privé
     if (forumPsks.current.has(channelName)) {
@@ -1537,6 +1548,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     sendCashu,
     loadConversationMessages,
     startConversation,
+    joinedForumsList,
     joinForum,
     leaveForum,
     markRead,

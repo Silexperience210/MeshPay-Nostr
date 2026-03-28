@@ -45,6 +45,15 @@ export async function requestNotificationPermission(): Promise<boolean> {
 export async function configureNotificationChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
 
+  await Notifications.setNotificationChannelAsync('forum_messages', {
+    name: 'Messages forum',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 150],
+    lightColor: '#4DACFF',
+    sound: 'default',
+    showBadge: true,
+  });
+
   await Notifications.setNotificationChannelAsync('shop_orders', {
     name: 'Commandes boutique',
     importance: Notifications.AndroidImportance.HIGH,
@@ -138,6 +147,22 @@ export async function notifyPaymentInfoReceived(
     `Le vendeur a envoyé les détails de paiement pour "${productName}"`,
     'shop_orders',
     { type: 'payment_info' },
+    notificationsEnabled,
+  );
+}
+
+/** Nouveau message dans un forum (LoRa ou Nostr) */
+export async function notifyForumMessage(
+  channelName: string,
+  senderAlias: string,
+  text: string,
+  notificationsEnabled = true,
+): Promise<void> {
+  await send(
+    `#${channelName}`,
+    `${senderAlias}: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`,
+    'forum_messages',
+    { type: 'forum_message', channelName },
     notificationsEnabled,
   );
 }
