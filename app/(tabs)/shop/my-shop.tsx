@@ -30,6 +30,8 @@ export default function MyShopScreen() {
   const [view, setView] = useState<ShopView>(myStall ? 'products' : 'setup');
   const [stallName, setStallName] = useState(myStall?.name ?? '');
   const [stallDesc, setStallDesc] = useState(myStall?.description ?? '');
+  const [stallLnAddress, setStallLnAddress] = useState(myStall?.lightningAddress ?? '');
+  const [stallBtcAddress, setStallBtcAddress] = useState(myStall?.bitcoinAddress ?? '');
   const [savingStall, setSavingStall] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [broadcasting, setBroadcasting] = useState(false);
@@ -50,6 +52,8 @@ export default function MyShopScreen() {
           { id: 'eu', name: 'Europe', costSats: 500, regions: ['EU'] },
           { id: 'world', name: 'Monde', costSats: 2000, regions: ['*'] },
         ],
+        lightningAddress: stallLnAddress.trim() || undefined,
+        bitcoinAddress: stallBtcAddress.trim() || undefined,
       });
       setView('products');
     } catch (e: any) {
@@ -120,6 +124,9 @@ export default function MyShopScreen() {
 
             <Field label="Nom de la boutique *" value={stallName} onChangeText={setStallName} placeholder="Alice Electronics" />
             <Field label="Description" value={stallDesc} onChangeText={setStallDesc} placeholder="Matériel électronique, composants, montages DIY..." multiline />
+
+            <Field label="⚡ Lightning Address (optionnel)" value={stallLnAddress} onChangeText={setStallLnAddress} placeholder="alice@minibits.cash" keyboardType="email-address" />
+            <Field label="₿ Adresse Bitcoin on-chain (optionnel)" value={stallBtcAddress} onChangeText={setStallBtcAddress} placeholder="bc1q..." />
 
             <View style={styles.shippingNote}>
               <Text style={styles.shippingNoteText}>
@@ -254,9 +261,9 @@ export default function MyShopScreen() {
   );
 }
 
-function Field({ label, value, onChangeText, placeholder, multiline }: {
+function Field({ label, value, onChangeText, placeholder, multiline, keyboardType }: {
   label: string; value: string; onChangeText: (v: string) => void;
-  placeholder?: string; multiline?: boolean;
+  placeholder?: string; multiline?: boolean; keyboardType?: any;
 }) {
   return (
     <View style={{ marginBottom: 14 }}>
@@ -272,7 +279,9 @@ function Field({ label, value, onChangeText, placeholder, multiline }: {
         placeholder={placeholder}
         placeholderTextColor={Colors.textMuted}
         multiline={multiline}
+        keyboardType={keyboardType}
         numberOfLines={multiline ? 3 : 1}
+        autoCapitalize="none"
       />
     </View>
   );

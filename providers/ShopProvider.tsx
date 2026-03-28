@@ -102,6 +102,7 @@ interface ShopContextType {
     delivery: DeliveryForm,
     paymentMethod: PaymentMethod,
     shippingSats: number,
+    directPayment?: { cashuToken?: string; txid?: string }, // paiement direct joint à la commande
   ) => Promise<ShopOrder>;
   confirmOrder: (orderId: string, paymentRef: string) => Promise<void>;
   updateOrderStatus: (orderId: string, status: ShopOrder['status'], notes?: string) => Promise<void>;
@@ -119,7 +120,7 @@ export function useShop(): ShopContextType {
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 export function ShopProvider({ children }: { children: React.ReactNode }) {
-  const { publish, publishDMSealed, nodeId } = useNostr();
+  const { publish, publishDMSealed, publicKey } = useNostr();
   const ble = useBle();
   const { settings } = useAppSettings();
   const notificationsEnabled = settings.notifications;
@@ -134,7 +135,9 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
   const nostrSubRef = useRef<(() => void) | null>(null);
   const reviewSubRef = useRef<(() => void) | null>(null);
 
-  const myPubkey = nodeId ?? '';
+  // publicKey = pubkey Nostr hex 64 chars (secp256k1) — requis pour DMs NIP-17 et tags Nostr
+  // nodeId = identifiant MeshCore "MESH-XXXX" — NON utilisé ici car invalide comme pubkey Nostr
+  const myPubkey = publicKey ?? '';
 
   // ─── Persistance ───────────────────────────────────────────────────────────
 
@@ -147,8 +150,29 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
           AsyncStorage.getItem(ORDERS_KEY),
           loadCachedReviews(),
         ]);
-        if (stallRaw) setMyStall(JSON.parse(stallRaw));
-        if (productsRaw) setMyProducts(JSON.parse(productsRaw));
+        if (stallRaw) {
+          const stall: ShopStall = JSON.parse(stallRaw);
+          // Migration : corriger ownerPubkey si c'était le nodeId MeshCore (non-hex, < 64 chars)
+          if (myPubkey && stall.ownerPubkey !== myPubkey && stall.ownerPubkey.length < 64) {
+            stall.ownerPubkey = myPubkey;
+            AsyncStorage.setItem(STALL_KEY, JSON.stringify(stall)).catch(() => {});
+          }
+          setMyStall(stall);
+        }
+        if (productsRaw) {
+          let products: ShopProduct[] = JSON.parse(productsRaw);
+          // Migration : corriger sellerPubkey si c'était le nodeId MeshCore (non-hex, < 64 chars)
+          if (myPubkey) {
+            const needsFix = products.some((p) => p.sellerPubkey.length < 64);
+            if (needsFix) {
+              products = products.map((p) =>
+                p.sellerPubkey.length < 64 ? { ...p, sellerPubkey: myPubkey } : p,
+              );
+              AsyncStorage.setItem(PRODUCTS_KEY, JSON.stringify(products)).catch(() => {});
+            }
+          }
+          setMyProducts(products);
+        }
         if (ordersRaw) setOrders(JSON.parse(ordersRaw));
         if (cachedReviews.length > 0) setReviews(cachedReviews);
       } catch (e) {
@@ -157,7 +181,7 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       // Configurer les canaux Android
       configureNotificationChannels().catch(() => {});
     })();
-  }, []);
+  }, [myPubkey]);
 
   const persistOrders = useCallback(async (updated: ShopOrder[]) => {
     setOrders(updated);
@@ -316,9 +340,15 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       await publish(buildProductEvent(product, myStall));
     }
     // Mise à jour optimiste : ajoute immédiatement les propres produits dans le browse
+    // avec les infos de paiement direct du stall
     setBrowseProducts((prev) => {
       const withoutOwn = prev.filter((p) => p.sellerPubkey !== myPubkey);
-      return [...myProducts, ...withoutOwn];
+      const enriched = myProducts.map((p) => ({
+        ...p,
+        sellerLightningAddress: myStall?.lightningAddress,
+        sellerBitcoinAddress: myStall?.bitcoinAddress,
+      }));
+      return [...enriched, ...withoutOwn];
     });
     // Rafraîchit depuis les relais après un court délai (laisse le temps au relay de traiter)
     setTimeout(() => refreshBrowse(), 1500);
@@ -387,11 +417,16 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     delivery: DeliveryForm,
     paymentMethod: PaymentMethod,
     shippingSats: number,
+    directPayment?: { cashuToken?: string; txid?: string },
   ): Promise<ShopOrder> => {
     if (!myPubkey) throw new Error('Wallet requis pour passer une commande');
 
     const orderId = generateId();
     const totalSats = product.priceSats + shippingSats;
+
+    // Paiement direct → statut 'paid' immédiatement
+    // Paiement DM flow → 'pending_payment' (attente info vendeur)
+    const isPaidNow = !!(directPayment?.cashuToken || directPayment?.txid);
 
     const order: ShopOrder = {
       id: orderId,
@@ -404,9 +439,9 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       shippingSats,
       totalSats,
       delivery,
-      status: 'pending_payment',
+      status: isPaidNow ? 'paid' : 'pending_payment',
       paymentMethod,
-      paymentRef: null,
+      paymentRef: directPayment?.txid ?? directPayment?.cashuToken ?? null,
       isSale: false,
       createdAt: Math.floor(Date.now() / 1000),
       updatedAt: Math.floor(Date.now() / 1000),
@@ -424,6 +459,9 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       totalSats,
       paymentMethod,
       delivery,
+      // Joindre le paiement direct si présent
+      ...(directPayment?.cashuToken ? { cashuToken: directPayment.cashuToken } : {}),
+      ...(directPayment?.txid ? { paymentRef: directPayment.txid, status: 'paid' } : {}),
     };
 
     await publishDMSealed(product.sellerPubkey, encodeOrderDM(dmPayload));

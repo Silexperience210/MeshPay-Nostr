@@ -27,6 +27,8 @@ export interface ShopStall {
   shipping: DeliveryZone[];
   createdAt: number;
   isLoraLocal?: boolean;       // vu via LoRa mesh
+  lightningAddress?: string;   // ex: alice@minibits.cash — paiement LN direct
+  bitcoinAddress?: string;     // adresse BTC on-chain — paiement direct
 }
 
 export interface ShopProduct {
@@ -42,6 +44,8 @@ export interface ShopProduct {
   createdAt: number;
   isLoraLocal: boolean;        // vu via LoRa mesh (pas sur relais Nostr)
   eventId?: string;            // Nostr event id si publié
+  sellerLightningAddress?: string;  // copié du stall — paiement LN direct
+  sellerBitcoinAddress?: string;    // copié du stall — paiement BTC direct
 }
 
 export interface DeliveryForm {
@@ -97,6 +101,9 @@ export interface NIP15StallContent {
     cost: number;
     regions: string[];
   }>;
+  // Extensions MeshPay (non-standard NIP-15 mais ignorées par clients tiers)
+  lightning_address?: string;
+  bitcoin_address?: string;
 }
 
 export function buildStallEvent(stall: ShopStall): { kind: number; content: string; tags: string[][] } {
@@ -111,6 +118,8 @@ export function buildStallEvent(stall: ShopStall): { kind: number; content: stri
       cost: z.costSats,
       regions: z.regions,
     })),
+    ...(stall.lightningAddress ? { lightning_address: stall.lightningAddress } : {}),
+    ...(stall.bitcoinAddress ? { bitcoin_address: stall.bitcoinAddress } : {}),
   };
 
   return {
@@ -181,7 +190,8 @@ export interface OrderDMPayload {
   shippingSats: number;
   totalSats: number;
   paymentMethod: PaymentMethod;
-  paymentRef?: string;      // invoice BOLT11 ou adresse BTC (rempli par vendeur)
+  paymentRef?: string;      // invoice BOLT11 ou adresse BTC (rempli par vendeur) OU txid BTC
+  cashuToken?: string;      // token Cashu encodé (paiement direct — acheteur le joint à la commande)
   delivery?: DeliveryForm;  // présent dans order_request
   status?: OrderStatus;
   notes?: string;
@@ -302,6 +312,8 @@ export function parseNIP15Stall(
         regions: z.regions ?? [],
       })),
       createdAt: Math.floor(Date.now() / 1000),
+      lightningAddress: c.lightning_address,
+      bitcoinAddress: c.bitcoin_address,
     };
   } catch {
     return null;
