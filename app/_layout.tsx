@@ -22,7 +22,8 @@ import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
 import { ShopProvider } from "@/providers/ShopProvider";
-import { requestNotificationPermission, configureNotificationChannels } from "@/utils/notifications";
+import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener } from "@/utils/notifications";
+import { router } from "expo-router";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -82,6 +83,16 @@ function AppContent() {
     requestNotificationPermission()
       .then(() => configureNotificationChannels())
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    // Deep link : tap sur une notification boutique → naviguer vers Shop > Commandes
+    const unsub = addNotificationResponseListener((type) => {
+      if (type === 'new_order' || type === 'order_status' || type === 'payment_info') {
+        router.push('/(tabs)/shop/orders');
+      }
+    });
+    return unsub;
   }, []);
 
   const handleOnboardingClose = async () => {
