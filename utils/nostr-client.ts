@@ -409,10 +409,10 @@ export class NostrClient {
       onEvent(event);
     };
 
-    // nostr-tools v2.23+ : subscribeMany prend un Filter unique — on crée une sub par filtre
+    // nostr-tools v2.x : subscribeMany attend Filter[] — on wrappe chaque filtre dans un tableau
     let eoseFired = 0;
     const subs = filters.map((filter, idx) =>
-      this.pool.subscribeMany(this.relayUrls, filter, {
+      this.pool.subscribeMany(this.relayUrls, [filter], {
         onevent: handler,
         oneose: onEOSE
           ? () => {

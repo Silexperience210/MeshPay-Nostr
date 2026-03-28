@@ -315,7 +315,14 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     for (const product of myProducts) {
       await publish(buildProductEvent(product, myStall));
     }
-  }, [myStall, myProducts, publish]);
+    // Mise à jour optimiste : ajoute immédiatement les propres produits dans le browse
+    setBrowseProducts((prev) => {
+      const withoutOwn = prev.filter((p) => p.sellerPubkey !== myPubkey);
+      return [...myProducts, ...withoutOwn];
+    });
+    // Rafraîchit depuis les relais après un court délai (laisse le temps au relay de traiter)
+    setTimeout(() => refreshBrowse(), 1500);
+  }, [myStall, myProducts, myPubkey, publish, refreshBrowse]);
 
   // ─── Broadcast LoRa ───────────────────────────────────────────────────────
 
@@ -341,18 +348,26 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     setIsLoadingBrowse(true);
     nostrSubRef.current?.();
 
-    const found: ShopProduct[] = [];
+    const found = new Map<string, ShopProduct>();
+
+    // Timeout de sécurité : si EOSE n'arrive jamais (relay mort, réseau lent),
+    // on arrête le spinner après 15s pour ne pas bloquer le pull-to-refresh
+    const safetyTimer = setTimeout(() => {
+      setIsLoadingBrowse(false);
+    }, 15_000);
 
     const unsub = nostrClient.subscribe(
       [{ kinds: [30018], limit: 100 }],
       (event) => {
         const product = parseNIP15Product(event.content, event.pubkey, event.id);
-        if (product && !found.find((p) => p.id === product.id)) {
-          found.push(product);
-          setBrowseProducts([...found]);
+        if (product) {
+          found.set(product.id, product);
+          setBrowseProducts([...found.values()]);
         }
       },
       () => {
+        // EOSE reçu — relay a fini d'envoyer les events stockés
+        clearTimeout(safetyTimer);
         setIsLoadingBrowse(false);
       },
     );
