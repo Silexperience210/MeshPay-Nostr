@@ -53,10 +53,12 @@ import {
   encodeLoRaProduct,
   decodeLoRaProduct,
   loRaBroadcastToProduct,
+  decodeLoRaPayment,
   parseNIP15Product,
   parseNIP15Stall,
   generateId,
   LORA_SHOP_PREFIX,
+  LORA_PAY_PREFIX,
 } from '@/utils/shop';
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
@@ -193,16 +195,52 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
   // Appelé depuis Mesh screen ou tout composant qui reçoit des messages canal
 
   const receiveLoRaMessage = useCallback((text: string) => {
-    if (!text.startsWith(LORA_SHOP_PREFIX)) return;
-    const broadcast = decodeLoRaProduct(text);
-    if (!broadcast) return;
-    const product = loRaBroadcastToProduct(broadcast);
-    setLoraProducts((prev) => {
-      // Mettre à jour si déjà présent (rafraîchit le TTL via createdAt)
-      const filtered = prev.filter((p) => p.id !== product.id);
-      return [product, ...filtered.slice(0, 49)]; // max 50 produits locaux
-    });
-  }, []);
+    // ── Produit broadcast SHOP: ───────────────────────────────────────────────
+    if (text.startsWith(LORA_SHOP_PREFIX)) {
+      const broadcast = decodeLoRaProduct(text);
+      if (!broadcast) return;
+      const product = loRaBroadcastToProduct(broadcast);
+      setLoraProducts((prev) => {
+        const filtered = prev.filter((p) => p.id !== product.id);
+        return [product, ...filtered.slice(0, 49)];
+      });
+      return;
+    }
+
+    // ── Paiement LoRa Cashu PAY: (vendeur reçoit le token hors-ligne) ────────
+    if (text.startsWith(LORA_PAY_PREFIX)) {
+      const pay = decodeLoRaPayment(text);
+      if (!pay) return;
+      // Créer la commande côté vendeur avec statut paid + token joint
+      const newOrder: ShopOrder = {
+        id: pay.o,
+        productId: pay.p,
+        productName: pay.n,
+        stallId: myStall?.id ?? pay.p,
+        sellerPubkey: myPubkey,
+        buyerPubkey: 'lora-anonymous', // acheteur anonyme en mode offline
+        priceSats: pay.s,
+        shippingSats: 0,
+        totalSats: pay.s,
+        delivery: { name: 'LoRa (hors-ligne)', address: '', city: '', postalCode: '', country: '' },
+        status: 'paid',
+        paymentMethod: 'lora_cashu',
+        paymentRef: pay.t, // cashu token
+        isSale: true,
+        createdAt: Math.floor(Date.now() / 1000),
+        updatedAt: Math.floor(Date.now() / 1000),
+        notes: 'Paiement Cashu reçu via LoRa mesh — à redempter',
+      };
+      setOrders((prev) => {
+        if (prev.find((o) => o.id === newOrder.id)) return prev;
+        const updated = [newOrder, ...prev];
+        AsyncStorage.setItem(ORDERS_KEY, JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      notifyNewOrder(pay.n, 'LoRa (anonyme)', pay.s, notificationsEnabled).catch(() => {});
+      return;
+    }
+  }, [myStall, myPubkey, notificationsEnabled]);
 
   // Expiration des produits LoRa — supprimer ceux > 30 minutes sans update
   useEffect(() => {

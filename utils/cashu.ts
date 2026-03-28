@@ -1030,3 +1030,44 @@ export function getP2pkPubkey(token: CashuToken): string | null {
     return null;
   }
 }
+
+// ─── LNURL-pay — résolution Lightning Address → BOLT11 invoice ───────────────
+//
+// Protocole LNURL-pay (LUD-06) : user@domain → BOLT11 en 2 requêtes HTTP
+// Compatible : Minibits, Phoenix, Wallet of Satoshi, Zeus, LNbits...
+
+export async function fetchLNURLInvoice(
+  lnAddress: string,
+  amountSats: number,
+): Promise<string> {
+  const atIdx = lnAddress.lastIndexOf('@');
+  if (atIdx < 1) throw new Error('Adresse Lightning invalide (format attendu : user@domain)');
+  const user = lnAddress.slice(0, atIdx);
+  const domain = lnAddress.slice(atIdx + 1);
+
+  // Étape 1 : métadonnées LNURL-pay
+  const metaUrl = `https://${domain}/.well-known/lnurlp/${encodeURIComponent(user)}`;
+  const metaRes = await fetch(metaUrl);
+  if (!metaRes.ok) throw new Error(`Impossible de résoudre ${lnAddress} (HTTP ${metaRes.status})`);
+  const meta = await metaRes.json();
+  if (meta.status === 'ERROR') throw new Error(meta.reason ?? 'Erreur LNURL-pay');
+
+  const amountMsats = amountSats * 1000;
+  if (meta.minSendable && amountMsats < meta.minSendable) {
+    throw new Error(`Montant trop faible (minimum ${Math.ceil(meta.minSendable / 1000)} sat)`);
+  }
+  if (meta.maxSendable && amountMsats > meta.maxSendable) {
+    throw new Error(`Montant trop élevé (maximum ${Math.floor(meta.maxSendable / 1000)} sat)`);
+  }
+
+  // Étape 2 : invoice BOLT11 pour ce montant
+  const sep = meta.callback.includes('?') ? '&' : '?';
+  const invoiceRes = await fetch(`${meta.callback}${sep}amount=${amountMsats}`);
+  if (!invoiceRes.ok) throw new Error('Impossible de générer l\'invoice Lightning');
+  const { pr, status: s2, reason } = await invoiceRes.json();
+  if (s2 === 'ERROR') throw new Error(reason ?? 'Erreur génération invoice');
+  if (!pr || typeof pr !== 'string') throw new Error('Invoice BOLT11 invalide reçue du vendeur');
+
+  console.log('[LNURL] Invoice générée pour', lnAddress, amountSats, 'sat');
+  return pr;
+}

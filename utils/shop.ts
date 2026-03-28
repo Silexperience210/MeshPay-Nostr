@@ -66,7 +66,7 @@ export type OrderStatus =
   | 'delivered'
   | 'cancelled';
 
-export type PaymentMethod = 'cashu' | 'lightning' | 'onchain';
+export type PaymentMethod = 'cashu' | 'lightning' | 'onchain' | 'lora_cashu';
 
 export interface ShopOrder {
   id: string;
@@ -224,6 +224,7 @@ export interface LoRaProductBroadcast {
 }
 
 export const LORA_SHOP_PREFIX = 'SHOP:';
+export const LORA_PAY_PREFIX = 'PAY:';
 
 export function encodeLoRaProduct(product: ShopProduct, stallName: string): string {
   const payload: LoRaProductBroadcast = {
@@ -349,3 +350,43 @@ export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
   delivered: '#00D68F',
   cancelled: '#FF4757',
 };
+
+// ─── LoRa Offline Payment — format PAY: ──────────────────────────────────────
+// Format: "PAY:{\"o\":\"orderId8\",\"p\":\"prodId8\",\"n\":\"Name20\",\"s\":5000,\"t\":\"cashuToken...\"}"
+// Envoyé via BLE gateway → mesh LoRa → appareil vendeur
+// Le vendeur reçoit le token Cashu hors-ligne et le redempt quand il a du réseau
+
+export interface LoRaPayload {
+  o: string;   // orderId (8 chars)
+  p: string;   // productId (8 chars)
+  n: string;   // product name (max 20 chars)
+  s: number;   // total sats
+  t: string;   // cashu token encodé
+}
+
+export function encodeLoRaPayment(
+  orderId: string,
+  product: ShopProduct,
+  totalSats: number,
+  cashuToken: string,
+): string {
+  const payload: LoRaPayload = {
+    o: orderId.slice(0, 8),
+    p: product.id.slice(0, 8),
+    n: product.name.slice(0, 20),
+    s: totalSats,
+    t: cashuToken,
+  };
+  return LORA_PAY_PREFIX + JSON.stringify(payload);
+}
+
+export function decodeLoRaPayment(raw: string): LoRaPayload | null {
+  if (!raw.startsWith(LORA_PAY_PREFIX)) return null;
+  try {
+    const obj = JSON.parse(raw.slice(LORA_PAY_PREFIX.length));
+    if (!obj.o || !obj.p || !obj.s || !obj.t) return null;
+    return obj as LoRaPayload;
+  } catch {
+    return null;
+  }
+}

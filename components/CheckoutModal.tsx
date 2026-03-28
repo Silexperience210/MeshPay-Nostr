@@ -1,15 +1,12 @@
 /**
  * CheckoutModal — Processus d'achat complet
  *
- * Étapes :
- *  1. Formulaire de livraison
- *  2. Choix du mode de paiement (avec infos spécifiques à chaque méthode)
- *  3. Confirmation et envoi
- *
- * Flows de paiement :
- *  - Cashu  → DIRECT : token sélectionné depuis le wallet local, joint au DM
- *  - Lightning → DM flow : le vendeur envoie une invoice BOLT11 après réception
- *  - On-chain → DIRECT si seller a publié bitcoinAddress, sinon DM flow
+ * Flows de paiement (du plus autonome au moins) :
+ *  1. Cashu Direct        → proofs locaux → token joint au DM (0 internet côté paiement)
+ *  2. Lightning Melt      → LNURL-pay → invoice → meltTokens(proofs) → preimage → DM paid
+ *  3. On-chain Direct     → sendBitcoin() → txid → DM paid (si vendeur a publié adresse)
+ *  4. LoRa Cashu Offline  → encode token → BLE sendChannelMessage → vendeur reçoit offline
+ *  5. DM Flow (fallback)  → envoie commande → vendeur répond avec invoice/adresse
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import {
@@ -32,18 +29,19 @@ import {
   CreditCard,
   Zap,
   Bitcoin,
+  Radio,
   ChevronRight,
   Check,
-  AlertTriangle,
   Wallet,
 } from 'lucide-react-native';
 import Colors from '@/constants/colors';
-import { type ShopProduct, type DeliveryForm, type PaymentMethod, type DeliveryZone, formatSats } from '@/utils/shop';
+import { type ShopProduct, type DeliveryForm, type PaymentMethod, type DeliveryZone, formatSats, encodeLoRaPayment, generateId } from '@/utils/shop';
 import { useShop } from '@/providers/ShopProvider';
+import { useBle } from '@/providers/BleProvider';
 import { useBitcoin } from '@/providers/BitcoinProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { getCashuBalance, getUnspentCashuTokens, markCashuTokenPending, markCashuTokenSpent, type DBCashuToken } from '@/utils/database';
-import { encodeCashuToken, decodeCashuToken } from '@/utils/cashu';
+import { encodeCashuToken, decodeCashuToken, meltTokens, fetchLNURLInvoice } from '@/utils/cashu';
 
 interface CheckoutModalProps {
   visible: boolean;
@@ -82,6 +80,7 @@ export default function CheckoutModal({
   onOrderPlaced,
 }: CheckoutModalProps) {
   const { placeOrder } = useShop();
+  const ble = useBle();
   const { sendBitcoin, feeEstimates, balance: btcBalance } = useBitcoin();
   const { settings } = useAppSettings();
 
@@ -167,6 +166,89 @@ export default function CheckoutModal({
     }
   }, [product, cashuTokens, cashuBalance, totalSats, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]);
 
+  // ── Lightning via Cashu Melt (autonome — LNURL-pay → invoice → meltTokens) ─
+  // Le buyer n'attend PAS la réponse du vendeur : le mint paie l'invoice directement.
+  const handleLightningMelt = useCallback(async () => {
+    if (!product || !product.sellerLightningAddress) return;
+    setLoading(true);
+    try {
+      // 1. Résoudre l'adresse LN du vendeur → BOLT11 invoice
+      const invoice = await fetchLNURLInvoice(product.sellerLightningAddress, totalSats);
+
+      // 2. Sélectionner les proofs Cashu (+ 2% buffer pour fee_reserve mint)
+      const feeBuffer = Math.max(10, Math.ceil(totalSats * 0.02));
+      const selection = selectCashuTokens(cashuTokens, totalSats + feeBuffer);
+      if (!selection) throw new Error(`Solde Cashu insuffisant pour le melt (${cashuBalance} sat disponibles)`);
+
+      const decoded = selection.selected.map((t) => decodeCashuToken(t.token)).filter(Boolean);
+      const allProofs = decoded.flatMap((t) => t!.token.map((e) => e.proofs).flat());
+      const mintUrl = decoded[0]?.token[0]?.mint ?? settings.defaultCashuMint;
+
+      await Promise.all(selection.selected.map((t) => markCashuTokenPending(t.id)));
+
+      // 3. Melt → le mint règle l'invoice Lightning Network
+      const result = await meltTokens(mintUrl, allProofs, invoice);
+      if (!result.paid) throw new Error('Le mint n\'a pas pu payer l\'invoice Lightning');
+
+      // 4. Marquer dépensé + créer commande avec preimage comme preuve de paiement
+      await Promise.all(selection.selected.map((t) => markCashuTokenSpent(t.id)));
+      const order = await placeOrder(product, delivery, 'lightning', shippingSats, {
+        txid: result.preimage ?? invoice.slice(-16),
+      });
+
+      handleClose();
+      onOrderPlaced(order.id);
+    } catch (e: any) {
+      Alert.alert('Erreur Lightning Melt', e.message ?? 'Paiement échoué');
+      try {
+        const { markCashuTokenUnspent } = await import('@/utils/database');
+        const sel = selectCashuTokens(cashuTokens, totalSats);
+        if (sel) await Promise.all(sel.selected.map((t) => markCashuTokenUnspent(t.id)));
+      } catch {}
+    } finally {
+      setLoading(false);
+    }
+  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]);
+
+  // ── LoRa Cashu Offline (BLE gateway requis — zéro internet) ─────────────────
+  // Encode le token Cashu et l'envoie via le mesh LoRa local.
+  // Le vendeur reçoit le token hors-ligne et le redempt quand il a du réseau.
+  const handleLoRaCashu = useCallback(async () => {
+    if (!product) return;
+    if (!ble.connected) { Alert.alert('Gateway requis', 'Connectez un gateway BLE pour payer en LoRa offline.'); return; }
+    setLoading(true);
+    try {
+      const selection = selectCashuTokens(cashuTokens, totalSats);
+      if (!selection) throw new Error(`Solde Cashu insuffisant (${cashuBalance} sat)`);
+
+      const decoded = selection.selected.map((t) => decodeCashuToken(t.token)).filter(Boolean);
+      const allProofs = decoded.flatMap((t) => t!.token.map((e) => e.proofs).flat());
+      const mintUrl = decoded[0]?.token[0]?.mint ?? settings.defaultCashuMint;
+      const encoded = encodeCashuToken({ token: [{ mint: mintUrl, proofs: allProofs }] });
+
+      await Promise.all(selection.selected.map((t) => markCashuTokenPending(t.id)));
+
+      // Générer l'orderId ici pour l'inclure dans le message LoRa
+      const loraMsg = encodeLoRaPayment(generateId(), product, totalSats, encoded);
+      await ble.sendChannelMessage(loraMsg);
+
+      await Promise.all(selection.selected.map((t) => markCashuTokenSpent(t.id)));
+      const order = await placeOrder(product, delivery, 'lora_cashu', shippingSats, { cashuToken: encoded });
+
+      handleClose();
+      onOrderPlaced(order.id);
+    } catch (e: any) {
+      Alert.alert('Erreur LoRa', e.message ?? 'Envoi échoué');
+      try {
+        const { markCashuTokenUnspent } = await import('@/utils/database');
+        const sel = selectCashuTokens(cashuTokens, totalSats);
+        if (sel) await Promise.all(sel.selected.map((t) => markCashuTokenUnspent(t.id)));
+      } catch {}
+    } finally {
+      setLoading(false);
+    }
+  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, ble, handleClose, onOrderPlaced, settings.defaultCashuMint]);
+
   // ── On-chain direct (si vendeur a publié son adresse) ──────────────────────
   const handleOnchainDirect = useCallback(async (sellerAddress: string) => {
     if (!product) return;
@@ -205,6 +287,10 @@ export default function CheckoutModal({
   const hasEnoughCashu = cashuSelection !== null;
   const sellerBtcAddress = product.sellerBitcoinAddress;
   const sellerLnAddress = product.sellerLightningAddress;
+  // Lightning Melt disponible si vendeur a une LN address ET buyer a assez de Cashu
+  const canLightningMelt = !!(sellerLnAddress && hasEnoughCashu);
+  // LoRa Cashu disponible si BLE connecté ET assez de Cashu
+  const canLoRaCashu = ble.connected && hasEnoughCashu;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
@@ -326,7 +412,7 @@ export default function CheckoutModal({
                   {paymentMethod === 'cashu' && <View style={styles.payCheck}><Check size={14} color={Colors.accent} /></View>}
                 </TouchableOpacity>
 
-                {/* ─ Lightning ─ */}
+                {/* ─ Lightning (Melt si possible, DM flow sinon) ─ */}
                 <TouchableOpacity
                   style={[styles.payOption, paymentMethod === 'lightning' && styles.payOptionActive]}
                   onPress={() => setPaymentMethod('lightning')}
@@ -336,21 +422,63 @@ export default function CheckoutModal({
                   </View>
                   <View style={styles.payInfo}>
                     <Text style={[styles.payLabel, paymentMethod === 'lightning' && styles.payLabelActive]}>Lightning Network</Text>
-                    {sellerLnAddress ? (
+                    {canLightningMelt ? (
+                      <Text style={styles.payDesc}>
+                        Vos sats Cashu règlent l'invoice de <Text style={{ color: Colors.accent }}>{sellerLnAddress}</Text> via votre mint — paiement instantané sans attendre le vendeur.
+                      </Text>
+                    ) : sellerLnAddress ? (
                       <Text style={styles.payDesc}>
                         Adresse vendeur : <Text style={{ color: Colors.accent }}>{sellerLnAddress}</Text>
-                        {'\n'}Le vendeur génèrera une invoice depuis cette adresse.
+                        {'\n'}Rechargez votre Cashu pour activer le melt automatique.
                       </Text>
                     ) : (
-                      <Text style={styles.payDesc}>
-                        Le vendeur vous enverra une invoice BOLT11 par message privé après réception de votre commande.
-                      </Text>
+                      <Text style={styles.payDesc}>Le vendeur vous enverra une invoice BOLT11 par message privé.</Text>
                     )}
-                    <View style={[styles.payBadge, { backgroundColor: Colors.yellowDim }]}>
-                      <Text style={[styles.payBadgeText, { color: Colors.yellow }]}>⏳ Attente réponse vendeur</Text>
-                    </View>
+                    {canLightningMelt ? (
+                      <View style={styles.payBadge}>
+                        <Zap size={10} color={Colors.green} />
+                        <Text style={styles.payBadgeText}>⚡ Melt direct — aucune attente</Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.payBadge, { backgroundColor: Colors.yellowDim }]}>
+                        <Text style={[styles.payBadgeText, { color: Colors.yellow }]}>⏳ Attente réponse vendeur</Text>
+                      </View>
+                    )}
                   </View>
                   {paymentMethod === 'lightning' && <View style={styles.payCheck}><Check size={14} color={Colors.accent} /></View>}
+                </TouchableOpacity>
+
+                {/* ─ LoRa Cashu Offline ─ */}
+                <TouchableOpacity
+                  style={[styles.payOption, paymentMethod === 'lora_cashu' && styles.payOptionActive, !ble.connected && styles.payOptionDimmed]}
+                  onPress={() => ble.connected && setPaymentMethod('lora_cashu')}
+                >
+                  <View style={[styles.payIcon, paymentMethod === 'lora_cashu' && styles.payIconActive, !ble.connected && { opacity: 0.4 }]}>
+                    <Radio size={20} color={paymentMethod === 'lora_cashu' ? Colors.background : Colors.textMuted} />
+                  </View>
+                  <View style={styles.payInfo}>
+                    <Text style={[styles.payLabel, paymentMethod === 'lora_cashu' && styles.payLabelActive, !ble.connected && { opacity: 0.5 }]}>
+                      LoRa Cashu Offline
+                    </Text>
+                    <Text style={[styles.payDesc, !ble.connected && { opacity: 0.5 }]}>
+                      {ble.connected
+                        ? 'Token Cashu envoyé directement au vendeur via le mesh LoRa local. Zéro internet requis.'
+                        : 'Connectez un gateway BLE pour payer en LoRa offline.'}
+                    </Text>
+                    {ble.connected ? (
+                      <View style={[styles.payBadge, { backgroundColor: Colors.greenDim }]}>
+                        <Radio size={10} color={Colors.green} />
+                        <Text style={styles.payBadgeText}>
+                          {hasEnoughCashu ? '📡 Gateway connecté — paiement offline' : '✗ Solde Cashu insuffisant'}
+                        </Text>
+                      </View>
+                    ) : (
+                      <View style={[styles.payBadge, { backgroundColor: Colors.surfaceHighlight }]}>
+                        <Text style={[styles.payBadgeText, { color: Colors.textMuted }]}>🔌 Gateway BLE requis</Text>
+                      </View>
+                    )}
+                  </View>
+                  {paymentMethod === 'lora_cashu' && <View style={styles.payCheck}><Check size={14} color={Colors.accent} /></View>}
                 </TouchableOpacity>
 
                 {/* ─ On-chain ─ */}
@@ -431,16 +559,40 @@ export default function CheckoutModal({
                   </View>
                 )}
 
-                {paymentMethod === 'lightning' && (
+                {paymentMethod === 'lightning' && canLightningMelt && (
+                  <View style={[styles.payInfoBox, { borderColor: Colors.green }]}>
+                    <Zap size={16} color={Colors.green} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.payInfoTitle, { color: Colors.green }]}>Lightning via Cashu Melt</Text>
+                      <Text style={styles.payInfoText}>
+                        Votre mint contacte {sellerLnAddress} pour générer une invoice, puis la règle avec vos proofs Cashu. Le preimage est joint à la commande comme preuve de paiement.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {paymentMethod === 'lightning' && !canLightningMelt && (
                   <View style={[styles.payInfoBox, { borderColor: Colors.yellow }]}>
                     <Zap size={16} color={Colors.yellow} />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.payInfoTitle, { color: Colors.yellow }]}>Attente invoice Lightning</Text>
                       <Text style={styles.payInfoText}>
                         {sellerLnAddress
-                          ? `Votre commande est envoyée. Le vendeur (${sellerLnAddress}) va générer une invoice BOLT11 et vous la transmettre par message privé.`
-                          : 'Votre commande est envoyée chiffrée au vendeur. Il vous enverra une invoice BOLT11 par message privé.'
+                          ? `Commande envoyée. Le vendeur (${sellerLnAddress}) générera une invoice et vous la transmettra par message privé.`
+                          : 'Commande envoyée chiffrée. Le vendeur vous enverra une invoice BOLT11 par message privé.'
                         }
+                      </Text>
+                    </View>
+                  </View>
+                )}
+
+                {paymentMethod === 'lora_cashu' && (
+                  <View style={[styles.payInfoBox, { borderColor: Colors.green }]}>
+                    <Radio size={16} color={Colors.green} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.payInfoTitle, { color: Colors.green }]}>Paiement LoRa Cashu Offline</Text>
+                      <Text style={styles.payInfoText}>
+                        Le token Cashu est encodé et envoyé via le mesh LoRa local. Le vendeur le reçoit immédiatement sur son appareil et le redempt dès qu'il a du réseau.
                       </Text>
                     </View>
                   </View>
@@ -469,7 +621,7 @@ export default function CheckoutModal({
                   </TouchableOpacity>
 
                   {/* Bouton adapté au flow */}
-                  {paymentMethod === 'cashu' ? (
+                  {paymentMethod === 'cashu' && (
                     <TouchableOpacity
                       style={[styles.confirmBtn, (!hasEnoughCashu || loading) && styles.confirmBtnDisabled]}
                       onPress={handleCashuDirect}
@@ -480,7 +632,35 @@ export default function CheckoutModal({
                         : <Text style={styles.confirmBtnText}>⚡ Payer {formatSats(totalSats)}</Text>
                       }
                     </TouchableOpacity>
-                  ) : paymentMethod === 'onchain' && sellerBtcAddress ? (
+                  )}
+
+                  {paymentMethod === 'lightning' && canLightningMelt && (
+                    <TouchableOpacity
+                      style={[styles.confirmBtn, loading && styles.confirmBtnDisabled]}
+                      onPress={handleLightningMelt}
+                      disabled={loading}
+                    >
+                      {loading
+                        ? <ActivityIndicator size="small" color={Colors.background} />
+                        : <Text style={styles.confirmBtnText}>⚡ Melt {formatSats(totalSats)}</Text>
+                      }
+                    </TouchableOpacity>
+                  )}
+
+                  {paymentMethod === 'lightning' && !canLightningMelt && (
+                    <TouchableOpacity
+                      style={[styles.confirmBtn, loading && styles.confirmBtnDisabled]}
+                      onPress={handleDMFlow}
+                      disabled={loading}
+                    >
+                      {loading
+                        ? <ActivityIndicator size="small" color={Colors.background} />
+                        : <Text style={styles.confirmBtnText}>Envoyer la commande</Text>
+                      }
+                    </TouchableOpacity>
+                  )}
+
+                  {paymentMethod === 'onchain' && sellerBtcAddress && (
                     <TouchableOpacity
                       style={[styles.confirmBtn, (btcBalance < totalSats || loading) && styles.confirmBtnDisabled]}
                       onPress={() => handleOnchainDirect(sellerBtcAddress)}
@@ -491,7 +671,9 @@ export default function CheckoutModal({
                         : <Text style={styles.confirmBtnText}>₿ Envoyer {formatSats(totalSats)}</Text>
                       }
                     </TouchableOpacity>
-                  ) : (
+                  )}
+
+                  {paymentMethod === 'onchain' && !sellerBtcAddress && (
                     <TouchableOpacity
                       style={[styles.confirmBtn, loading && styles.confirmBtnDisabled]}
                       onPress={handleDMFlow}
@@ -500,6 +682,19 @@ export default function CheckoutModal({
                       {loading
                         ? <ActivityIndicator size="small" color={Colors.background} />
                         : <Text style={styles.confirmBtnText}>Envoyer la commande</Text>
+                      }
+                    </TouchableOpacity>
+                  )}
+
+                  {paymentMethod === 'lora_cashu' && (
+                    <TouchableOpacity
+                      style={[styles.confirmBtn, (!canLoRaCashu || loading) && styles.confirmBtnDisabled]}
+                      onPress={handleLoRaCashu}
+                      disabled={!canLoRaCashu || loading}
+                    >
+                      {loading
+                        ? <ActivityIndicator size="small" color={Colors.background} />
+                        : <Text style={styles.confirmBtnText}>📡 Payer via LoRa</Text>
                       }
                     </TouchableOpacity>
                   )}
@@ -573,6 +768,7 @@ const styles = StyleSheet.create({
   btnRow: { flexDirection: 'row', marginTop: 20, marginBottom: 24 },
   payOption: { flexDirection: 'row', alignItems: 'flex-start', borderRadius: 12, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 10, gap: 12 },
   payOptionActive: { borderColor: Colors.accent, backgroundColor: Colors.accentGlow },
+  payOptionDimmed: { opacity: 0.5 },
   payIcon: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.surfaceHighlight, alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
   payIconActive: { backgroundColor: Colors.accent },
   payInfo: { flex: 1, gap: 4 },
