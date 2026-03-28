@@ -21,6 +21,14 @@ import { useBle } from '@/providers/BleProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { nostrClient } from '@/utils/nostr-client';
 import {
+  isChunkedMessage,
+  decodeChunkHeader,
+  createAssemblyState,
+  addChunkToAssembly,
+  assembleMessage,
+  type ChunkAssemblyState,
+} from '@/utils/chunking';
+import {
   configureNotificationChannels,
   notifyNewOrder,
   notifyOrderStatus,
@@ -137,6 +145,8 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
   const [reviews, setReviews] = useState<ShopReview[]>([]);
   const nostrSubRef = useRef<(() => void) | null>(null);
   const reviewSubRef = useRef<(() => void) | null>(null);
+  // Assemblage des messages LoRa fragmentés (MCHK chunks)
+  const chunkAssemblyRef = useRef<Map<string, ChunkAssemblyState>>(new Map());
 
   // publicKey = pubkey Nostr hex 64 chars (secp256k1) — requis pour DMs NIP-17 et tags Nostr
   // nodeId = identifiant MeshCore "MESH-XXXX" — NON utilisé ici car invalide comme pubkey Nostr
@@ -194,7 +204,8 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
   // ─── Réception d'un message LoRa avec préfixe SHOP: ─────────────────────
   // Appelé depuis Mesh screen ou tout composant qui reçoit des messages canal
 
-  const receiveLoRaMessage = useCallback((text: string) => {
+  /** Traite un message LoRa complet (déjà assemblé ou court) */
+  const processLoRaText = useCallback((text: string) => {
     // ── Produit broadcast SHOP: ───────────────────────────────────────────────
     if (text.startsWith(LORA_SHOP_PREFIX)) {
       const broadcast = decodeLoRaProduct(text);
@@ -211,25 +222,24 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     if (text.startsWith(LORA_PAY_PREFIX)) {
       const pay = decodeLoRaPayment(text);
       if (!pay) return;
-      // Créer la commande côté vendeur avec statut paid + token joint
       const newOrder: ShopOrder = {
         id: pay.o,
         productId: pay.p,
         productName: pay.n,
         stallId: myStall?.id ?? pay.p,
         sellerPubkey: myPubkey,
-        buyerPubkey: 'lora-anonymous', // acheteur anonyme en mode offline
+        buyerPubkey: 'lora-anonymous',
         priceSats: pay.s,
         shippingSats: 0,
         totalSats: pay.s,
         delivery: { name: 'LoRa (hors-ligne)', address: '', city: '', postalCode: '', country: '' },
         status: 'paid',
         paymentMethod: 'lora_cashu',
-        paymentRef: pay.t, // cashu token
+        paymentRef: pay.t,
         isSale: true,
         createdAt: Math.floor(Date.now() / 1000),
         updatedAt: Math.floor(Date.now() / 1000),
-        notes: 'Paiement Cashu reçu via LoRa mesh — à redempter',
+        notes: 'Paiement Cashu reçu via LoRa mesh — à redempter quand réseau dispo',
       };
       setOrders((prev) => {
         if (prev.find((o) => o.id === newOrder.id)) return prev;
@@ -238,9 +248,54 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
         return updated;
       });
       notifyNewOrder(pay.n, 'LoRa (anonyme)', pay.s, notificationsEnabled).catch(() => {});
-      return;
     }
   }, [myStall, myPubkey, notificationsEnabled]);
+
+  /**
+   * Point d'entrée pour les messages LoRa bruts.
+   * Gère transparentement les messages fragmentés (MCHK) et directs (SHOP:, PAY:).
+   */
+  const receiveLoRaMessage = useCallback((text: string) => {
+    // ── Messages fragmentés MCHK ─────────────────────────────────────────────
+    if (isChunkedMessage(text)) {
+      const header = decodeChunkHeader(text);
+      if (!header) return;
+
+      const assembly = chunkAssemblyRef.current;
+
+      // Nettoyer les assemblages > 3 minutes (incomplets = perdus)
+      const now = Date.now();
+      for (const [id, state] of assembly.entries()) {
+        if (now - state.timestamp > 3 * 60 * 1000) assembly.delete(id);
+      }
+
+      // Trouver ou créer l'état d'assemblage pour ce messageId
+      let state = assembly.get(header.messageId);
+      if (!state) {
+        state = createAssemblyState(header);
+        assembly.set(header.messageId, state);
+      }
+
+      // Format MCHK : "MCHK|version|msgId|idx/total|dataType|payload..."
+      // → split par "|", les 5 premiers tokens sont le header, le reste est la payload
+      const parts = text.split('|');
+      const payload = parts.slice(5).join('|'); // rejoin avec | au cas où la payload en contiendrait
+      const chunk = { header, payload, raw: text };
+      state = addChunkToAssembly(state, chunk);
+      assembly.set(header.messageId, state);
+
+      // Si tous les chunks sont reçus → assembler et traiter
+      if (state.isComplete) {
+        const full = assembleMessage(state);
+        assembly.delete(header.messageId);
+        if (full) processLoRaText(full);
+      }
+      return;
+    }
+
+    // ── Message direct (court, pas fragmenté) ────────────────────────────────
+    processLoRaText(text);
+  }, [processLoRaText]);
 
   // Expiration des produits LoRa — supprimer ceux > 30 minutes sans update
   useEffect(() => {

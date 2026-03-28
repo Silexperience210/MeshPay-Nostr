@@ -42,6 +42,47 @@ import { useBitcoin } from '@/providers/BitcoinProvider';
 import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { getCashuBalance, getUnspentCashuTokens, markCashuTokenPending, markCashuTokenSpent, type DBCashuToken } from '@/utils/database';
 import { encodeCashuToken, decodeCashuToken, meltTokens, fetchLNURLInvoice } from '@/utils/cashu';
+import { encodeChunkHeader, CHUNK_PREFIX, CHUNK_VERSION } from '@/utils/chunking';
+
+// Taille max d'un message canal LoRa (limite ble-gateway.sendChannelMessage)
+const LORA_CHAN_LIMIT = 150;
+// Header MCHK worst case : "MCHK|1|XXXX|99/99|CASHU|" = 25 chars → marge 5 → 30
+const MCHK_HEADER_RESERVE = 30;
+// Données utiles par chunk LoRa
+const LORA_CHUNK_DATA = LORA_CHAN_LIMIT - MCHK_HEADER_RESERVE; // 120 chars
+
+/**
+ * Découpe un message en chunks LoRa compatibles avec sendChannelMessage (≤150B)
+ * et les envoie avec un délai de duty-cycle entre chaque paquet.
+ */
+async function sendLoRaChunked(
+  text: string,
+  sender: (chunk: string) => Promise<void>,
+  dataType: 'CASHU' | 'RAW' = 'CASHU',
+): Promise<void> {
+  // Générer un ID de message aléatoire 4 chars alphanum
+  const msgId = Math.random().toString(36).slice(2, 6).toUpperCase().padEnd(4, '0');
+  const totalChunks = Math.ceil(text.length / LORA_CHUNK_DATA);
+
+  for (let i = 0; i < totalChunks; i++) {
+    const payload = text.slice(i * LORA_CHUNK_DATA, (i + 1) * LORA_CHUNK_DATA);
+    const header = encodeChunkHeader({
+      prefix: CHUNK_PREFIX,
+      version: CHUNK_VERSION,
+      messageId: msgId,
+      chunkIndex: i,
+      totalChunks,
+      dataType,
+    });
+    const raw = header + payload;
+    await sender(raw);
+    // Respecter le duty-cycle LoRa SF12 — pause entre paquets
+    if (i < totalChunks - 1) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  console.log(`[LoRa] Envoyé ${totalChunks} chunk(s) pour message ${msgId} (${text.length}B total)`);
+}
 
 interface CheckoutModalProps {
   visible: boolean;
@@ -228,9 +269,10 @@ export default function CheckoutModal({
 
       await Promise.all(selection.selected.map((t) => markCashuTokenPending(t.id)));
 
-      // Générer l'orderId ici pour l'inclure dans le message LoRa
+      // Générer l'orderId et construire le message PAY: complet
       const loraMsg = encodeLoRaPayment(generateId(), product, totalSats, encoded);
-      await ble.sendChannelMessage(loraMsg);
+      // Envoyer en chunks MCHK si le message dépasse la limite LoRa (toujours le cas pour un token Cashu)
+      await sendLoRaChunked(loraMsg, (chunk) => ble.sendChannelMessage(chunk));
 
       await Promise.all(selection.selected.map((t) => markCashuTokenSpent(t.id)));
       const order = await placeOrder(product, delivery, 'lora_cashu', shippingSats, { cashuToken: encoded });
