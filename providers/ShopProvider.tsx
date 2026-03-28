@@ -64,6 +64,7 @@ import {
 const STALL_KEY = 'meshpay_shop_stall';
 const PRODUCTS_KEY = 'meshpay_shop_products';
 const ORDERS_KEY = 'meshpay_shop_orders';
+const BROWSE_CACHE_KEY = 'meshpay_browse_cache';
 
 // ─── Context type ─────────────────────────────────────────────────────────────
 
@@ -374,11 +375,24 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
 
   // ─── Browse Nostr ─────────────────────────────────────────────────────────
 
+  // Chargement du cache browse au mount — affichage immédiat sans attendre Nostr
+  useEffect(() => {
+    AsyncStorage.getItem(BROWSE_CACHE_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const cached: ShopProduct[] = JSON.parse(raw);
+        if (cached.length > 0) setBrowseProducts(cached);
+      })
+      .catch(() => {});
+  }, []);
+
   const refreshBrowse = useCallback(() => {
     setIsLoadingBrowse(true);
     nostrSubRef.current?.();
 
-    const found = new Map<string, ShopProduct>();
+    const foundProducts = new Map<string, ShopProduct>();
+    // stallId → stall — pour enrichir les produits avec les adresses de paiement du vendeur
+    const foundStalls = new Map<string, { lightningAddress?: string; bitcoinAddress?: string }>();
 
     // Timeout de sécurité : si EOSE n'arrive jamais (relay mort, réseau lent),
     // on arrête le spinner après 15s pour ne pas bloquer le pull-to-refresh
@@ -386,18 +400,50 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingBrowse(false);
     }, 15_000);
 
+    const flush = () => {
+      // Enrichir les produits avec les infos de paiement du stall si disponibles
+      const enriched = [...foundProducts.values()].map((p) => {
+        const stall = foundStalls.get(p.stallId) ?? foundStalls.get(p.sellerPubkey);
+        if (!stall) return p;
+        return {
+          ...p,
+          sellerLightningAddress: p.sellerLightningAddress ?? stall.lightningAddress,
+          sellerBitcoinAddress: p.sellerBitcoinAddress ?? stall.bitcoinAddress,
+        };
+      });
+      setBrowseProducts(enriched);
+      // Persister le cache pour affichage immédiat au prochain lancement
+      AsyncStorage.setItem(BROWSE_CACHE_KEY, JSON.stringify(enriched)).catch(() => {});
+    };
+
     const unsub = nostrClient.subscribe(
-      [{ kinds: [30018], limit: 100 }],
+      [
+        { kinds: [30018], limit: 100 },  // produits
+        { kinds: [30017], limit: 100 },  // stalls (adresses paiement vendeurs)
+      ],
       (event) => {
-        const product = parseNIP15Product(event.content, event.pubkey, event.id);
-        if (product) {
-          found.set(product.id, product);
-          setBrowseProducts([...found.values()]);
+        if (event.kind === 30018) {
+          const product = parseNIP15Product(event.content, event.pubkey, event.id);
+          if (product) {
+            foundProducts.set(product.id, product);
+            flush();
+          }
+        } else if (event.kind === 30017) {
+          const stall = parseNIP15Stall(event.content, event.pubkey);
+          if (stall) {
+            foundStalls.set(stall.id, {
+              lightningAddress: stall.lightningAddress,
+              bitcoinAddress: stall.bitcoinAddress,
+            });
+            // Re-enrichir les produits déjà trouvés
+            flush();
+          }
         }
       },
       () => {
         // EOSE reçu — relay a fini d'envoyer les events stockés
         clearTimeout(safetyTimer);
+        flush();
         setIsLoadingBrowse(false);
       },
     );

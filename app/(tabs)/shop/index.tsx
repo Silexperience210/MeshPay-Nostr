@@ -47,10 +47,10 @@ export default function ShopBrowseScreen() {
     setShowCheckout(true);
   }, []);
 
-  const handleOrderPlaced = useCallback((orderId: string) => {
+  const handleOrderPlaced = useCallback((_orderId: string) => {
     Alert.alert(
       '✅ Commande envoyée',
-      'Votre commande a été envoyée chiffrée au vendeur. Il vous contactera via message privé avec les instructions de paiement.',
+      'Votre commande a été transmise de façon chiffrée au vendeur via Nostr.',
       [{ text: 'Voir mes commandes', onPress: () => router.push('/(tabs)/shop/orders') }, { text: 'OK' }],
     );
   }, []);
