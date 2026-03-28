@@ -83,7 +83,7 @@ const RESP_CHANNEL_MSG_OLD  = 8;   // Canal v2 — ignoré (V3 = 0x11)
 const RESP_CURR_TIME        = 9;   // Heure courante device
 const RESP_NO_MORE_MSGS     = 10;  // File vide
 const RESP_EXPORT_CONTACT   = 11;  // Contact exporté (binaire)
-const RESP_BATT_STORAGE     = 12;  // Batterie (float32 LE, volts)
+const RESP_BATT_STORAGE     = 12;  // Batterie (uint16 LE, millivolts) + storage
 const RESP_DEVICE_INFO      = 13;  // Firmware / modèle
 const RESP_DISABLED         = 15;  // Commande désactivée sur ce device
 const RESP_DIRECT_MSG_V3    = 0x10; // PACKET_CONTACT_MSG_RECV_V3
@@ -968,9 +968,11 @@ export class BleGatewayClient {
         break;
 
       case RESP_BATT_STORAGE:
-        if (payload.length >= 4) {
-          const volts = new DataView(payload.buffer, payload.byteOffset).getFloat32(0, true);
-          console.log(`[BleGateway] Batterie: ${volts.toFixed(2)}V`);
+        // Firmware: [battery_mv:2 uint16 LE][used_kb:4 uint32 LE][total_kb:4 uint32 LE]
+        if (payload.length >= 2) {
+          const mv = new DataView(payload.buffer, payload.byteOffset).getUint16(0, true);
+          const volts = mv / 1000.0;
+          console.log(`[BleGateway] Batterie: ${mv}mV = ${volts.toFixed(3)}V`);
           this.batteryCallback?.(volts);
         }
         break;
@@ -1277,12 +1279,33 @@ export class BleGatewayClient {
     const typeIdx = payload[0]; // 0=core, 1=radio, 2=packets
     const types: Array<'core' | 'radio' | 'packets'> = ['core', 'radio', 'packets'];
     const type = types[typeIdx] ?? 'core';
-    // Format : [type:1][key=value pairs as uint32 LE, 4B each]
     const view = new DataView(payload.buffer, payload.byteOffset);
     const raw: Record<string, number> = {};
-    for (let i = 1; i + 3 < payload.length; i += 4) {
-      raw[`field_${(i - 1) / 4}`] = view.getUint32(i, true);
+
+    if (typeIdx === 0) {
+      // CORE: [type:1][battery_mv:2 uint16][uptime_secs:4 uint32][err_flags:2 uint16][queue_len:1 uint8]
+      // Total payload: 10 bytes
+      if (payload.length >= 3)  raw['battery_mv']   = view.getUint16(1, true);
+      if (payload.length >= 7)  raw['uptime_secs']  = view.getUint32(3, true);
+      if (payload.length >= 9)  raw['err_flags']    = view.getUint16(7, true);
+      if (payload.length >= 10) raw['queue_len']    = payload[9];
+    } else if (typeIdx === 1) {
+      // RADIO: [type:1][noise_floor:2 int16][last_rssi:1 int8][last_snr:1 int8][tx_air_secs:4 uint32][rx_air_secs:4 uint32]
+      // Total payload: 13 bytes
+      if (payload.length >= 3)  raw['noise_floor']   = view.getInt16(1, true);
+      if (payload.length >= 4)  raw['last_rssi']     = view.getInt8(3);
+      if (payload.length >= 5)  raw['last_snr']      = view.getInt8(4);
+      if (payload.length >= 9)  raw['tx_air_secs']   = view.getUint32(5, true);
+      if (payload.length >= 13) raw['rx_air_secs']   = view.getUint32(9, true);
+    } else {
+      // PACKETS: [type:1][recv:4][sent:4][n_sent_flood:4][n_sent_direct:4][n_recv_flood:4][n_recv_direct:4][n_recv_errors:4]
+      // Total payload: 29 bytes
+      const labels = ['recv', 'sent', 'n_sent_flood', 'n_sent_direct', 'n_recv_flood', 'n_recv_direct', 'n_recv_errors'];
+      for (let i = 0; i < labels.length && 1 + i * 4 + 4 <= payload.length; i++) {
+        raw[labels[i]] = view.getUint32(1 + i * 4, true);
+      }
     }
+
     console.log(`[BleGateway] Stats [${type}]:`, raw);
     this.statsCallback?.({ type, raw });
   }

@@ -40,6 +40,7 @@ const fr = {
   tabs: {
     messages: 'Messages',
     wallet: 'Wallet',
+    shop: 'Shop',
     mesh: 'Mesh',
     settings: 'Réglages',
   },

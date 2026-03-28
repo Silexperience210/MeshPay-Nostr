@@ -1755,6 +1755,8 @@ export default function SettingsScreen() {
     device: bleDevice,
     deviceInfo: bleDeviceInfo,
     disconnectGateway,
+    setRadioParams,
+    setTxPower,
   } = useBle();
   const [showBleModal, setShowBleModal] = useState(false);
 
@@ -1901,14 +1903,56 @@ export default function SettingsScreen() {
           <SettingRow
             icon={<Radio size={18} color={Colors.accent} />}
             label="Frequency"
-            value="868 MHz"
-            onPress={() => showAlert('Frequency', 'Configure your LoRa frequency band')}
+            value={bleDeviceInfo
+              ? `${(bleDeviceInfo.radioFreqHz / 1e6).toFixed(3)} MHz`
+              : '— MHz'}
+            onPress={() => {
+              if (!bleDeviceInfo) { showAlert('Frequency', 'Connectez un gateway BLE pour configurer la fréquence.'); return; }
+              const bands = [433_175_000, 868_000_000, 869_525_000, 915_000_000];
+              Alert.alert(
+                'Fréquence LoRa',
+                `Actuel : ${(bleDeviceInfo.radioFreqHz / 1e6).toFixed(3)} MHz`,
+                bands.map((hz) => ({
+                  text: `${(hz / 1e6).toFixed(3)} MHz`,
+                  onPress: () => setRadioParams(hz, bleDeviceInfo.radioBwHz, bleDeviceInfo.radioSf, 5)
+                    .catch((e: any) => Alert.alert('Erreur', e.message)),
+                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+              );
+            }}
           />
           <SettingRow
             icon={<Cpu size={18} color={Colors.blue} />}
             label="Spread Factor"
-            value="SF12"
-            onPress={() => showAlert('Spread Factor', 'Higher SF = longer range but slower')}
+            value={bleDeviceInfo ? `SF${bleDeviceInfo.radioSf}` : '—'}
+            onPress={() => {
+              if (!bleDeviceInfo) { showAlert('Spread Factor', 'Connectez un gateway BLE pour configurer le SF.'); return; }
+              Alert.alert(
+                'Spread Factor',
+                `Actuel : SF${bleDeviceInfo.radioSf}`,
+                [7, 8, 9, 10, 11, 12].map((sf) => ({
+                  text: `SF${sf}`,
+                  onPress: () => setRadioParams(bleDeviceInfo.radioFreqHz, bleDeviceInfo.radioBwHz, sf, 5)
+                    .catch((e: any) => Alert.alert('Erreur', e.message)),
+                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+              );
+            }}
+          />
+          <SettingRow
+            icon={<Radio size={18} color={Colors.yellow} />}
+            label="TX Power"
+            value={bleDeviceInfo ? `${bleDeviceInfo.txPower} dBm (max ${bleDeviceInfo.maxTxPower})` : '—'}
+            onPress={() => {
+              if (!bleDeviceInfo) { showAlert('TX Power', 'Connectez un gateway BLE pour configurer la puissance TX.'); return; }
+              const powers = [2, 5, 10, 14, 17, 20, 22].filter((p) => p <= bleDeviceInfo.maxTxPower);
+              Alert.alert(
+                'TX Power',
+                `Actuel : ${bleDeviceInfo.txPower} dBm`,
+                powers.map((p) => ({
+                  text: `${p} dBm`,
+                  onPress: () => setTxPower(p).catch((e: any) => Alert.alert('Erreur', e.message)),
+                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+              );
+            }}
           />
           <SettingToggle
             icon={<Radio size={18} color={Colors.green} />}

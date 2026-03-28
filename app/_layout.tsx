@@ -21,6 +21,8 @@ import { NostrContext } from "@/providers/NostrProvider";
 import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
+import { ShopProvider } from "@/providers/ShopProvider";
+import { requestNotificationPermission, configureNotificationChannels } from "@/utils/notifications";
 import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -74,6 +76,13 @@ function AppContent() {
       SplashScreen.hideAsync();
     }
   }, [isReady, onboardingDone]);
+
+  useEffect(() => {
+    // Demander la permission notifications + configurer les canaux Android
+    requestNotificationPermission()
+      .then(() => configureNotificationChannels())
+      .catch(() => {});
+  }, []);
 
   const handleOnboardingClose = async () => {
     setShowOnboarding(false);
@@ -157,10 +166,12 @@ export default function RootLayout() {
                       <GatewayContext>
                         <MessagesContext>
                           <RadarProvider>
+                            <ShopProvider>
                             <GestureHandlerRootView style={{ flex: 1 }}>
                               <StatusBar style="light" />
                               <AppContent />
                             </GestureHandlerRootView>
+                            </ShopProvider>
                           </RadarProvider>
                         </MessagesContext>
                       </GatewayContext>

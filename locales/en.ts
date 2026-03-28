@@ -40,6 +40,7 @@ const en = {
   tabs: {
     messages: 'Messages',
     wallet: 'Wallet',
+    shop: 'Shop',
     mesh: 'Mesh',
     settings: 'Settings',
   },

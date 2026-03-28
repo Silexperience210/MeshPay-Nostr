@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { MessageSquare, Wallet, Radio, Settings } from "lucide-react-native";
+import { MessageSquare, Wallet, Radio, Settings, ShoppingBag } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { useTranslation } from "@/utils/i18n";
 
@@ -39,6 +39,15 @@ export default function TabLayout() {
           title: t("tabs.wallet"),
           tabBarIcon: ({ color, size }) => (
             <Wallet size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="shop"
+        options={{
+          title: t("tabs.shop"),
+          tabBarIcon: ({ color, size }) => (
+            <ShoppingBag size={size} color={color} />
           ),
         }}
       />
