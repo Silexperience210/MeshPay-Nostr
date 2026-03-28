@@ -328,6 +328,11 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
   const handleIncomingOrderDM = useCallback((fromPubkey: string, payload: OrderDMPayload) => {
     if (payload.type === 'order_request') {
       // Réception d'une commande (je suis vendeur)
+      // Si le buyer a joint un paiement direct (token Cashu ou txid on-chain) →
+      // la commande est déjà payée, on stocke la preuve de paiement.
+      const directPaymentRef = payload.cashuToken ?? payload.paymentRef ?? null;
+      const isPaidOnArrival = !!(payload.cashuToken || (payload.status === 'paid' && payload.paymentRef));
+
       const newOrder: ShopOrder = {
         id: payload.orderId,
         productId: payload.productId,
@@ -339,9 +344,9 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
         shippingSats: payload.shippingSats,
         totalSats: payload.totalSats,
         delivery: payload.delivery!,
-        status: 'pending_payment',
+        status: isPaidOnArrival ? 'paid' : 'pending_payment',
         paymentMethod: payload.paymentMethod,
-        paymentRef: null,
+        paymentRef: directPaymentRef,
         isSale: true,
         createdAt: Math.floor(Date.now() / 1000),
         updatedAt: Math.floor(Date.now() / 1000),

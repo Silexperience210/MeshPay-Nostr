@@ -23,10 +23,18 @@ import { router } from 'expo-router';
 import {
   type ShopOrder,
   type OrderStatus,
+  type PaymentMethod,
   formatSats,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_COLOR,
 } from '@/utils/shop';
+
+const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
+  cashu: '⚡ Cashu',
+  lightning: '⚡ Lightning',
+  onchain: '₿ On-chain',
+  lora_cashu: '📡 LoRa Cashu',
+};
 
 type Tab = 'purchases' | 'sales';
 
@@ -220,7 +228,7 @@ function OrderCard({
       <Text style={styles.productName}>{order.productName}</Text>
       <View style={styles.amountRow}>
         <Text style={styles.amount}>{formatSats(order.totalSats)}</Text>
-        <Text style={styles.payMethod}>{order.paymentMethod}</Text>
+        <Text style={styles.payMethod}>{PAYMENT_METHOD_LABEL[order.paymentMethod] ?? order.paymentMethod}</Text>
       </View>
 
       {/* Delivery info (vendeur) */}
@@ -238,7 +246,7 @@ function OrderCard({
         <Text style={styles.notes}>💬 {order.notes}</Text>
       )}
 
-      {/* Bouton envoyer invoice — vendeur, commande en attente de paiement */}
+      {/* Vendeur — commande en attente de paiement : envoyer info paiement */}
       {isSale && order.status === 'pending_payment' && (
         <TouchableOpacity style={styles.invoiceBtn} onPress={onSendInvoice}>
           <Send size={14} color={Colors.accent} />
@@ -246,8 +254,29 @@ function OrderCard({
         </TouchableOpacity>
       )}
 
-      {/* Affichage paymentRef si existant (acheteur voit l'invoice reçue) */}
-      {!isSale && order.paymentRef && order.status === 'paid' && (
+      {/* Vendeur — paiement Cashu reçu (DM direct ou LoRa offline) : token à redempter */}
+      {isSale && order.paymentRef && order.status === 'paid' &&
+        (order.paymentMethod === 'cashu' || order.paymentMethod === 'lora_cashu') && (
+        <TouchableOpacity
+          style={[styles.paymentRefBox, { borderColor: Colors.green }]}
+          onPress={() =>
+            ExpoClipboard.setStringAsync(order.paymentRef!).then(() =>
+              Alert.alert(
+                '📋 Token Cashu copié',
+                `${order.paymentMethod === 'lora_cashu' ? '📡 Reçu via LoRa offline\n\n' : ''}Token copié dans le presse-papier.\nCollez-le dans votre wallet Cashu pour le redempter.`,
+              )
+            )
+          }
+        >
+          <Text style={[styles.paymentRefLabel, { color: Colors.green }]}>
+            {order.paymentMethod === 'lora_cashu' ? '📡 Paiement LoRa Cashu reçu — appuyez pour copier :' : '💰 Token Cashu reçu — appuyez pour copier :'}
+          </Text>
+          <Text style={styles.paymentRefText} numberOfLines={2}>{order.paymentRef}</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Acheteur — info de paiement reçue du vendeur */}
+      {!isSale && order.paymentRef && order.status === 'paid' && order.paymentMethod !== 'cashu' && (
         <TouchableOpacity
           style={styles.paymentRefBox}
           onPress={() => ExpoClipboard.setStringAsync(order.paymentRef!).then(() => Alert.alert('Copié', 'Info de paiement copiée'))}
