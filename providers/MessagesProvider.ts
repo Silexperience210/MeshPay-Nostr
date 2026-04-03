@@ -560,17 +560,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[MeshCore] Connexion BLE établie, enregistrement handler');
       ble.onPacket(handleIncomingMeshCorePacket);
 
-      // FIX: Après enregistrement du handler, demander au firmware de re-pousser
-      // les messages en file d'attente. Le syncNextMessage() initial du handshake
-      // s'exécute AVANT que messageHandler soit enregistré (race condition),
-      // donc ces messages sont silencieusement droppés. On les récupère ici.
+      // Après enregistrement du handler, le BleGatewayClient rejoue automatiquement
+      // les paquets bufferisés (pendingPackets). On appelle aussi syncNextMessage()
+      // pour récupérer les messages restants dans la file firmware.
       const client = getBleGatewayClient();
-      // Petit délai pour que le handler soit bien propagé
       setTimeout(() => {
         client.syncNextMessage()
           .then(() => console.log('[MeshCore] syncNextMessage post-handler OK'))
           .catch(() => { /* RESP_NO_MORE_MSGS = normal */ });
-      }, 300);
+      }, 500); // 500ms pour laisser le temps au replay des pendingPackets
 
       // Annoncer notre présence via SelfAdvert (CMD 0x07 — compris par MeshCore Companion)
       ble.sendSelfAdvert()
@@ -578,6 +576,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         .catch(err => console.warn('[MeshCore] Erreur SelfAdvert:', err));
     }
   }, [ble.connected, identity, handleIncomingMeshCorePacket]);
+
+  // Polling périodique des messages en file (filet de sécurité si PUSH_MSG_WAITING manqué)
+  // Le firmware peut parfois ne pas envoyer PUSH_MSG_WAITING (firmware edge case, BLE restart...)
+  useEffect(() => {
+    if (!ble.connected) return;
+    const client = getBleGatewayClient();
+    const POLL_INTERVAL_MS = 30_000; // 30 secondes
+    const timer = setInterval(() => {
+      client.syncNextMessage()
+        .then(() => console.log('[MeshCore] Polling 30s syncNextMessage OK'))
+        .catch(() => { /* RESP_NO_MORE_MSGS = file vide, normal */ });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [ble.connected]);
 
   // Auto-join forum "public" dès connexion BLE — canal 0, broadcast LoRa (CMD_SEND_CHAN_MSG)
   // joinForum est idempotente : vérifie existing avant de créer, skipAnnounce évite kind:40 Nostr

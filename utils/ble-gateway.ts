@@ -229,6 +229,11 @@ export class BleGatewayClient {
   // Gestion contacts
   private pendingContacts: MeshCoreContact[] = [];
 
+  // Buffer de paquets reçus avant l'enregistrement du messageHandler
+  // Évite de perdre des messages si syncNextMessage() est appelé avant onMessage()
+  private pendingPackets: MeshCorePacket[] = [];
+  private readonly PENDING_PACKETS_MAX = 50; // limite anti-fuite mémoire
+
   // Gestion canaux
   private channelConfigs: Map<number, ChannelConfig> = new Map();
 
@@ -530,6 +535,11 @@ export class BleGatewayClient {
     this.listeners.forEach((l) => l.remove());
     this.listeners = [];
     this.channelConfigs.clear();
+    // Purger le buffer de paquets au déconnexion (évite replay de messages obsolètes)
+    if (this.pendingPackets.length > 0) {
+      console.warn(`[BleGateway] Déconnexion : purge de ${this.pendingPackets.length} paquet(s) bufferisé(s)`);
+      this.pendingPackets = [];
+    }
     if (this.connectedId) {
       console.log('[BleGateway] Déconnexion...');
       await BleManager.disconnect(this.connectedId).catch(() => {});
@@ -866,7 +876,17 @@ export class BleGatewayClient {
 
   // ── Callbacks publics ────────────────────────────────────────────
 
-  onMessage(handler: MessageHandler): void            { this.messageHandler = handler; }
+  onMessage(handler: MessageHandler): void {
+    this.messageHandler = handler;
+    // Rejouer les paquets bufferisés reçus avant l'enregistrement du handler
+    if (this.pendingPackets.length > 0) {
+      const toReplay = this.pendingPackets.splice(0);
+      console.log(`[BleGateway] ▶ Replay de ${toReplay.length} paquet(s) bufferisé(s)`);
+      for (const pkt of toReplay) {
+        try { handler(pkt); } catch (e) { console.error('[BleGateway] Erreur replay paquet:', e); }
+      }
+    }
+  }
   onDeviceInfo(cb: (info: BleDeviceInfo) => void): void           { this.deviceInfoCallback = cb; }
   onIncomingMessage(cb: (msg: MeshCoreIncomingMsg) => void): void { this.incomingMessageCallback = cb; }
   onContactDiscovered(cb: (c: MeshCoreContact) => void): void     { this.contactDiscoveredCallback = cb; }
@@ -1442,10 +1462,6 @@ export class BleGatewayClient {
     isChannel: boolean,
     channelIdx = 0
   ): void {
-    if (!this.messageHandler) {
-      console.warn('[BleGateway] ⚠️ deliverCompanionTextPacket: messageHandler NULL — message PERDU:', text.slice(0, 40));
-      return;
-    }
     try {
       // Pad pubkey prefix (6 bytes en V3) à 8 bytes pour getBigUint64
       const rawBytes = fromPubkeyHex
@@ -1469,17 +1485,35 @@ export class BleGatewayClient {
         subMeshId: isChannel ? channelIdx : 0,
         payload: new TextEncoder().encode(text),
       };
-      this.messageHandler(packet);
+
+      if (this.messageHandler) {
+        this.messageHandler(packet);
+      } else {
+        // Handler pas encore enregistré (race condition startup) — on bufferise
+        if (this.pendingPackets.length < this.PENDING_PACKETS_MAX) {
+          this.pendingPackets.push(packet);
+          console.warn(`[BleGateway] ⏸ messageHandler NULL — paquet bufferisé (${this.pendingPackets.length}/${this.PENDING_PACKETS_MAX}): "${text.slice(0, 40)}"`);
+        } else {
+          console.error('[BleGateway] ❌ Buffer plein — paquet définitivement perdu:', text.slice(0, 40));
+        }
+      }
     } catch (err) {
       console.error('[BleGateway] Erreur conversion companion packet:', err);
     }
   }
 
   private deliverRawPacket(rawBytes: Uint8Array): void {
-    if (!this.messageHandler) return;
     try {
       const packet = decodeMeshCorePacket(rawBytes);
-      if (packet) this.messageHandler(packet);
+      if (!packet) return;
+      if (this.messageHandler) {
+        this.messageHandler(packet);
+      } else {
+        if (this.pendingPackets.length < this.PENDING_PACKETS_MAX) {
+          this.pendingPackets.push(packet);
+          console.warn(`[BleGateway] ⏸ Raw packet bufferisé (${this.pendingPackets.length}/${this.PENDING_PACKETS_MAX})`);
+        }
+      }
     } catch (err) {
       console.error('[BleGateway] Échec décodage paquet LoRa:', err);
     }
