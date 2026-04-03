@@ -1442,7 +1442,10 @@ export class BleGatewayClient {
     isChannel: boolean,
     channelIdx = 0
   ): void {
-    if (!this.messageHandler) return;
+    if (!this.messageHandler) {
+      console.warn('[BleGateway] ⚠️ deliverCompanionTextPacket: messageHandler NULL — message PERDU:', text.slice(0, 40));
+      return;
+    }
     try {
       // Pad pubkey prefix (6 bytes en V3) à 8 bytes pour getBigUint64
       const rawBytes = fromPubkeyHex

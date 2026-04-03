@@ -263,7 +263,7 @@ export class MessagingBus {
   private _startNostrListeners(): void {
     if (!this.localNostrPubkey) return;
 
-    // DMs Nostr entrants (déchiffrés automatiquement par NostrClient)
+    // DMs Nostr entrants NIP-04 (kind:4) — rétrocompatibilité
     const dmUnsub = this.nostr.subscribeDMs((from, content, event) => {
       if (from === this.localNostrPubkey) return; // ignorer nos propres DMs
       const bus: BusMessage = {
@@ -279,6 +279,29 @@ export class MessagingBus {
       this._dispatch(bus);
     });
     this.nostrUnsubs.push(dmUnsub);
+
+    // DMs Nostr entrants NIP-17 sealed (kind:1059) — protocole principal
+    // L'app envoie avec publishDMSealed(), on DOIT aussi écouter les sealed DMs entrants
+    if (typeof this.nostr.subscribeDMsSealed === 'function') {
+      const sealedUnsub = this.nostr.subscribeDMsSealed((from, content, event) => {
+        if (from === this.localNostrPubkey) return; // ignorer nos propres copies
+        const bus: BusMessage = {
+          id: event.id,
+          type: 'dm',
+          from: event.tags.find(t => t[0] === 'meshcore-from')?.[1] ?? from,
+          fromPubkey: from,
+          to: this.localNodeId,
+          content,
+          ts: event.created_at * 1000,
+          transport: 'nostr',
+        };
+        this._dispatch(bus);
+      });
+      this.nostrUnsubs.push(sealedUnsub);
+      console.log('[Bus] Listeners Nostr démarrés (NIP-04 + NIP-17 sealed)');
+    } else {
+      console.log('[Bus] Listeners Nostr démarrés (NIP-04 uniquement, NIP-17 indisponible)');
+    }
 
     // TX Relay entrants (Bitcoin / Cashu / LoRa relay)
     const txUnsub = this.nostr.subscribeTxRelay((payload, event) => {

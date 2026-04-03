@@ -28,6 +28,7 @@ import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, get
 import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
+import { getBleGatewayClient } from '@/utils/ble-gateway';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { notifyForumMessage } from '@/utils/notifications';
 import { useNostr } from '@/providers/NostrProvider';
@@ -289,14 +290,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             transport: 'ble',
           };
           
-          saveMessage(msg);
-          updateConversationLastMessage(fromNodeId, finalChunkText.slice(0, 50), msg.timestamp, true);
-          
+          await saveMessage(msg);
+          await updateConversationLastMessage(fromNodeId, finalChunkText.slice(0, 50), msg.timestamp, true);
+
           setMessagesByConv(prev => ({
             ...prev,
             [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
           }));
-          
+
           // ACK géré par MeshCore Companion firmware — pas besoin d'en envoyer un
         } else if (result.progress) {
           console.log('[MeshCore] Chunk reçu:', result.progress, '%');
@@ -337,8 +338,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
                   isMine: false,
                   status: 'delivered',
                 };
-                saveMessage(msg);
-                updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
+                await saveMessage(msg);
+                await updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
                 setMessagesByConv(prev => ({
                   ...prev,
                   [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
@@ -386,8 +387,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             status: 'delivered',
             transport: 'lora',
           };
-          saveMessage(msg);
-          updateConversationLastMessage(convId, `📡 ${plaintext.slice(0, 48)}`, msg.timestamp, true);
+          await saveMessage(msg);
+          await updateConversationLastMessage(convId, `📡 ${plaintext.slice(0, 48)}`, msg.timestamp, true);
           setMessagesByConv(prev => ({
             ...prev,
             [convId]: [...(prev[convId] ?? []), msg],
@@ -473,8 +474,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           status: 'delivered',
         };
 
-        saveMessage(msg);
-        updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
+        await saveMessage(msg);
+        await updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
 
         // ACK géré par MeshCore Companion firmware
         setMessagesByConv(prev => ({
@@ -558,6 +559,18 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (ble.connected && identity) {
       console.log('[MeshCore] Connexion BLE établie, enregistrement handler');
       ble.onPacket(handleIncomingMeshCorePacket);
+
+      // FIX: Après enregistrement du handler, demander au firmware de re-pousser
+      // les messages en file d'attente. Le syncNextMessage() initial du handshake
+      // s'exécute AVANT que messageHandler soit enregistré (race condition),
+      // donc ces messages sont silencieusement droppés. On les récupère ici.
+      const client = getBleGatewayClient();
+      // Petit délai pour que le handler soit bien propagé
+      setTimeout(() => {
+        client.syncNextMessage()
+          .then(() => console.log('[MeshCore] syncNextMessage post-handler OK'))
+          .catch(() => { /* RESP_NO_MORE_MSGS = normal */ });
+      }, 300);
 
       // Annoncer notre présence via SelfAdvert (CMD 0x07 — compris par MeshCore Companion)
       ble.sendSelfAdvert()
