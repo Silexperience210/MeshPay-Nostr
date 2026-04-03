@@ -1,174 +1,86 @@
 /**
  * Background BLE Service - Maintient la connexion BLE en arrière-plan
  *
- * ✅ VERSION MIGRÉE : expo-background-task (SDK 53+)
- * Remplace l'ancienne version simplifiée sans expo-background-fetch
+ * Implémentation via setInterval (foreground polling) sans dépendances natives.
+ * expo-background-task n'est pas compilé dans le build natif actuel (SDK 54).
  *
- * INSTALLATION REQUISE :
- *   npx expo install expo-background-task expo-task-manager
- *
- * PERMISSIONS REQUISES dans app.json :
- *   iOS  → "UIBackgroundModes": ["fetch", "processing"]
- *   Android → pas de config supplémentaire nécessaire
+ * Fonctionnement :
+ * - Foreground : polling toutes les POLL_INTERVAL_MS tant que l'app est active
+ * - Background : l'OS peut suspendre l'app — les messages en attente sont
+ *   persistés en SQLite et traités au retour en foreground.
  */
 
-import * as BackgroundTask from 'expo-background-task';
-import * as TaskManager from 'expo-task-manager';
+import { AppState, type AppStateStatus } from 'react-native';
 import { getBleGatewayClient } from '@/utils/ble-gateway';
 import { getPendingMessages, removePendingMessage } from '@/utils/database';
 
-// ─── Nom unique de la tâche ───────────────────────────────────────────────────
-const BACKGROUND_BLE_TASK = 'meshpay-background-ble-sync';
-
-// ─── Nombre max de messages traités par cycle background ──────────────────────
+const POLL_INTERVAL_MS = 15_000;    // Toutes les 15 secondes en foreground
 const MAX_MESSAGES_PER_CYCLE = 5;
 
-// ─── Définition de la tâche (DOIT être en dehors de tout composant/classe) ────
-TaskManager.defineTask(BACKGROUND_BLE_TASK, async () => {
-  console.log('[BackgroundBLE] Tâche background déclenchée');
-
-  try {
-    const client = getBleGatewayClient();
-
-    if (!client.isConnected()) {
-      console.log('[BackgroundBLE] BLE non connecté, tâche ignorée');
-      return BackgroundTask.BackgroundTaskResult.NoData;
-    }
-
-    const pending = await getPendingMessages();
-
-    if (pending.length === 0) {
-      console.log('[BackgroundBLE] Aucun message en attente');
-      return BackgroundTask.BackgroundTaskResult.NoData;
-    }
-
-    console.log(`[BackgroundBLE] ${pending.length} messages à traiter`);
-
-    let sentCount = 0;
-
-    for (const msg of pending.slice(0, MAX_MESSAGES_PER_CYCLE)) {
-      try {
-        await client.sendPacket(msg.packet as any);
-        await removePendingMessage(msg.id);
-        sentCount++;
-        console.log(`[BackgroundBLE] Message envoyé: ${msg.id}`);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn(`[BackgroundBLE] Échec envoi ${msg.id}: ${errMsg}`);
-        // On continue avec le suivant sans bloquer
-      }
-    }
-
-    console.log(`[BackgroundBLE] Cycle terminé: ${sentCount}/${Math.min(pending.length, MAX_MESSAGES_PER_CYCLE)} envoyés`);
-    return BackgroundTask.BackgroundTaskResult.Success;
-
-  } catch (error) {
-    console.error('[BackgroundBLE] Erreur tâche background:', error);
-    return BackgroundTask.BackgroundTaskResult.Failed;
-  }
-});
-
-// ─── Classe de gestion du service ─────────────────────────────────────────────
 class BackgroundBleService {
   private isRegistered = false;
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private appStateSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
 
-  /**
-   * Enregistre la tâche background auprès du système OS
-   * À appeler au démarrage de l'app (ex: dans _layout.tsx)
-   *
-   * Intervalle minimum :
-   *   iOS     → 15 minutes (contrainte Apple, ignoré si inférieur)
-   *   Android → configurable, 1 minute recommandé au minimum
-   */
-  async register(minimumIntervalSeconds: number = 60): Promise<void> {
-    if (this.isRegistered) {
-      console.log('[BackgroundBLE] Déjà enregistré');
-      return;
+  async register(): Promise<void> {
+    if (this.isRegistered) return;
+    this.isRegistered = true;
+    console.log('[BackgroundBLE] Service enregistré (polling foreground)');
+  }
+
+  async start(): Promise<void> {
+    await this.register();
+
+    // Polling continu en foreground
+    if (!this.pollInterval) {
+      this.pollInterval = setInterval(() => {
+        if (AppState.currentState === 'active') {
+          this.processPendingMessages();
+        }
+      }, POLL_INTERVAL_MS);
     }
 
-    try {
-      // Vérifie si la tâche est déjà enregistrée côté OS
-      const isAlreadyRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_BLE_TASK);
-
-      if (!isAlreadyRegistered) {
-        await BackgroundTask.registerTaskAsync(BACKGROUND_BLE_TASK, {
-          minimumInterval: minimumIntervalSeconds,
-        });
-        console.log(`[BackgroundBLE] Tâche enregistrée (intervalle: ${minimumIntervalSeconds}s)`);
-      } else {
-        console.log('[BackgroundBLE] Tâche déjà enregistrée côté OS');
+    // Traiter les messages dès le retour en foreground
+    this.appStateSubscription = AppState.addEventListener(
+      'change',
+      (state: AppStateStatus) => {
+        if (state === 'active') {
+          this.processPendingMessages();
+        }
       }
+    );
 
-      this.isRegistered = true;
-    } catch (error) {
-      console.error('[BackgroundBLE] Erreur enregistrement:', error);
-      throw error;
-    }
+    console.log('[BackgroundBLE] Démarré (intervalle: ' + POLL_INTERVAL_MS + 'ms)');
   }
 
-  /**
-   * Démarre le service (alias de register pour compatibilité avec l'ancienne API)
-   */
-  async start(minimumIntervalSeconds: number = 60): Promise<void> {
-    await this.register(minimumIntervalSeconds);
-    console.log('[BackgroundBLE] Démarré');
-  }
-
-  /**
-   * Arrête et désenregistre la tâche background
-   */
   async stop(): Promise<void> {
-    try {
-      const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_BLE_TASK);
-
-      if (isRegistered) {
-        await BackgroundTask.unregisterTaskAsync(BACKGROUND_BLE_TASK);
-        console.log('[BackgroundBLE] Tâche désenregistrée');
-      }
-
-      this.isRegistered = false;
-      console.log('[BackgroundBLE] Arrêté');
-    } catch (error) {
-      console.error('[BackgroundBLE] Erreur arrêt:', error);
-      throw error;
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
     }
+    this.appStateSubscription?.remove();
+    this.appStateSubscription = null;
+    this.isRegistered = false;
+    console.log('[BackgroundBLE] Arrêté');
   }
 
-  /**
-   * Retourne le statut courant de la tâche
-   */
-  async getStatus(): Promise<BackgroundTask.BackgroundTaskStatus | null> {
-    try {
-      return await BackgroundTask.getStatusAsync();
-    } catch {
-      return null;
-    }
+  async getStatus(): Promise<string> {
+    return this.isRegistered ? 'registered' : 'unregistered';
   }
 
-  /**
-   * Vérifie si la tâche est enregistrée côté OS
-   */
   async isTaskRegistered(): Promise<boolean> {
-    return TaskManager.isTaskRegisteredAsync(BACKGROUND_BLE_TASK);
+    return this.isRegistered;
   }
 
-  /**
-   * Traitement manuel des messages en attente
-   * Utile quand l'app passe en foreground ou sur événement BLE
-   */
   async processPendingMessages(): Promise<void> {
     try {
       const client = getBleGatewayClient();
-
-      if (!client.isConnected()) {
-        console.log('[BackgroundBLE] Non connecté, traitement manuel ignoré');
-        return;
-      }
+      if (!client.isConnected()) return;
 
       const pending = await getPendingMessages();
       if (pending.length === 0) return;
 
-      console.log(`[BackgroundBLE] Traitement manuel: ${pending.length} messages`);
+      console.log(`[BackgroundBLE] Traitement de ${pending.length} messages`);
 
       for (const msg of pending.slice(0, MAX_MESSAGES_PER_CYCLE)) {
         try {
@@ -179,12 +91,12 @@ class BackgroundBleService {
         }
       }
     } catch (error) {
-      console.error('[BackgroundBLE] Erreur traitement manuel:', error);
+      console.error('[BackgroundBLE] Erreur:', error);
     }
   }
 }
 
-// ─── Singleton ────────────────────────────────────────────────────────────────
+// Singleton
 let backgroundService: BackgroundBleService | null = null;
 
 export function getBackgroundBleService(): BackgroundBleService {
