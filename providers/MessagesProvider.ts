@@ -124,6 +124,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const PENDING_PACKET_TTL_MS = 30 * 60 * 1000;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
+  // Ref sur le handler Nostr channel — évite les stale closures dans les callbacks
+  // (identity peut changer APRÈS la souscription → le handler doit toujours être à jour)
+  const nostrChannelHandlerRef = useRef<((channelName: string, event: any) => void) | null>(null);
   const addToDedup = (id: string) => {
     recentMsgIds.current.add(id);
     if (recentMsgIds.current.size > 200) {
@@ -852,6 +855,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     console.log('[Nostr→Forum]', channelName, '—', fromId.slice(0, 12), ':', event.content.slice(0, 40));
   }, [identity]);
 
+  // Synchroniser le ref pour que les callbacks de subscription utilisent toujours le handler à jour
+  useEffect(() => {
+    nostrChannelHandlerRef.current = handleIncomingNostrChannelMessage;
+  }, [handleIncomingNostrChannelMessage]);
+
   // ── Réabonnement Nostr aux forums quand la connexion est rétablie ────────────
 
   useEffect(() => {
@@ -862,17 +870,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       return;
     }
 
-    // Réabonner à tous les forums déjà rejoints
+    // Réabonner à TOUS les forums déjà rejoints via le ref (toujours à jour)
+    // Le ref nostrChannelHandlerRef pointe toujours sur le handleIncomingNostrChannelMessage
+    // avec la dernière identity → pas de stale closure possible.
     for (const channelName of joinedForums.current) {
       if (nostrChannelUnsubs.current.has(channelName)) continue; // déjà abonné
       const channelId = deriveChannelId(channelName);
       const unsub = nostrClient.subscribeChannel(channelId, (event) => {
-        handleIncomingNostrChannelMessage(channelName, event);
+        // ✅ FIX STALE CLOSURE: utilise le ref au lieu du callback direct
+        nostrChannelHandlerRef.current?.(channelName, event);
       });
       nostrChannelUnsubs.current.set(channelName, unsub);
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
     }
-  }, [nostrConnected, handleIncomingNostrChannelMessage]);
+  }, [nostrConnected]);
 
   // Radar géré par RadarProvider
 
@@ -1359,7 +1370,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {
       const channelId = deriveChannelId(channelName);
       const unsub = nostrClient.subscribeChannel(channelId, (event) => {
-        handleIncomingNostrChannelMessage(channelName, event);
+        // ✅ FIX STALE CLOSURE: utilise le ref pour toujours avoir le handler avec identity à jour
+        nostrChannelHandlerRef.current?.(channelName, event);
       });
       nostrChannelUnsubs.current.set(channelName, unsub);
       console.log('[Messages] Forum Nostr souscrit:', channelName, channelId.slice(0, 16) + '…');
@@ -1388,7 +1400,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } else {
       console.log('[Messages] Forum déjà existant:', channelName);
     }
-  }, [conversations, handleIncomingNostrChannelMessage]);
+  // handleIncomingNostrChannelMessage retiré des deps car on utilise le ref (nostrChannelHandlerRef)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations]);
 
   // ✅ NOUVEAU : Mettre à jour le display name
   const setDisplayName = useCallback(async (name: string): Promise<void> => {
