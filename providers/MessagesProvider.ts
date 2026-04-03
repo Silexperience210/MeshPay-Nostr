@@ -28,7 +28,7 @@ import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, get
 import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
-import { getBleGatewayClient } from '@/utils/ble-gateway';
+import { getBleGatewayClient, type MeshCoreContact } from '@/utils/ble-gateway';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { notifyForumMessage } from '@/utils/notifications';
 import { useNostr } from '@/providers/NostrProvider';
@@ -105,6 +105,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // Ref à jour sur conversations — évite les stale closures dans les callbacks BLE async
   const conversationsRef = useRef<StoredConversation[]>([]);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
+  // Ref à jour sur meshContacts BLE — évite stale closures dans callbacks async
+  const meshContactsRef = useRef<MeshCoreContact[]>([]);
+  useEffect(() => { meshContactsRef.current = ble.meshContacts; }, [ble.meshContacts]);
   const joinedForums = useRef<Set<string>>(new Set());
   const [joinedForumsList, setJoinedForumsList] = useState<string[]>([]);
   // PSKs chargées en mémoire : channelName → pskHex (évite les appels AsyncStorage dans les callbacks)
@@ -248,8 +251,27 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           
           // ✅ Message chunké reconstitué - stocké dans la DB
           const fromNodeId = uint64ToNodeId(packet.fromNodeId);
+          // Résolution nodeId → conv existante (même logique que pour TEXT)
+          const chunkPrefix8 = fromNodeId.slice(5).toUpperCase();
+          let chunkConvId = fromNodeId;
+          {
+            const exactMatch = conversationsRef.current.find(c => c.id === fromNodeId);
+            if (!exactMatch) {
+              const pubkeyMatch = conversationsRef.current.find(
+                c => c.peerPubkey && c.peerPubkey.slice(0, 8).toUpperCase() === chunkPrefix8
+              );
+              const bleMatch = !pubkeyMatch && meshContactsRef.current.find(
+                c => c.pubkeyPrefix.slice(0, 8).toUpperCase() === chunkPrefix8
+              );
+              if (pubkeyMatch) chunkConvId = pubkeyMatch.id;
+              else if (bleMatch) {
+                const bleConv = conversationsRef.current.find(c => c.peerPubkey === bleMatch.pubkeyHex);
+                if (bleConv) chunkConvId = bleConv.id;
+              }
+            }
+          }
           let senderPubkey = '';
-          const existingConv = conversationsRef.current.find(c => c.id === fromNodeId);
+          const existingConv = conversationsRef.current.find(c => c.id === chunkConvId);
           if (existingConv?.peerPubkey) {
             senderPubkey = existingConv.peerPubkey;
           }
@@ -273,13 +295,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
               }
             } else {
               finalChunkText = '[Chunk chiffré - clé publique inconnue]';
-              console.warn('[MeshCore] Chunk ENCRYPTED reçu mais pubkey inconnue pour', fromNodeId);
+              console.warn('[MeshCore] Chunk ENCRYPTED reçu mais pubkey inconnue pour', chunkConvId);
             }
           }
 
           const msg: StoredMessage = {
             id: `chunk-${packet.messageId}`,
-            conversationId: fromNodeId,
+            conversationId: chunkConvId,
             fromNodeId: fromNodeId,
             fromPubkey: senderPubkey,
             text: finalChunkText,
@@ -289,13 +311,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             status: 'delivered',
             transport: 'ble',
           };
-          
+
           await saveMessage(msg);
-          await updateConversationLastMessage(fromNodeId, finalChunkText.slice(0, 50), msg.timestamp, true);
+          await updateConversationLastMessage(chunkConvId, finalChunkText.slice(0, 50), msg.timestamp, true);
 
           setMessagesByConv(prev => ({
             ...prev,
-            [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
+            [chunkConvId]: [...(prev[chunkConvId] ?? []), msg],
           }));
 
           // ACK géré par MeshCore Companion firmware — pas besoin d'en envoyer un
@@ -312,15 +334,28 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         const pubkey = extractPubkeyFromAnnounce(packet);
         if (pubkey) {
           const fromNodeId = uint64ToNodeId(packet.fromNodeId);
-          console.log('[MeshCore] Pubkey reçue via KEY_ANNOUNCE:', fromNodeId, pubkey.slice(0, 20) + '...');
-          updateConversationPubkey(fromNodeId, pubkey);
+          // Résoudre vers une conv existante (par prefix pubkey ou ID exact)
+          const rawPfx = fromNodeId.slice(5).toUpperCase();
+          const resolvedKaConv = conversationsRef.current.find(c => c.id === fromNodeId)
+            ?? conversationsRef.current.find(c => c.peerPubkey && c.peerPubkey.slice(0, 8).toUpperCase() === rawPfx)
+            ?? conversationsRef.current.find(c => {
+                const bc = meshContactsRef.current.find(m => m.pubkeyPrefix.slice(0, 8).toUpperCase() === rawPfx);
+                return bc && c.peerPubkey === bc.pubkeyHex;
+              });
+          const kaConvId = resolvedKaConv?.id ?? fromNodeId;
+          console.log('[MeshCore] Pubkey reçue via KEY_ANNOUNCE:', fromNodeId, '→ conv', kaConvId, pubkey.slice(0, 20) + '...');
+          updateConversationPubkey(kaConvId, pubkey);
 
           // Retry des paquets bufferisés en attente de cette pubkey
-          const buffered = pendingEncryptedPackets.current.get(fromNodeId);
+          // Chercher dans le buffer par fromNodeId brut ET par kaConvId (résolu)
+          const buffered = pendingEncryptedPackets.current.get(fromNodeId)
+            ?? pendingEncryptedPackets.current.get(kaConvId);
           if (buffered && buffered.length > 0) {
             pendingEncryptedPackets.current.delete(fromNodeId);
-            pendingEncryptedTimestamps.current.delete(fromNodeId); // Nettoyer le timestamp
-            console.log(`[MeshCore] Retry ${buffered.length} paquet(s) bufferisé(s) pour ${fromNodeId}`);
+            pendingEncryptedPackets.current.delete(kaConvId);
+            pendingEncryptedTimestamps.current.delete(fromNodeId);
+            pendingEncryptedTimestamps.current.delete(kaConvId);
+            console.log(`[MeshCore] Retry ${buffered.length} paquet(s) bufferisé(s) pour ${fromNodeId} → conv ${kaConvId}`);
             for (const bufferedPkt of buffered) {
               try {
                 const enc = decodeEncryptedPayload(bufferedPkt.payload);
@@ -329,7 +364,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
                 const msgId = `mc-${bufferedPkt.messageId}`;
                 const msg: StoredMessage = {
                   id: msgId,
-                  conversationId: fromNodeId,
+                  conversationId: kaConvId,
                   fromNodeId,
                   fromPubkey: pubkey,
                   text: plaintext,
@@ -339,10 +374,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
                   status: 'delivered',
                 };
                 await saveMessage(msg);
-                await updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
+                await updateConversationLastMessage(kaConvId, plaintext.slice(0, 50), msg.timestamp, true);
                 setMessagesByConv(prev => ({
                   ...prev,
-                  [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
+                  [kaConvId]: [...(prev[kaConvId] ?? []), msg],
                 }));
               } catch (retryErr) {
                 console.error('[MeshCore] Erreur retry paquet bufferisé:', retryErr);
@@ -405,6 +440,38 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
         const fromNodeId = uint64ToNodeId(packet.fromNodeId);
 
+        // ── FIX BUG 4: Résolution nodeId → conversation existante ─────────────
+        // fromNodeId = "MESH-XXXXXXXX" (4 premiers octets de la clé MeshCore brute,
+        // via pubkeyPrefix des 6 octets du champ senderPubkeyPrefix du firmware).
+        // Les conversations créées depuis l'UI ou Nostr peuvent avoir un ID différent.
+        // On cherche d'abord une conv par ID exact, puis par pubkeyPrefix correspondant.
+        const rawPrefix8 = fromNodeId.slice(5).toUpperCase(); // 8 hex chars = 4 bytes
+        let resolvedConvId = fromNodeId;
+        {
+          const exactMatch = conversationsRef.current.find(c => c.id === fromNodeId);
+          if (!exactMatch) {
+            // Chercher par peerPubkey : pubkey BLE brute (64 hex), premiers 8 = 4 bytes
+            const pubkeyMatch = conversationsRef.current.find(
+              c => c.peerPubkey && c.peerPubkey.slice(0, 8).toUpperCase() === rawPrefix8
+            );
+            if (pubkeyMatch) {
+              resolvedConvId = pubkeyMatch.id;
+              console.log(`[MeshCore] ✅ NodeId résolu: ${fromNodeId} → conv "${resolvedConvId}" (via peerPubkey)`);
+            } else {
+              // Chercher par contacts BLE découverts (pubkeyPrefix = 6 bytes = 12 hex)
+              const bleContact = meshContactsRef.current.find(
+                c => c.pubkeyPrefix.slice(0, 8).toUpperCase() === rawPrefix8
+              );
+              if (bleContact) {
+                // Le contact existe mais pas encore de conv — on garde fromNodeId
+                // (la conv sera créée ci-dessous ou par l'effet auto-create)
+                console.log(`[MeshCore] Contact BLE trouvé pour ${fromNodeId}: "${bleContact.name}" — conv à créer`);
+              }
+            }
+          }
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         let plaintext: string;
         let senderPubkey = '';
 
@@ -417,8 +484,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             return;
           }
 
-          // Récupérer la pubkey du sender depuis nos conversations
-          const conv = conversationsRef.current.find(c => c.id === fromNodeId);
+          // Récupérer la pubkey du sender depuis la conversation résolue
+          const conv = conversationsRef.current.find(c => c.id === resolvedConvId);
           if (!conv?.peerPubkey) {
             const now = Date.now();
 
@@ -462,9 +529,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           plaintext = extractTextFromPacket(packet);
         }
 
+        // Résoudre le nom du contact depuis les contacts BLE si la conv est nouvelle
+        const bleContactForName = meshContactsRef.current.find(
+          c => c.pubkeyPrefix.slice(0, 8).toUpperCase() === rawPrefix8
+        );
+        const peerName = bleContactForName?.name ?? resolvedConvId;
+
         const msg: StoredMessage = {
           id: `mc-${packet.messageId}`,
-          conversationId: fromNodeId,
+          conversationId: resolvedConvId,
           fromNodeId: fromNodeId,
           fromPubkey: senderPubkey,
           text: plaintext,
@@ -472,26 +545,27 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           timestamp: packet.timestamp * 1000, // MeshCore utilise secondes, on veut ms
           isMine: false,
           status: 'delivered',
+          transport: 'ble',
         };
 
         await saveMessage(msg);
-        await updateConversationLastMessage(fromNodeId, plaintext.slice(0, 50), msg.timestamp, true);
+        await updateConversationLastMessage(resolvedConvId, plaintext.slice(0, 50), msg.timestamp, true);
 
         // ACK géré par MeshCore Companion firmware
         setMessagesByConv(prev => ({
           ...prev,
-          [fromNodeId]: [...(prev[fromNodeId] ?? []), msg],
+          [resolvedConvId]: [...(prev[resolvedConvId] ?? []), msg],
         }));
 
-        // Créer conversation si nécessaire
+        // Créer conversation si nécessaire (avec nom résolu depuis contacts BLE)
         setConversations(prev => {
-          const exists = prev.find(c => c.id === fromNodeId);
+          const exists = prev.find(c => c.id === resolvedConvId);
           if (!exists) {
             const newConv: StoredConversation = {
-              id: fromNodeId,
-              name: fromNodeId,
+              id: resolvedConvId,
+              name: peerName,
               isForum: false,
-              peerPubkey: senderPubkey || undefined,
+              peerPubkey: senderPubkey || bleContactForName?.pubkeyHex || undefined,
               lastMessage: plaintext.slice(0, 50),
               lastMessageTime: msg.timestamp,
               unreadCount: 1,
@@ -501,19 +575,19 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             return [newConv, ...prev];
           }
           return prev.map(c => {
-            if (c.id !== fromNodeId) return c;
+            if (c.id !== resolvedConvId) return c;
             return {
               ...c,
               lastMessage: plaintext.slice(0, 50),
               lastMessageTime: msg.timestamp,
               unreadCount: c.unreadCount + 1,
-              peerPubkey: senderPubkey || c.peerPubkey,
+              peerPubkey: senderPubkey || bleContactForName?.pubkeyHex || c.peerPubkey,
               online: true,
             };
           });
         });
 
-        console.log('[MeshCore] Message TEXT déchiffré et livré depuis', fromNodeId);
+        console.log(`[MeshCore] ✅ Message TEXT livré depuis ${fromNodeId} → conv "${resolvedConvId}"`);
       } else if (packet.type === MeshCoreMessageType.ACK) {
         // ✅ Traiter l'ACK reçu (confirmation de livraison)
         const fromNodeId = uint64ToNodeId(packet.fromNodeId);
@@ -601,6 +675,80 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // ble.connected only — joinForum est stable et idempotente, pas besoin de re-run sur chaque conversation
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ble.connected]);
+
+  // ── FIX BUG 4 (partie 2) : Auto-créer conversations pour contacts BLE ─────────
+  // Garantit que quand un message arrive (fromNodeId = "MESH-XXXXXXXX"),
+  // une conversation avec cet ID exact existe déjà → routage correct immédiat.
+  // Aussi wire up registerPeer → RadarProvider voit les pairs LoRa/BLE.
+  useEffect(() => {
+    if (!ble.meshContacts.length || !identity) return;
+
+    const newConvs: StoredConversation[] = [];
+
+    for (const contact of ble.meshContacts) {
+      if (!contact.pubkeyPrefix || contact.pubkeyPrefix.length < 8) continue;
+
+      // ID MeshCore basé sur 4 premiers octets de la pubkeyPrefix (= senderPubkeyPrefix firmware)
+      const meshNodeId = 'MESH-' + contact.pubkeyPrefix.slice(0, 8).toUpperCase();
+
+      // Ignorer notre propre nodeId
+      if (meshNodeId === identity.nodeId) continue;
+
+      // Enregistrer le pair dans GatewayProvider → apparaît dans RadarProvider LoRa
+      registerPeer({
+        nodeId: meshNodeId,
+        name: contact.name || meshNodeId,
+        lastSeen: contact.lastSeen * 1000 || Date.now(),
+        signalStrength: -80, // valeur par défaut — RSSI réel non connu depuis contact list
+        hops: 1,
+      } as GatewayPeer);
+
+      // Vérifier si une conversation existe déjà pour ce contact
+      const existingByMeshId = conversationsRef.current.find(c => c.id === meshNodeId);
+      const existingByPubkey = !existingByMeshId && conversationsRef.current.find(
+        c => c.peerPubkey && c.peerPubkey.slice(0, 8).toUpperCase() === contact.pubkeyPrefix.slice(0, 8).toUpperCase()
+      );
+
+      if (existingByMeshId) {
+        // Mettre à jour le peerPubkey si manquant
+        if (!existingByMeshId.peerPubkey && contact.pubkeyHex) {
+          updateConversationPubkey(meshNodeId, contact.pubkeyHex);
+          setConversations(prev => prev.map(c =>
+            c.id === meshNodeId ? { ...c, peerPubkey: contact.pubkeyHex } : c
+          ));
+        }
+        continue;
+      }
+
+      if (existingByPubkey) continue; // Conv déjà présente avec un autre ID — ne pas dupliquer
+
+      // Créer une nouvelle conversation pour ce contact BLE
+      const newConv: StoredConversation = {
+        id: meshNodeId,
+        name: contact.name || meshNodeId,
+        isForum: false,
+        peerPubkey: contact.pubkeyHex || undefined,
+        lastMessage: '',
+        lastMessageTime: 0,
+        unreadCount: 0,
+        online: true,
+      };
+      newConvs.push(newConv);
+      console.log(`[BLE] ✅ Conversation auto-créée pour contact: "${contact.name}" → ${meshNodeId}`);
+    }
+
+    if (newConvs.length > 0) {
+      for (const conv of newConvs) {
+        saveConversation(conv);
+      }
+      setConversations(prev => {
+        const newIds = new Set(newConvs.map(c => c.id));
+        const filtered = prev.filter(c => !newIds.has(c.id));
+        return [...newConvs, ...filtered];
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ble.meshContacts, identity?.nodeId]);
 
   // Charger les conversations depuis AsyncStorage
   useEffect(() => {
