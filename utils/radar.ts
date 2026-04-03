@@ -48,6 +48,9 @@ export function distanceToSignal(meters: number): number {
   return 15;
 }
 
+// Transport layer du peer
+export type PeerTransport = 'lora' | 'nostr' | 'both';
+
 // Pair visible sur le radar
 export interface RadarPeer {
   nodeId: string;        // ex: "MESH-A7F2"
@@ -55,12 +58,21 @@ export interface RadarPeer {
   distanceMeters: number;
   bearingRad: number;    // angle depuis Nord, radians (pour radar: 0 = haut)
   online: boolean;
+  transport: PeerTransport; // ← NOUVEAU : source de découverte
+  hops?: number;            // ← LoRa : nombre de sauts
   pubkeyHex?: string;
   lat?: number;
   lng?: number;
   lastSeen: number;
-  signalStrength: number; // 0-100
+  signalStrength: number; // 0-100 (RSSI réel pour LoRa, simulé pour Nostr)
 }
+
+// Couleurs par transport (à importer dans les composants)
+export const TRANSPORT_COLORS = {
+  lora:  '#F7931A', // Bitcoin orange — LoRa/BLE
+  nostr: '#9B59D0', // Violet — Nostr
+  both:  '#00D68F', // Vert — dual connecté
+} as const;
 
 // Convertir bearing GPS en coordonnées radar (x, y normalisés 0..1)
 // Nord = haut du radar (angle 0 = -π/2 en coordonnées écran)

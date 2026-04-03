@@ -1,18 +1,20 @@
 /**
  * RadarProvider — Contexte dédié radar (radarPeers + myLocation)
  *
- * Extrait de MessagesProvider pour éviter que les mises à jour GPS/radar
- * (toutes les 5s) ne re-rendent tout l'arbre de l'app (chat, wallet, settings).
+ * ✅ AMÉLIORÉ : fusion peers Nostr + LoRa (GatewayPeer) avec champ transport
  *
- * Doit être placé DANS MessagesContext pour pouvoir appeler useMessages().
+ * - Peers Nostr  → transport: 'nostr' (découverte via subscribePresence)
+ * - Peers LoRa   → transport: 'lora'  (découverts via gatewayState.peers)
+ * - Peer des deux → transport: 'both' (merge automatique par nodeId)
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import * as Location from 'expo-location';
-import { type RadarPeer, haversineDistance, gpsBearing, distanceToSignal } from '@/utils/radar';
+import { type RadarPeer, type PeerTransport, haversineDistance, gpsBearing, distanceToSignal } from '@/utils/radar';
 import { nostrClient } from '@/utils/nostr-client';
 import { useNostr } from '@/providers/NostrProvider';
 import { useMessages } from '@/providers/MessagesProvider';
+import { useGateway } from '@/providers/GatewayProvider';
 
 interface RadarState {
   radarPeers: RadarPeer[];
@@ -28,39 +30,77 @@ export function useRadar(): RadarState {
   return useContext(RadarContext);
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Fusionne le transport de deux sources pour un même peer */
+function mergeTransport(existing: PeerTransport, incoming: PeerTransport): PeerTransport {
+  if (existing === incoming) return existing;
+  return 'both';
+}
+
+/** Génère position pseudo-aléatoire déterministe pour peers sans GPS */
+function pseudoPosition(nodeId: string): { distanceMeters: number; bearingRad: number } {
+  const hash = nodeId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  return {
+    distanceMeters: 500 + (hash % 4000),
+    bearingRad: (hash % 628) / 100,
+  };
+}
+
+// ── Provider ──────────────────────────────────────────────────────────────────
+
 export function RadarProvider({ children }: { children: React.ReactNode }) {
   const { identity } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
+  const { gatewayState } = useGateway();
 
   const [radarPeers, setRadarPeers] = useState<RadarPeer[]>([]);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   const myLocationRef = useRef<{ lat: number; lng: number } | null>(null);
 
-  // ── Batched debounce : tous les peers qui arrivent dans la même fenêtre de 300ms
-  // sont appliqués en UN SEUL setState (fix du bug original qui perdait N-1 peers)
+  // ── Batched debounce — applique les mises à jour en un seul setState ──────
   const peerBatchRef = useRef<Map<string, RadarPeer>>(new Map());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const queuePeerUpdate = useCallback((peer: RadarPeer) => {
-    // Mettre à jour ou supprimer dans le batch courant
     if (peer.online) {
-      peerBatchRef.current.set(peer.nodeId, peer);
+      // Fusion transport si le peer existe déjà dans le batch
+      const existing = peerBatchRef.current.get(peer.nodeId);
+      if (existing) {
+        peerBatchRef.current.set(peer.nodeId, {
+          ...peer,
+          transport: mergeTransport(existing.transport, peer.transport),
+          // Garde le meilleur signal
+          signalStrength: Math.max(existing.signalStrength, peer.signalStrength),
+        });
+      } else {
+        peerBatchRef.current.set(peer.nodeId, peer);
+      }
     } else {
       peerBatchRef.current.delete(peer.nodeId);
     }
 
-    // Armer le flush (repoussé à chaque nouveau peer dans la fenêtre)
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = setTimeout(() => {
       const batch = new Map(peerBatchRef.current);
       peerBatchRef.current.clear();
       setRadarPeers(prev => {
-        let next = prev.filter(p => !batch.has(p.nodeId) && batch.get(p.nodeId)?.online !== false);
-        for (const p of batch.values()) {
-          next = [p, ...next.filter(x => x.nodeId !== p.nodeId)];
+        // Fusionne avec les peers existants (transport merge)
+        const prevMap = new Map(prev.map(p => [p.nodeId, p]));
+        for (const [nodeId, newPeer] of batch.entries()) {
+          const old = prevMap.get(nodeId);
+          if (old) {
+            prevMap.set(nodeId, {
+              ...newPeer,
+              transport: mergeTransport(old.transport, newPeer.transport),
+              signalStrength: Math.max(old.signalStrength, newPeer.signalStrength),
+            });
+          } else {
+            prevMap.set(nodeId, newPeer);
+          }
         }
-        return next;
+        return Array.from(prevMap.values());
       });
     }, 300);
   }, []);
@@ -88,7 +128,6 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
           const p = { lat: location.coords.latitude, lng: location.coords.longitude };
           setMyLocation(p);
           myLocationRef.current = p;
-          // Publier présence Nostr si connecté
           if (nostrClient.isConnected && identity) {
             nostrClient.publishPresence(identity.nodeId, p.lat, p.lng).catch(() => {});
           }
@@ -103,7 +142,7 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
     };
   }, [identity]);
 
-  // ── Subscription Nostr presence ───────────────────────────────────────────
+  // ── Peers Nostr (subscribePresence) ──────────────────────────────────────
   useEffect(() => {
     if (!nostrConnected || !identity) return;
 
@@ -111,16 +150,14 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
       if (payload.nodeId === identity.nodeId) return;
 
       const myPos = myLocationRef.current;
-      let distanceMeters = 0;
-      let bearingRad = 0;
+      let distanceMeters: number;
+      let bearingRad: number;
 
       if (myPos && payload.lat !== undefined && payload.lng !== undefined) {
         distanceMeters = haversineDistance(myPos.lat, myPos.lng, payload.lat, payload.lng);
         bearingRad = gpsBearing(myPos.lat, myPos.lng, payload.lat, payload.lng);
       } else {
-        const hash = payload.nodeId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        distanceMeters = 500 + (hash % 4000);
-        bearingRad = (hash % 628) / 100;
+        ({ distanceMeters, bearingRad } = pseudoPosition(payload.nodeId));
       }
 
       queuePeerUpdate({
@@ -129,6 +166,7 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
         distanceMeters,
         bearingRad,
         online: payload.online,
+        transport: 'nostr',                          // ← source Nostr
         lat: payload.lat,
         lng: payload.lng,
         lastSeen: payload.ts,
@@ -138,6 +176,58 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
 
     return () => unsub();
   }, [nostrConnected, identity, queuePeerUpdate]);
+
+  // ── Peers LoRa (gatewayState.peers — BLE/MeshCore) ───────────────────────
+  useEffect(() => {
+    if (!gatewayState?.peers?.length) return;
+
+    const now = Date.now();
+    const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
+    for (const loraPeer of gatewayState.peers) {
+      // Ignore les peers trop anciens
+      if (now - loraPeer.lastSeen > STALE_THRESHOLD_MS) continue;
+      // Ignore nous-mêmes
+      if (loraPeer.nodeId === identity?.nodeId) continue;
+
+      const myPos = myLocationRef.current;
+      let distanceMeters: number;
+      let bearingRad: number;
+
+      // Les peers LoRa n'ont pas de GPS — position déterministe + distance simulée par hops
+      const hopDistance = (loraPeer.hops ?? 1) * 1200; // ~1.2km par hop
+      if (myPos) {
+        const pseudo = pseudoPosition(loraPeer.nodeId);
+        distanceMeters = Math.min(hopDistance, pseudo.distanceMeters);
+        bearingRad = pseudo.bearingRad;
+      } else {
+        ({ distanceMeters, bearingRad } = pseudoPosition(loraPeer.nodeId));
+        distanceMeters = Math.min(distanceMeters, hopDistance);
+      }
+
+      queuePeerUpdate({
+        nodeId: loraPeer.nodeId,
+        name: loraPeer.name,
+        distanceMeters,
+        bearingRad,
+        online: true,
+        transport: 'lora',                           // ← source LoRa
+        hops: loraPeer.hops,
+        lastSeen: loraPeer.lastSeen,
+        signalStrength: loraPeer.signalStrength,     // RSSI réel depuis GatewayPeer
+      });
+    }
+  }, [gatewayState?.peers, identity?.nodeId, queuePeerUpdate]);
+
+  // ── Nettoyage peers inactifs toutes les 2 minutes ─────────────────────────
+  useEffect(() => {
+    const PEER_TTL_MS = 10 * 60 * 1000; // 10 min
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setRadarPeers(prev => prev.filter(p => now - p.lastSeen < PEER_TTL_MS));
+    }, 2 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <RadarContext.Provider value={{ radarPeers, myLocation }}>
