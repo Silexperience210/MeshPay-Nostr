@@ -1,20 +1,24 @@
 /**
  * Message Retry Service - File d'attente persistante pour messages hors ligne
  * Remplace la queue en mémoire (useRef) par SQLite
+ *
+ * ✅ FIX : cancelAllForConversation maintenant fonctionnel
+ *    → Nécessite d'avoir appliqué database.patch.ts dans utils/database.ts
  */
 import { MeshCorePacket, encodeMeshCorePacket } from '@/utils/meshcore-protocol';
 import {
   queuePendingMessage,
   getPendingMessages,
   removePendingMessage,
+  removePendingMessagesByConversation,  // ← NOUVEAU import
   incrementRetryCount,
   PendingMessage,
 } from '@/utils/database';
 import { getBleGatewayClient } from '@/utils/ble-gateway';
 
 const MAX_RETRY_ATTEMPTS = 3;
-const RETRY_INTERVAL_BASE = 5000; // 5 secondes
-const RETRY_INTERVAL_MAX = 60000; // 1 minute
+const RETRY_INTERVAL_BASE = 5000;  // 5 secondes
+const RETRY_INTERVAL_MAX = 60000;  // 1 minute
 
 class MessageRetryService {
   private isProcessing = false;
@@ -30,14 +34,14 @@ class MessageRetryService {
    */
   start(): void {
     if (this.processingInterval) return;
-    
+
     console.log('[MessageRetryService] Démarré');
-    
+
     // Vérifier toutes les 10 secondes
     this.processingInterval = setInterval(() => {
       this.processQueue();
     }, 10000);
-    
+
     // Premier traitement immédiat
     this.processQueue();
   }
@@ -55,16 +59,23 @@ class MessageRetryService {
 
   /**
    * Ajoute un message à la file d'attente
+   *
+   * @param msgId       Identifiant unique du message
+   * @param packet      Paquet MeshCore à envoyer
+   * @param maxRetries  Nombre max de tentatives (défaut: 3)
+   * @param conversationId  ← NOUVEAU : identifiant de la conversation
    */
   async queueMessage(
     msgId: string,
     packet: MeshCorePacket,
-    maxRetries: number = MAX_RETRY_ATTEMPTS
+    maxRetries: number = MAX_RETRY_ATTEMPTS,
+    conversationId?: string    // ← NOUVEAU paramètre
   ): Promise<void> {
     const encoded = encodeMeshCorePacket(packet);
-    await queuePendingMessage(msgId, encoded, maxRetries);
-    console.log('[MessageRetryService] Message mis en file d\'attente:', msgId);
-    
+    await queuePendingMessage(msgId, encoded, maxRetries, conversationId);
+    console.log('[MessageRetryService] Message mis en file d\'attente:', msgId,
+      conversationId ? `(conv: ${conversationId})` : '');
+
     // Essayer d'envoyer immédiatement
     this.processQueue();
   }
@@ -78,7 +89,7 @@ class MessageRetryService {
 
     try {
       const pending = await getPendingMessages();
-      
+
       if (pending.length === 0) {
         this.isProcessing = false;
         return;
@@ -98,22 +109,22 @@ class MessageRetryService {
       for (const msg of pending) {
         try {
           this.onStatusChange?.(msg.id, 'sending');
-          
+
           // Envoyer via BLE
           await bleClient.sendPacket(msg.packet as any);
-          
+
           // Succès - supprimer de la file
           await removePendingMessage(msg.id);
           this.onStatusChange?.(msg.id, 'sent');
-          
+
           console.log('[MessageRetryService] Message envoyé:', msg.id);
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
           console.error('[MessageRetryService] Erreur envoi:', msg.id, errorMsg);
-          
+
           // Incrémenter le compteur de retry
           await incrementRetryCount(msg.id, errorMsg);
-          
+
           // Vérifier si max retries atteint
           if (msg.retries + 1 >= msg.maxRetries) {
             this.onStatusChange?.(msg.id, 'failed');
@@ -145,23 +156,49 @@ class MessageRetryService {
   }
 
   /**
-   * Annule un message en attente
+   * Annule un message en attente par son ID
    */
   async cancelMessage(msgId: string): Promise<void> {
     await removePendingMessage(msgId);
+    this.onStatusChange?.(msgId, 'failed');
     console.log('[MessageRetryService] Message annulé:', msgId);
   }
 
   /**
-   * Annule tous les messages pour une conversation
+   * ✅ FIX : Annule tous les messages d'une conversation
+   *
+   * AVANT : ne faisait rien (TODO)
+   * APRÈS : supprime en base via conversation_id
+   *
+   * Prérequis : avoir appliqué database.patch.ts
    */
-  async cancelAllForConversation(convId: string): Promise<void> {
-    // TODO: Ajouter conversationId dans pending_messages
-    console.log('[MessageRetryService] Annulation messages pour:', convId);
+  async cancelAllForConversation(conversationId: string): Promise<void> {
+    try {
+      // Récupère les IDs avant suppression pour notifier le UI
+      const pending = await getPendingMessages();
+      const conversationMessages = pending.filter(
+        msg => msg.conversationId === conversationId
+      );
+
+      // Suppression groupée en base (une seule requête SQL)
+      const deletedCount = await removePendingMessagesByConversation(conversationId);
+
+      // Notifie le UI pour chaque message supprimé
+      for (const msg of conversationMessages) {
+        this.onStatusChange?.(msg.id, 'failed');
+      }
+
+      console.log(
+        `[MessageRetryService] ${deletedCount} messages annulés pour la conversation: ${conversationId}`
+      );
+    } catch (error) {
+      console.error('[MessageRetryService] Erreur cancelAllForConversation:', error);
+      throw error;
+    }
   }
 }
 
-// Singleton
+// ─── Singleton ────────────────────────────────────────────────────────────────
 let retryService: MessageRetryService | null = null;
 
 export function getMessageRetryService(

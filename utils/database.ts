@@ -177,6 +177,7 @@ async function initDatabase(): Promise<void> {
     CREATE TABLE IF NOT EXISTS pending_messages (
       id TEXT PRIMARY KEY,
       packet TEXT NOT NULL,
+      conversation_id TEXT,
       retries INTEGER NOT NULL DEFAULT 0,
       maxRetries INTEGER NOT NULL DEFAULT 3,
       nextRetryAt INTEGER NOT NULL,
@@ -184,6 +185,7 @@ async function initDatabase(): Promise<void> {
       createdAt INTEGER NOT NULL DEFAULT (strftime('%s', 'now') * 1000)
     );
     CREATE INDEX IF NOT EXISTS idx_pending_retry ON pending_messages(nextRetryAt) WHERE retries < maxRetries;
+    CREATE INDEX IF NOT EXISTS idx_pending_conversation ON pending_messages(conversation_id);
   `);
 
   // Table: user_profile (nom affiché personnalisable)
@@ -555,6 +557,7 @@ export async function updateMessageStatusDB(
 export interface PendingMessage {
   id: string;
   packet: Uint8Array;
+  conversationId?: string;
   retries: number;
   maxRetries: number;
   nextRetryAt: number;
@@ -564,19 +567,19 @@ export interface PendingMessage {
 export async function queuePendingMessage(
   id: string,
   packet: Uint8Array,
-  maxRetries: number = 3
+  maxRetries: number = 3,
+  conversationId?: string
 ): Promise<void> {
   try {
     const database = await getDatabase();
-    // ✅ CONVERSION avec toSQLiteParams
     await database.runAsync(`
-      INSERT INTO pending_messages (id, packet, retries, maxRetries, nextRetryAt)
-      VALUES (?, ?, 0, ?, strftime('%s', 'now') * 1000)
+      INSERT INTO pending_messages (id, packet, conversation_id, retries, maxRetries, nextRetryAt)
+      VALUES (?, ?, ?, 0, ?, strftime('%s', 'now') * 1000)
       ON CONFLICT(id) DO UPDATE SET
         retries = retries + 1,
         nextRetryAt = strftime('%s', 'now') * 1000 + (1000 * (retries + 1) * (retries + 1))
-    `, toSQLiteParams([id, uint8ArrayToBase64(packet), maxRetries]));
-    console.log('[DB] Pending message queued:', id);
+    `, toSQLiteParams([id, uint8ArrayToBase64(packet), conversationId ?? null, maxRetries]));
+    console.log('[DB] Pending message queued:', id, conversationId ? `(conv: ${conversationId})` : '');
   } catch (err) {
     console.error('[DB] Erreur queuePendingMessage:', err);
     throw err;
@@ -610,6 +613,22 @@ export async function removePendingMessage(id: string): Promise<void> {
     console.log('[DB] Pending message removed:', id);
   } catch (err) {
     console.error('[DB] Erreur removePendingMessage:', err);
+    throw err;
+  }
+}
+
+export async function removePendingMessagesByConversation(conversationId: string): Promise<number> {
+  try {
+    const database = await getDatabase();
+    const result = await database.runAsync(
+      `DELETE FROM pending_messages WHERE conversation_id = ?`,
+      toSQLiteParams([conversationId])
+    );
+    const deleted = result?.changes ?? 0;
+    console.log(`[DB] ${deleted} messages annulés pour la conversation: ${conversationId}`);
+    return deleted;
+  } catch (err) {
+    console.error('[DB] Erreur removePendingMessagesByConversation:', err);
     throw err;
   }
 }
