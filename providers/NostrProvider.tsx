@@ -11,8 +11,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
-import { useWalletSeed } from '@/providers/WalletSeedProvider';
-import { useAppSettings } from '@/providers/AppSettingsProvider';
+import { useWalletStore } from '@/stores/walletStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import {
   nostrClient,
   deriveNostrKeypair,
@@ -85,8 +85,9 @@ export interface NostrState {
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 export const [NostrContext, useNostr] = createContextHook((): NostrState => {
-  const { mnemonic, isInitialized } = useWalletSeed();
-  const { getActiveRelayUrls } = useAppSettings();
+  const mnemonic = useWalletStore((s) => s.mnemonic);
+  const isInitialized = useWalletStore((s) => s.isInitialized);
+  const getActiveRelayUrls = useSettingsStore((s) => s.getActiveRelayUrls);
 
   const [npub, setNpub] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);

@@ -32,8 +32,7 @@ import { getBleGatewayClient, type MeshCoreContact } from '@/utils/ble-gateway';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { notifyForumMessage } from '@/utils/notifications';
 import { useNostr } from '@/providers/NostrProvider';
-// MeshIdentity utilisé comme type de paramètre pour publishAndStore
-import { useWalletSeed } from '@/providers/WalletSeedProvider';
+import { useWalletStore } from '@/stores/walletStore';
 // Import BLE provider pour communication LoRa via gateway ESP32
 import { useBle } from '@/providers/BleProvider';
 import { useUsbSerial } from '@/providers/UsbSerialProvider';
@@ -94,7 +93,7 @@ export interface MessagesState {
 }
 
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
-  const { mnemonic } = useWalletSeed();
+  const mnemonic = useWalletStore((s) => s.mnemonic);
   const ble = useBle(); // Accès au BLE gateway pour LoRa
   const usbSerial = useUsbSerial(); // Accès USB Serial (transport alternatif)
   const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu } = useGateway();

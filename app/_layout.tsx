@@ -16,7 +16,11 @@ import Colors from "@/constants/colors";
 import { useWalletStore } from "@/stores/walletStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
-// ─── Providers restants (pas encore migrés) ──────────────────────────────────
+// ─── Providers compat Zustand (wrappent les hooks useWalletSeed/useAppSettings) ──
+import { WalletSeedContext } from "@/providers/WalletSeedProvider";
+import { AppSettingsContext } from "@/providers/AppSettingsProvider";
+
+// ─── Providers restants ───────────────────────────────────────────────────────
 import { BitcoinContext } from "@/providers/BitcoinProvider";
 import { GatewayContext } from "@/providers/GatewayProvider";
 import { MessagesContext } from "@/providers/MessagesProvider";
@@ -151,16 +155,17 @@ function AppContent() {
  * - SettingsStore: Remplace AppSettingsProvider (AsyncStorage)
  * - UIStore: Nouveau store pour la gestion UI
  * 
- * Providers restants à migrer:
- * - BitcoinContext, NostrContext, GatewayContext, MessagesContext
- * - BleProvider, UsbSerialProvider, etc.
+ * Providers compat (thin wrappers Zustand → anciens hooks):
+ * - WalletSeedContext  → useWalletSeed()   lit useWalletStore
+ * - AppSettingsContext → useAppSettings()  lit useSettingsStore
  */
 export default function RootLayout() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        {/* Les stores Zustand sont initialisés automatiquement */}
-        {/* Pas besoin de Provider wrapper car Zustand crée des stores globaux */}
+        {/* Providers compat : useWalletSeed() et useAppSettings() → Zustand stores */}
+        <WalletSeedContext>
+        <AppSettingsContext>
         <BitcoinContext>
           <NostrContext>
             <MessagingBusContext>
@@ -185,6 +190,8 @@ export default function RootLayout() {
             </MessagingBusContext>
           </NostrContext>
         </BitcoinContext>
+        </AppSettingsContext>
+        </WalletSeedContext>
       </QueryClientProvider>
     </ErrorBoundary>
   );

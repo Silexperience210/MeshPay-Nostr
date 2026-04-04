@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
-import { useWalletSeed } from './WalletSeedProvider';
+import { useWalletStore } from '@/stores/walletStore';
 import {
   getAddressUtxos,
   getAddressBalance,
@@ -41,7 +41,11 @@ export interface BitcoinState {
 }
 
 export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState => {
-  const { walletInfo, receiveAddresses, changeAddresses, isInitialized, mnemonic } = useWalletSeed();
+  const walletInfo = useWalletStore((s) => s.walletInfo);
+  const receiveAddresses = useWalletStore((s) => s.receiveAddresses);
+  const changeAddresses = useWalletStore((s) => s.changeAddresses);
+  const isInitialized = useWalletStore((s) => s.isInitialized);
+  const mnemonic = useWalletStore((s) => s.mnemonic);
   
   const [balance, setBalance] = useState(0);
   const [unconfirmedBalance, setUnconfirmedBalance] = useState(0);

@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import { useNostr } from '@/providers/NostrProvider';
-import { useWalletSeed } from '@/providers/WalletSeedProvider';
+import { useWalletStore } from '@/stores/walletStore';
 import { messagingBus, type BusMessage, type BusMessageHandler, type BusStatus, type Transport } from '@/utils/messaging-bus';
 
 // ─── Interface publique ───────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ export interface MessagingBusState {
 
 export const [MessagingBusContext, useMessagingBus] = createContextHook((): MessagingBusState => {
   const { isConnected: nostrConnected, publicKey: nostrPubkey } = useNostr();
-  const { walletInfo } = useWalletSeed();
+  const walletInfo = useWalletStore((s) => s.walletInfo);
 
   const [status, setStatus] = useState<BusStatus>({
     nostr: 'disconnected',
