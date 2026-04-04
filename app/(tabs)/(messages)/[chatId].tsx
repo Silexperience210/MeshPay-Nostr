@@ -7,7 +7,7 @@ import {
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { useHeaderHeight } from '@react-navigation/elements';
 import * as Clipboard from 'expo-clipboard';
-import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, ChevronDown, Zap } from 'lucide-react-native';
+import { Send, CircleDollarSign, Lock, Hash, Radio, Globe, Wifi, X, AlertTriangle, Bitcoin, Mic, Play, Square, Camera, CornerUpLeft, Copy, Trash2, RotateCcw, Shield, User, Zap } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import Colors from '@/constants/colors';
@@ -321,19 +321,31 @@ function AudioBubble({ audioData, audioDuration, isMe }: { audioData?: string; a
 
 function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; imageMime?: string; isMe: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState(false);
   if (!imageData) return null;
 
   const uri = `data:${imageMime ?? 'image/jpeg'};base64,${imageData}`;
+  
+  // Détecter si c'est un GIF
+  const isGif = imageMime === 'image/gif' || uri.includes('gif');
 
   return (
     <>
       <TouchableOpacity onPress={() => setExpanded(true)} activeOpacity={0.85}>
-        <Image
-          source={{ uri }}
-          style={[styles.imageBubble, isMe ? styles.imageBubbleMe : styles.imageBubbleThem]}
-          resizeMode="cover"
-        />
-        {imageMime === 'image/gif' && (
+        {!error ? (
+          <Image
+            source={{ uri }}
+            style={[styles.imageBubble, isMe ? styles.imageBubbleMe : styles.imageBubbleThem]}
+            resizeMode="cover"
+            onError={() => setError(true)}
+          />
+        ) : (
+          <View style={[styles.imageBubble, isMe ? styles.imageBubbleMe : styles.imageBubbleThem, styles.imageError]}>
+            <AlertTriangle size={32} color={Colors.yellow} />
+            <Text style={styles.imageErrorText}>Image invalide</Text>
+          </View>
+        )}
+        {isGif && (
           <View style={styles.gifBadge}>
             <Text style={styles.gifBadgeText}>GIF</Text>
           </View>
@@ -611,7 +623,8 @@ export default function ChatScreen() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   // Reply
   const [replyTo, setReplyTo] = useState<StoredMessage | null>(null);
-  // Réactions emoji : messageId → emojis
+  // Réactions emoji : messageId → emojis (TODO: persister en base de données)
+  // NOTE: Actuellement en mémoire uniquement - sera perdu au rechargement
   const [reactions, setReactions] = useState<Record<string, string[]>>({});
   // Actions sheet (long press)
   const [actionsSheet, setActionsSheet] = useState<StoredMessage | null>(null);
@@ -676,10 +689,18 @@ export default function ChatScreen() {
     }
   }, [isForum, convId, ble.connected, joinedForumsList]);
 
-  // Scroll vers le bas à chaque nouveau message
+  // Scroll vers le bas uniquement pour nos propres messages ou si on est déjà en bas
+  const isNearBottomRef = useRef(true);
+  const lastMessageWasMineRef = useRef(false);
+  
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      const lastMsg = messages[messages.length - 1];
+      // Scroller si: c'est notre message, ou si on était déjà en bas
+      if (lastMsg?.isMine || isNearBottomRef.current) {
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: lastMsg?.isMine ? true : false }), 100);
+      }
+      lastMessageWasMineRef.current = lastMsg?.isMine ?? false;
     }
   }, [messages.length]);
 
@@ -1364,6 +1385,16 @@ const styles = StyleSheet.create({
   },
   imageBubbleThem: {
     borderBottomLeftRadius: 4,
+  },
+  imageError: {
+    backgroundColor: Colors.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  imageErrorText: {
+    color: Colors.textMuted,
+    fontSize: 12,
   },
   gifBadge: {
     position: 'absolute',

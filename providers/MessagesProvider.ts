@@ -1023,6 +1023,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     ));
   }, []); // ✅ FIX: ble n'est pas utilisé ici — dep spurieuse supprimée (stable)
 
+  // Ref pour accéder aux conversations sans les avoir dans les deps
+  const conversationsRefForSend = useRef(conversations);
+  useEffect(() => { conversationsRefForSend.current = conversations; }, [conversations]);
+
   // Envoyer un message (DM ou forum)
   const sendMessage = useCallback(async (
     convId: string,
@@ -1032,9 +1036,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!identity) {
       throw new Error('Identité non disponible');
     }
+    // Vérifier la connexion Nostr à l'exécution (pas en dépendance)
+    const nostrConnected = nostrClient.isConnected;
     // Autoriser l'envoi si BLE ou Nostr est disponible
     const isForum_ = convId.startsWith('forum:');
-    if (!ble.connected && !nostrClient.isConnected) {
+    if (!ble.connected && !nostrConnected) {
       throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
     }
     // Forums : BLE (flood LoRa) ou Nostr — au moins un doit être dispo
@@ -1054,16 +1060,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const msgId = generateMsgId();
     const ts = Date.now();
 
-    // Utiliser chunking si message trop long — uniquement DM hors BLE (BitMesh/autre)
+    // Utiliser chunking si message trop long — uniquement DM avec BLE
     // En mode BLE (MeshCore Companion), la fragmentation UART est transparente
-    if (!isForum && !ble.connected && chunkManagerRef.current.needsChunking(text)) {
+    if (!isForum && ble.connected && chunkManagerRef.current.needsChunking(text)) {
       console.log('[Messages] Utilisation du chunking pour message long');
 
       // Chiffrer AVANT le chunking si la pubkey du pair est connue
-      const convForChunk = conversations.find(c => c.id === convId);
+      const convForChunk = conversationsRefForSend.current.find(c => c.id === convId);
       let textToChunk = text;
       let chunkEncrypted = false;
-      if (convForChunk?.peerPubkey && ble.connected) {
+      if (convForChunk?.peerPubkey) {
         try {
           const enc = encryptDM(text, id.privkeyBytes, convForChunk.peerPubkey);
           const encBytes = encodeEncryptedPayload(enc);
@@ -1073,6 +1079,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         } catch (encErr) {
           console.warn('[Messages] Chunk: chiffrement échoué, envoi en clair:', encErr);
         }
+      } else {
+        console.warn('[Messages] Chunk: pas de pubkey pour', convId, '- envoi en clair');
       }
 
       const result = await chunkManagerRef.current.sendMessageWithChunking(
@@ -1181,7 +1189,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const conv = conversations.find(c => c.id === convId);
 
     // Envoi NIP-17 via Nostr si connecté (parallèle ou exclusif selon BLE)
-    if (nostrClient.isConnected && conv?.peerPubkey) {
+    // Vérifier connexion Nostr à l'exécution
+    const nostrIsConnected = nostrClient.isConnected;
+    
+    if (nostrIsConnected && conv?.peerPubkey) {
       // Convertir pubkey hex 66 chars (compressée 02/03) → 64 chars (x-only Nostr)
       const nostrPubkey64 = conv.peerPubkey.length === 66
         ? conv.peerPubkey.slice(2)
@@ -1205,7 +1216,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[MeshCore] DM envoyé via CMD_SEND_TXT_MSG → Companion:', convId);
       const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
       publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
-    } else if (!nostrClient.isConnected) {
+    } else if (!nostrIsConnected) {
       throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
     } else {
       // Nostr-only : sauvegarder localement sans BLE
@@ -1223,7 +1234,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
       ));
     }
-  }, [identity, conversations, publishAndStore, ble.connected]);
+  }, [identity, publishAndStore, ble.connected]);
 
   // Envoyer un message vocal (base64 m4a)
   const sendAudio = useCallback(async (
@@ -1232,6 +1243,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     durationMs: number
   ): Promise<void> => {
     if (!identity) throw new Error('Identité non disponible');
+    // Vérifier connexion Nostr à l'exécution
     if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
 
     const totalSec = Math.floor(durationMs / 1000);
@@ -1241,7 +1253,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const ts = Date.now();
 
     // Envoi NIP-17 via Nostr
-    const conv = conversations.find(c => c.id === convId);
+    const conv = conversationsRefForSend.current.find(c => c.id === convId);
     if (conv?.peerPubkey) {
       const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
       if (pk.length === 64) {
@@ -1270,7 +1282,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: audioLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations, nostrClient]);
+  }, [identity]);
 
   // Envoyer une image (base64 jpeg/png)
   const sendImage = useCallback(async (
@@ -1279,6 +1291,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     mime: string
   ): Promise<void> => {
     if (!identity) throw new Error('Identité non disponible');
+    // Vérifier connexion Nostr à l'exécution
     if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
 
     const imagePayload = `IMAGE:${mime}|${base64}`;
@@ -1286,7 +1299,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const msgId = generateMsgId();
     const ts = Date.now();
 
-    const conv = conversations.find(c => c.id === convId);
+    const conv = conversationsRefForSend.current.find(c => c.id === convId);
     if (conv?.peerPubkey) {
       const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
       if (pk.length === 64) {
@@ -1314,7 +1327,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: imageLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations, nostrClient]);
+  }, [identity]);
 
   // Envoyer un Cashu token
   const sendCashu = useCallback(async (
@@ -1783,9 +1796,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 // Extraire le montant d'un Cashu token (approximatif depuis le texte)
 function parseCashuAmount(text: string): number | undefined {
   try {
-    if (!text.startsWith('cashuA')) return undefined;
+    if (!text || !text.startsWith('cashuA')) return undefined;
     const base64 = text.slice(6);
-    const json = JSON.parse(atob(base64));
+    // Utiliser try/catch spécifique pour atob qui peut throw
+    let jsonStr: string;
+    try {
+      jsonStr = atob(base64);
+    } catch {
+      return undefined;
+    }
+    const json = JSON.parse(jsonStr);
     let total = 0;
     for (const entry of json.token ?? []) {
       for (const proof of entry.proofs ?? []) {
@@ -1793,7 +1813,8 @@ function parseCashuAmount(text: string): number | undefined {
       }
     }
     return total || undefined;
-  } catch {
+  } catch (err) {
+    console.warn('[parseCashuAmount] Erreur parsing:', err);
     return undefined;
   }
 }
