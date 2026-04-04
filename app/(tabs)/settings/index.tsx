@@ -1916,7 +1916,7 @@ export default function SettingsScreen() {
                   text: `${(hz / 1e6).toFixed(3)} MHz`,
                   onPress: () => setRadioParams(hz, bleDeviceInfo.radioBwHz, bleDeviceInfo.radioSf, 5)
                     .catch((e: any) => Alert.alert('Erreur', e.message)),
-                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+                })).concat([{ text: 'Annuler', onPress: async () => {} }]),
               );
             }}
           />
@@ -1933,7 +1933,7 @@ export default function SettingsScreen() {
                   text: `SF${sf}`,
                   onPress: () => setRadioParams(bleDeviceInfo.radioFreqHz, bleDeviceInfo.radioBwHz, sf, 5)
                     .catch((e: any) => Alert.alert('Erreur', e.message)),
-                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+                })).concat([{ text: 'Annuler', onPress: async () => {} }]),
               );
             }}
           />
@@ -1950,7 +1950,7 @@ export default function SettingsScreen() {
                 powers.map((p) => ({
                   text: `${p} dBm`,
                   onPress: () => setTxPower(p).catch((e: any) => Alert.alert('Erreur', e.message)),
-                })).concat([{ text: 'Annuler', onPress: () => {} }]),
+                })).concat([{ text: 'Annuler', onPress: async () => {} }]),
               );
             }}
           />

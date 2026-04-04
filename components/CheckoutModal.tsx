@@ -302,7 +302,7 @@ function CheckoutModalComponent({
     if (!product) return;
     setLoading(true);
     try {
-      const feeRate = feeEstimates?.['3'] ?? 10;
+      const feeRate = feeEstimates?.halfHourFee ?? 10;
       const { txid } = await sendBitcoin(sellerAddress, totalSats, feeRate);
       const order = await placeOrder(product, delivery, 'onchain', shippingSats, { txid });
       handleClose();
@@ -553,7 +553,7 @@ function CheckoutModalComponent({
                         </Text>
                         <View style={styles.payBadge}>
                           <Wallet size={10} color={Colors.green} />
-                          <Text style={styles.payBadgeText}>{btcBalance} sat dispo • Frais ~{feeEstimates?.['3'] ?? 10} sat/vB</Text>
+                          <Text style={styles.payBadgeText}>{btcBalance} sat dispo • Frais ~{feeEstimates?.halfHourFee ?? 10} sat/vB</Text>
                         </View>
                       </>
                     ) : (

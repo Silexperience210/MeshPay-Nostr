@@ -430,47 +430,6 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  // ─── Publication Nostr NIP-15 ─────────────────────────────────────────────
-
-  const publishToNostr = useCallback(async () => {
-    if (!myStall) throw new Error('Boutique non configurée');
-    await publish(buildStallEvent(myStall));
-    for (const product of myProducts) {
-      await publish(buildProductEvent(product, myStall));
-    }
-    // Mise à jour optimiste : ajoute immédiatement les propres produits dans le browse
-    // avec les infos de paiement direct du stall
-    setBrowseProducts((prev) => {
-      const withoutOwn = prev.filter((p) => p.sellerPubkey !== myPubkey);
-      const enriched = myProducts.map((p) => ({
-        ...p,
-        sellerLightningAddress: myStall?.lightningAddress,
-        sellerBitcoinAddress: myStall?.bitcoinAddress,
-      }));
-      return [...enriched, ...withoutOwn];
-    });
-    // Rafraîchit depuis les relais après un court délai (laisse le temps au relay de traiter)
-    setTimeout(() => refreshBrowse(), 1500);
-  }, [myStall, myProducts, myPubkey, publish, refreshBrowse]);
-
-  // ─── Broadcast LoRa ───────────────────────────────────────────────────────
-
-  const broadcastLoRa = useCallback(async (product: ShopProduct) => {
-    if (!ble.connected) throw new Error('Gateway LoRa non connecté');
-    const stallName = myStall?.name ?? 'Ma boutique';
-    const msg = encodeLoRaProduct(product, stallName);
-    await ble.sendChannelMessage(msg);
-  }, [ble, myStall]);
-
-  const broadcastAllLoRa = useCallback(async () => {
-    if (!ble.connected) throw new Error('Gateway LoRa non connecté');
-    for (const product of myProducts) {
-      await broadcastLoRa(product);
-      // Petite pause entre broadcasts pour ne pas saturer LoRa
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }, [myProducts, broadcastLoRa]);
-
   // ─── Browse Nostr ─────────────────────────────────────────────────────────
 
   // Chargement du cache browse au mount — affichage immédiat sans attendre Nostr
@@ -553,6 +512,47 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     refreshBrowse();
     return () => nostrSubRef.current?.();
   }, []);
+
+  // ─── Publication Nostr NIP-15 ─────────────────────────────────────────────
+
+  const publishToNostr = useCallback(async () => {
+    if (!myStall) throw new Error('Boutique non configurée');
+    await publish(buildStallEvent(myStall));
+    for (const product of myProducts) {
+      await publish(buildProductEvent(product, myStall));
+    }
+    // Mise à jour optimiste : ajoute immédiatement les propres produits dans le browse
+    // avec les infos de paiement direct du stall
+    setBrowseProducts((prev) => {
+      const withoutOwn = prev.filter((p) => p.sellerPubkey !== myPubkey);
+      const enriched = myProducts.map((p) => ({
+        ...p,
+        sellerLightningAddress: myStall?.lightningAddress,
+        sellerBitcoinAddress: myStall?.bitcoinAddress,
+      }));
+      return [...enriched, ...withoutOwn];
+    });
+    // Rafraîchit depuis les relais après un court délai (laisse le temps au relay de traiter)
+    setTimeout(() => refreshBrowse(), 1500);
+  }, [myStall, myProducts, myPubkey, publish, refreshBrowse]);
+
+  // ─── Broadcast LoRa ───────────────────────────────────────────────────────
+
+  const broadcastLoRa = useCallback(async (product: ShopProduct) => {
+    if (!ble.connected) throw new Error('Gateway LoRa non connecté');
+    const stallName = myStall?.name ?? 'Ma boutique';
+    const msg = encodeLoRaProduct(product, stallName);
+    await ble.sendChannelMessage(msg);
+  }, [ble, myStall]);
+
+  const broadcastAllLoRa = useCallback(async () => {
+    if (!ble.connected) throw new Error('Gateway LoRa non connecté');
+    for (const product of myProducts) {
+      await broadcastLoRa(product);
+      // Petite pause entre broadcasts pour ne pas saturer LoRa
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }, [myProducts, broadcastLoRa]);
 
   // ─── Commandes ────────────────────────────────────────────────────────────
 

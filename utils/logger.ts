@@ -11,7 +11,8 @@
  *   - Pas de fuite de secrets via les logs
  */
 
-import { randomBytes } from '@noble/hashes/utils';
+// @ts-ignore - subpath exports use .js extension
+import { randomBytes } from '@noble/hashes/utils.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -69,7 +70,7 @@ function sanitizeLogMessage(message: string): string {
 export function generateTraceId(): string {
   const bytes = randomBytes(8);
   return Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
+    .map((b: number) => b.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, 16);
 }

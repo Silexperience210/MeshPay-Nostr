@@ -483,21 +483,19 @@ export default function MeshDebugger({ visible, onClose }: MeshDebuggerProps) {
                 <View style={styles.toolCard}>
                   <Text style={styles.toolLabel}>Message</Text>
                   <TextInput
-                    style={styles.toolInput}
+                    style={[styles.toolInput, { color: Colors.text }]}
                     value={testMessage}
                     onChangeText={setTestMessage}
                     placeholder="Message de test..."
                     placeholderTextColor={Colors.textMuted}
-                    color={Colors.text}
                   />
                   <Text style={styles.toolLabel}>Canal (0–7)</Text>
                   <TextInput
-                    style={[styles.toolInput, { width: 80 }]}
+                    style={[styles.toolInput, { width: 80, color: Colors.text }]}
                     value={targetChannel}
                     onChangeText={setTargetChannel}
                     keyboardType="number-pad"
                     maxLength={1}
-                    color={Colors.text}
                   />
                   <TouchableOpacity
                     style={[styles.sendBtn, !connected && styles.sendBtnDisabled]}

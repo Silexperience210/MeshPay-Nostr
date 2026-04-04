@@ -17,7 +17,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
 }
 
 // ✅ UTILITAIRE: Convertir les paramètres pour SQLite avec validation stricte
-function toSQLiteParams(params: any[]): any[] {
+export function toSQLiteParams(params: any[]): any[] {
   return params.map((p, index) => {
     if (p === null || p === undefined) return null;
     if (typeof p === 'boolean') return p ? 1 : 0;
@@ -180,8 +180,9 @@ export async function saveMessageAndUpdateConversation(
 async function createDatabaseBackup(): Promise<string | null> {
   try {
     const timestamp = Date.now();
-    const backupPath = `${FileSystem.documentDirectory}bitmesh_backup_${timestamp}.db`;
-    const dbPath = `${FileSystem.documentDirectory}bitmesh.db`;
+    const docDir = (FileSystem as any).documentDirectory ?? '';
+    const backupPath = `${docDir}bitmesh_backup_${timestamp}.db`;
+    const dbPath = `${docDir}bitmesh.db`;
     
     // Vérifier si le fichier existe
     const fileInfo = await FileSystem.getInfoAsync(dbPath);

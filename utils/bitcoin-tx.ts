@@ -5,7 +5,7 @@
  */
 import * as bitcoin from 'bitcoinjs-lib';
 import { HDKey } from '@scure/bip32';
-import { mnemonicToSeed, pubkeyToSegwitAddress, validateAddress } from '@/utils/bitcoin';
+import { mnemonicToSeed, pubkeyToSegwitAddress } from '@/utils/bitcoin';
 // @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
 // @ts-ignore - subpath exports use .js extension
@@ -770,9 +770,10 @@ export function isRbfEnabled(psbtHex: string): boolean {
     
     for (let i = 0; i < psbt.inputCount; i++) {
       const input = psbt.data.inputs[i];
-      if (input.sequence !== undefined && input.sequence < SEQUENCE_FINAL) {
+      const seq = (input as any).sequence;
+      if (seq !== undefined && seq < SEQUENCE_FINAL) {
         // Si le LSB n'est pas set (0xffffffff >> 1), RBF est possible
-        if ((input.sequence & ENABLE_LOCKTIME_MASK) !== SEQUENCE_FINAL) {
+        if ((seq & ENABLE_LOCKTIME_MASK) !== SEQUENCE_FINAL) {
           return true;
         }
       }
@@ -793,9 +794,9 @@ export function enableRbf(psbtHex: string): string {
     for (let i = 0; i < psbt.inputCount; i++) {
       const input = psbt.data.inputs[i];
       // Set sequence to 0xfffffffd to enable RBF
-      const currentSequence = input.sequence ?? SEQUENCE_FINAL;
+      const currentSequence = (input as any).sequence ?? SEQUENCE_FINAL;
       if (currentSequence === SEQUENCE_FINAL) {
-        psbt.updateInput(i, { sequence: ENABLE_LOCKTIME_MASK - 2 });
+        psbt.updateInput(i, { sequence: ENABLE_LOCKTIME_MASK - 2 } as any);
       }
     }
     
