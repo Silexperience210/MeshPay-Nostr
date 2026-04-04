@@ -538,6 +538,33 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         );
         const peerName = bleContactForName?.name ?? resolvedConvId;
 
+        const msgTs = packet.timestamp * 1000; // MeshCore utilise secondes, on veut ms
+
+        // ── FIX: Créer la conversation AVANT de sauver le message ──────────
+        // Garantit la cohérence DB (conversation doit exister avant message)
+        const convExistsBefore = conversationsRef.current.find(c => c.id === resolvedConvId);
+        if (!convExistsBefore) {
+          const newConv: StoredConversation = {
+            id: resolvedConvId,
+            name: peerName,
+            isForum: false,
+            peerPubkey: senderPubkey || bleContactForName?.pubkeyHex || undefined,
+            lastMessage: plaintext.slice(0, 50),
+            lastMessageTime: msgTs,
+            unreadCount: 1,
+            online: true,
+          };
+          try {
+            await saveConversation(newConv);
+          } catch (convErr) {
+            console.error('[MeshCore] Erreur création conversation:', convErr);
+          }
+          setConversations(prev => {
+            if (prev.find(c => c.id === resolvedConvId)) return prev;
+            return [newConv, ...prev];
+          });
+        }
+
         const msg: StoredMessage = {
           id: `mc-${packet.messageId}`,
           conversationId: resolvedConvId,
@@ -545,14 +572,14 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           fromPubkey: senderPubkey,
           text: plaintext,
           type: 'text',
-          timestamp: packet.timestamp * 1000, // MeshCore utilise secondes, on veut ms
+          timestamp: msgTs,
           isMine: false,
           status: 'delivered',
           transport: 'ble',
         };
 
         await saveMessage(msg);
-        await updateConversationLastMessage(resolvedConvId, plaintext.slice(0, 50), msg.timestamp, true);
+        await updateConversationLastMessage(resolvedConvId, plaintext.slice(0, 50), msgTs, true);
 
         // ACK géré par MeshCore Companion firmware
         setMessagesByConv(prev => ({
@@ -560,35 +587,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           [resolvedConvId]: [...(prev[resolvedConvId] ?? []), msg],
         }));
 
-        // Créer conversation si nécessaire (avec nom résolu depuis contacts BLE)
-        setConversations(prev => {
-          const exists = prev.find(c => c.id === resolvedConvId);
-          if (!exists) {
-            const newConv: StoredConversation = {
-              id: resolvedConvId,
-              name: peerName,
-              isForum: false,
-              peerPubkey: senderPubkey || bleContactForName?.pubkeyHex || undefined,
-              lastMessage: plaintext.slice(0, 50),
-              lastMessageTime: msg.timestamp,
-              unreadCount: 1,
-              online: true,
-            };
-            saveConversation(newConv);
-            return [newConv, ...prev];
-          }
-          return prev.map(c => {
+        // Mettre à jour la conversation si elle existait déjà
+        if (convExistsBefore) {
+          setConversations(prev => prev.map(c => {
             if (c.id !== resolvedConvId) return c;
             return {
               ...c,
               lastMessage: plaintext.slice(0, 50),
-              lastMessageTime: msg.timestamp,
+              lastMessageTime: msgTs,
               unreadCount: c.unreadCount + 1,
               peerPubkey: senderPubkey || bleContactForName?.pubkeyHex || c.peerPubkey,
               online: true,
             };
-          });
-        });
+          }));
+        }
 
         console.log(`[MeshCore] ✅ Message TEXT livré depuis ${fromNodeId} → conv "${resolvedConvId}"`);
       } else if (packet.type === MeshCoreMessageType.ACK) {
@@ -812,8 +824,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         const payload = JSON.parse(event.content) as { v: number; nonce: string; ct: string };
         plaintext = decryptForumWithKey(payload, psk);
       } catch {
-        console.warn('[Forum] Déchiffrement PSK échoué pour', channelName, '— message ignoré');
-        return; // Ne pas afficher un message illisible
+        // FIX: Ne pas dropper silencieusement — afficher un placeholder
+        // Le message existe sur le relay, l'utilisateur doit savoir qu'il est chiffré
+        plaintext = '[Message chiffré — clé incorrecte ou format inconnu]';
+        console.warn('[Forum] Déchiffrement PSK échoué pour', channelName, '— affiché comme chiffré');
       }
     }
 

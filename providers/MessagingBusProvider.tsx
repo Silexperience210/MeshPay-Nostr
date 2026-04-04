@@ -95,6 +95,13 @@ export const [MessagingBusContext, useMessagingBus] = createContextHook((): Mess
       nostr: nostrConnected ? 'connected' : 'disconnected',
       preferred: nostrConnected ? 'nostr' : 'none',
     });
+
+    // ✅ FIX: Quand Nostr reconnecte, le SimplePool est recréé → les anciennes
+    // subscriptions (subscribeDMs, subscribeDMsSealed, subscribeTxRelay) sont mortes.
+    // On doit redémarrer les listeners du bus pour recréer les subs sur le nouveau pool.
+    if (nostrConnected) {
+      messagingBus.restartListenersIfNeeded();
+    }
   }, [nostrConnected]);
 
   // ── S'abonner aux messages entrants pour maintenir `lastMessage` ──────────

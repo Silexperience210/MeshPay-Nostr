@@ -130,6 +130,13 @@ async function initDatabase(): Promise<void> {
 
   console.log('[Database] Initialisation des tables...');
 
+  // WAL pour de meilleures performances en écriture concurrente
+  await db.execAsync('PRAGMA journal_mode = WAL;');
+
+  // NOTE: PRAGMA foreign_keys volontairement désactivé — l'app sauve parfois
+  // des messages avant de créer la conversation (race condition acceptable).
+  // La cohérence est gérée au niveau applicatif.
+
   // Table: conversations
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS conversations (
