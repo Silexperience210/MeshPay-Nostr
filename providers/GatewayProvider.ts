@@ -54,6 +54,10 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   const [gatewayState, setGatewayState] = useState<GatewayState>(createInitialGatewayState());
   const [settings, setSettings] = useState<GatewaySettings>(DEFAULT_GATEWAY_SETTINGS);
   const cleanupTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref pour éviter de recréer handleLoRaMessage à chaque changement de gatewayState
+  const gatewayStateRef = useRef(gatewayState);
+  // Synchroniser le ref avec le state à chaque rendu
+  gatewayStateRef.current = gatewayState;
 
   const loadSettingsQuery = useQuery({
     queryKey: ['gateway-settings'],
@@ -170,14 +174,17 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     },
   });
 
+  // ✅ FIX: Utiliser gatewayStateRef pour éviter que handleLoRaMessage soit recréé
+  // à chaque changement de gatewayState → empêche les re-registrations BLE intempestives.
   const handleLoRaMessage = useCallback((rawMessage: string, sourceNodeId: string) => {
-    if (gatewayState.mode !== 'gateway' || !gatewayState.isActive) {
+    const gs = gatewayStateRef.current;
+    if (gs.mode !== 'gateway' || !gs.isActive) {
       console.log('[GatewayProvider] Not in gateway mode, ignoring LoRa message');
       return;
     }
-    const newState = handleIncomingLoRaMessage(gatewayState, rawMessage, sourceNodeId);
+    const newState = handleIncomingLoRaMessage(gs, rawMessage, sourceNodeId);
     setGatewayState(newState);
-  }, [gatewayState]);
+  }, []); // stable — lit gatewayStateRef.current à chaque appel
 
   const forwardPayment = useCallback(async (
     paymentData: string,

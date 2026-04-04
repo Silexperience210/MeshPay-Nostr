@@ -409,10 +409,14 @@ export class NostrClient {
       onEvent(event);
     };
 
-    // nostr-tools v2.x : subscribeMany attend Filter[] — on wrappe chaque filtre dans un tableau
+    // ✅ FIX CRITIQUE: nostr-tools v2.x pool.subscribeMany(relays, filter, params)
+    // `filter` est passé DIRECTEMENT (non enveloppé dans un tableau).
+    // En interne, subscribeMap fait already grouped.get(url).push(filter) → [filter].
+    // Si on passe [filter], le relay reçoit [[filter]] → REQ invalide → aucun event reçu.
+    // Passer chaque filtre individuellement (un subscribeMany par filtre) est correct.
     let eoseFired = 0;
-    const subs = filters.map((filter, idx) =>
-      this.pool.subscribeMany(this.relayUrls, [filter], {
+    const subs = filters.map((filter) =>
+      this.pool.subscribeMany(this.relayUrls, filter as any, {
         onevent: handler,
         oneose: onEOSE
           ? () => {
