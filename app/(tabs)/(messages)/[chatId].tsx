@@ -689,18 +689,10 @@ export default function ChatScreen() {
     }
   }, [isForum, convId, ble.connected, joinedForumsList]);
 
-  // Scroll vers le bas uniquement pour nos propres messages ou si on est déjà en bas
-  const isNearBottomRef = useRef(true);
-  const lastMessageWasMineRef = useRef(false);
-  
+  // Scroll vers le bas à chaque nouveau message
   useEffect(() => {
     if (messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      // Scroller si: c'est notre message, ou si on était déjà en bas
-      if (lastMsg?.isMine || isNearBottomRef.current) {
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: lastMsg?.isMine ? true : false }), 100);
-      }
-      lastMessageWasMineRef.current = lastMsg?.isMine ?? false;
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [messages.length]);
 
