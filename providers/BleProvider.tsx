@@ -190,22 +190,41 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         // Auto-reconnect avec timeout court (8s max) pour ne pas bloquer le scan
         // Android interdit le scan pendant connect()/bonding → timeout impératif
         let lastDeviceId: string | null = null;
+        let reconnectTimeout: NodeJS.Timeout | null = null;
+        let isReconnected = false;
+        
         try {
           lastDeviceId = await AsyncStorage.getItem(BLE_LAST_DEVICE_KEY);
           if (lastDeviceId) {
             console.log('[BleProvider] Auto-reconnect à:', lastDeviceId);
-            await Promise.race([
-              client.connect(lastDeviceId),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('auto-reconnect timeout')), 8000)
-              ),
-            ]);
-            const device = client.getConnectedDevice();
-            setState((prev) => ({ ...prev, connected: true, device }));
-            console.log('[BleProvider] Auto-reconnect réussi:', device?.name);
+            
+            // Race condition fix: utiliser un flag pour éviter les états inconsistants
+            const connectPromise = client.connect(lastDeviceId).then(() => {
+              isReconnected = true;
+              if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            });
+            
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              reconnectTimeout = setTimeout(() => {
+                if (!isReconnected) {
+                  reject(new Error('auto-reconnect timeout'));
+                }
+              }, 8000);
+            });
+            
+            await Promise.race([connectPromise, timeoutPromise]);
+            
+            if (isReconnected) {
+              const device = client.getConnectedDevice();
+              setState((prev) => ({ ...prev, connected: true, device }));
+              console.log('[BleProvider] Auto-reconnect réussi:', device?.name);
+            }
           }
         } catch (reconnectErr) {
           console.log('[BleProvider] Auto-reconnect échoué — nettoyage');
+          // Nettoyage du timeout
+          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+          
           // Forcer la déconnexion même si connectedId n'est pas encore set
           // (BleManager.connect() peut encore tourner en background sinon)
           if (lastDeviceId) {

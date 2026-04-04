@@ -692,7 +692,10 @@ export default function ChatScreen() {
   // Scroll vers le bas à chaque nouveau message
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+      const timer = setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+      return () => clearTimeout(timer);
     }
   }, [messages.length]);
 
@@ -1011,7 +1014,8 @@ export default function ChatScreen() {
           maxToRenderPerBatch={8}
           updateCellsBatchingPeriod={50}
           removeClippedSubviews={true}
-          extraData={reactions}
+          // NOTE: extraData={reactions} retiré car utilise une ref dans renderMessage
+          // Cela évite le re-render de tous les messages à chaque changement de réaction
           ListEmptyComponent={emptyChatComponent}
         />
 

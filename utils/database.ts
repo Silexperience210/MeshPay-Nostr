@@ -84,6 +84,86 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
+ * Wrapper pour exécuter des opérations dans une transaction ACID
+ * Garantit l'atomicité: soit toutes les opérations réussissent, soit aucune
+ */
+export async function withTransaction<T>(
+  operations: (db: SQLite.SQLiteDatabase) => Promise<T>
+): Promise<T> {
+  const database = await getDatabase();
+  
+  await database.execAsync('BEGIN IMMEDIATE TRANSACTION');
+  try {
+    const result = await operations(database);
+    await database.execAsync('COMMIT');
+    return result;
+  } catch (error) {
+    await database.execAsync('ROLLBACK');
+    console.error('[Database] Transaction rolled back:', error);
+    throw error;
+  }
+}
+
+/**
+ * Sauvegarde atomique d'un message ET mise à jour de la conversation
+ * Évite les états incohérents (message sans conversation mise à jour)
+ */
+export async function saveMessageAndUpdateConversation(
+  msg: DBMessage,
+  convId: string,
+  lastMessagePreview: string,
+  lastMessageTime: number,
+  incrementUnread: boolean
+): Promise<void> {
+  return withTransaction(async (database) => {
+    // 1. Sauvegarder le message
+    const params = [
+      String(msg.id),
+      String(msg.conversationId),
+      String(msg.fromNodeId),
+      msg.fromPubkey ? String(msg.fromPubkey) : null,
+      String(msg.text),
+      String(msg.type),
+      Math.floor(Number(msg.timestamp || Date.now())),
+      msg.isMine ? 1 : 0,
+      String(msg.status),
+      msg.cashuAmount ? Math.floor(Number(msg.cashuAmount)) : null,
+      msg.cashuToken ? String(msg.cashuToken) : null,
+      msg.btcAmount ? Math.floor(Number(msg.btcAmount)) : null,
+      msg.compressed ? 1 : 0,
+      msg.audioData ? String(msg.audioData) : null,
+      msg.audioDuration ? Math.floor(Number(msg.audioDuration)) : null,
+      msg.imageData ? String(msg.imageData) : null,
+      msg.imageMime ? String(msg.imageMime) : null,
+      msg.transport ? String(msg.transport) : null,
+    ];
+    
+    await database.runAsync(`
+      INSERT OR REPLACE INTO messages
+      (id, conversationId, fromNodeId, fromPubkey, text, type, timestamp, isMine, status, cashuAmount, cashuToken, btcAmount, compressed, audioData, audioDuration, imageData, imageMime, transport)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, toSQLiteParams(params));
+    
+    // 2. Mettre à jour la conversation
+    if (incrementUnread) {
+      await database.runAsync(`
+        UPDATE conversations 
+        SET lastMessage = ?, lastMessageTime = ?, unreadCount = unreadCount + 1, updatedAt = strftime('%s', 'now') * 1000
+        WHERE id = ?
+      `, toSQLiteParams([String(lastMessagePreview), Math.floor(Number(lastMessageTime)), String(convId)]));
+    } else {
+      await database.runAsync(`
+        UPDATE conversations 
+        SET lastMessage = ?, lastMessageTime = ?, updatedAt = strftime('%s', 'now') * 1000
+        WHERE id = ?
+      `, toSQLiteParams([String(lastMessagePreview), Math.floor(Number(lastMessageTime)), String(convId)]));
+    }
+    
+    console.log('[DB] Transaction atomique: message + conversation mis à jour');
+  });
+}
+
+/**
  * Reset la base de données en cas de corruption
  */
 export async function resetDatabase(): Promise<void> {
@@ -132,10 +212,12 @@ async function initDatabase(): Promise<void> {
 
   // WAL pour de meilleures performances en écriture concurrente
   await db.execAsync('PRAGMA journal_mode = WAL;');
-
-  // NOTE: PRAGMA foreign_keys volontairement désactivé — l'app sauve parfois
-  // des messages avant de créer la conversation (race condition acceptable).
-  // La cohérence est gérée au niveau applicatif.
+  
+  // ✅ SÉCURITÉ: Activer les foreign keys pour l'intégrité référentielle
+  await db.execAsync('PRAGMA foreign_keys = ON;');
+  
+  // NOTE: Les FK sont maintenant activées. L'ordre de création est important:
+  // conversations DOIT être créée AVANT les messages.
 
   // Table: conversations
   await db.execAsync(`

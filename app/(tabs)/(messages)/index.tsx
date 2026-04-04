@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -690,6 +690,14 @@ export default function MessagesScreen() {
   const { conversations, identity, startConversation, joinForum, deleteConversation, contacts } = useMessages();
   const { isConnected: nostrConnected, isConnecting: nostrConnecting } = useNostr();
   const [modalVisible, setModalVisible] = useState(false);
+  
+  // ✅ OPTIMISATION: Deduplicate conversations une seule fois avec useMemo
+  // Évite le recalcul à chaque render
+  const uniqueConversations = useMemo(() => {
+    return conversations.filter((conv, index, self) =>
+      index === self.findIndex(c => c.id === conv.id)
+    );
+  }, [conversations]);
 
   const modeLabel = settings.connectionMode === 'internet' ? 'Internet Mode'
     : settings.connectionMode === 'bridge' ? 'Bridge Mode' : 'LoRa Mesh';
@@ -783,12 +791,10 @@ export default function MessagesScreen() {
       </View>
 
       <FlatList
-        data={conversations.filter((conv, index, self) =>
-          index === self.findIndex(c => c.id === conv.id)
-        )}
+        data={uniqueConversations}
         keyExtractor={(item) => item.id}
         renderItem={renderConv}
-        contentContainerStyle={[styles.listContent, conversations.length === 0 && styles.emptyList]}
+        contentContainerStyle={[styles.listContent, uniqueConversations.length === 0 && styles.emptyList]}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         ListEmptyComponent={
