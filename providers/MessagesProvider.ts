@@ -102,6 +102,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
   const [contacts, setContacts] = useState<DBContact[]>([]);
   const chunkManagerRef = useRef(getChunkManager());
+  // Ref pour éviter que handleIncomingMeshCorePacket soit recréé à chaque changement
+  // de gatewayState.isActive (même pattern que GatewayProvider.handleLoRaMessage)
+  const gatewayActiveRef = useRef(gatewayState.isActive);
+  gatewayActiveRef.current = gatewayState.isActive;
   // Ref à jour sur conversations — évite les stale closures dans les callbacks BLE async
   const conversationsRef = useRef<StoredConversation[]>([]);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
@@ -220,7 +224,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       const myNodeIdUint64 = nodeIdToUint64(identity.nodeId);
       if (packet.toNodeId !== myNodeIdUint64 && packet.toNodeId !== 0n) {
         // Forward to gateway if active (LoRa relay mode)
-        if (gatewayState.isActive) {
+        // ✅ FIX: lire gatewayActiveRef.current au lieu de capturer gatewayState.isActive
+        // Évite de recréer ce callback + de ré-enregistrer le handler BLE à chaque changement
+        if (gatewayActiveRef.current) {
           const rawPayload = bytesToBase64(encodeMeshCorePacket(packet));
           handleLoRaMsg(rawPayload, packet.fromNodeId?.toString() ?? 'unknown');
         }
@@ -611,21 +617,30 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         
         if (ackInfo) {
           console.log('[MeshCore] ACK reçu pour message', ackInfo.originalMessageId, 'depuis', fromNodeId);
-          
-          // Mettre à jour le statut du message local
+
+          // ✅ FIX: Chercher dans TOUTES les conversations, pas seulement prev[fromNodeId].
+          // La conversation peut avoir été résolue sous un ID différent du fromNodeId brut
+          // (ex: conversation créée avec un nodeId résolu via peerPubkey ou contact BLE).
           const msgId = `mc-${ackInfo.originalMessageId}`;
           setMessagesByConv(prev => {
-            const convMessages = prev[fromNodeId] || [];
-            const updatedMessages = convMessages.map(m => {
-              if (m.id === msgId || m.id.endsWith(`-${ackInfo.originalMessageId}`)) {
-                return { ...m, status: 'delivered' as const };
+            const next = { ...prev };
+            let found = false;
+            for (const convId of Object.keys(next)) {
+              const messages = next[convId];
+              if (messages.some(m => m.id === msgId || m.id.endsWith(`-${ackInfo.originalMessageId}`))) {
+                next[convId] = messages.map(m =>
+                  (m.id === msgId || m.id.endsWith(`-${ackInfo.originalMessageId}`))
+                    ? { ...m, status: 'delivered' as const }
+                    : m
+                );
+                found = true;
+                break; // un message ne peut être que dans une conversation
               }
-              return m;
-            });
-            return {
-              ...prev,
-              [fromNodeId]: updatedMessages,
-            };
+            }
+            if (!found) {
+              console.warn('[MeshCore] ACK : message introuvable dans aucune conv:', msgId);
+            }
+            return next;
           });
         }
       } else if (packet.type === MeshCoreMessageType.POSITION) {
@@ -641,7 +656,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } catch (err) {
       console.error('[MeshCore] Erreur traitement paquet:', err);
     }
-  }, [identity, gatewayState.isActive, handleLoRaMsg]);
+  }, [identity, handleLoRaMsg]); // stable — gatewayState.isActive lu via gatewayActiveRef
 
   // Enregistrer le handler BLE dès que possible + annoncer notre clé publique
   useEffect(() => {
@@ -1006,7 +1021,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts }
         : c
     ));
-  }, [ble]);
+  }, []); // ✅ FIX: ble n'est pas utilisé ici — dep spurieuse supprimée (stable)
 
   // Envoyer un message (DM ou forum)
   const sendMessage = useCallback(async (
