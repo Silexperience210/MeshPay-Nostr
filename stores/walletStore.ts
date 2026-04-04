@@ -239,8 +239,9 @@ export const useWalletStore = create<WalletState>()(
         get()._setGenerateError(null);
 
         try {
+          console.log('[WalletStore] Calling generateMnemonic...');
           const newMnemonic = generateMnemonic(strength);
-          console.log('[WalletStore] Mnemonic generated, saving to SecureStore...');
+          console.log('[WalletStore] Mnemonic generated successfully, saving to SecureStore...');
           
           await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
           await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
@@ -250,8 +251,8 @@ export const useWalletStore = create<WalletState>()(
           get()._setWalletData(newMnemonic);
           console.log('[WalletStore] Wallet initialized successfully');
         } catch (error: any) {
-          console.error('[WalletStore] Generation error:', error);
-          get()._setGenerateError(error);
+          console.error('[WalletStore] Generation error:', error?.message || error);
+          get()._setGenerateError(error instanceof Error ? error : new Error(String(error)));
           throw error;
         } finally {
           get()._setGenerating(false);

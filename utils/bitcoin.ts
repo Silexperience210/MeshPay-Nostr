@@ -22,10 +22,24 @@ export interface DerivedWalletInfo {
 }
 
 export function generateMnemonic(strength: 12 | 24 = 12): string {
+  // Vérifier que crypto.getRandomValues est disponible
+  const hasCrypto = typeof globalThis !== 'undefined' && 
+                    typeof (globalThis as any).crypto === 'object' &&
+                    typeof (globalThis as any).crypto.getRandomValues === 'function';
+  if (!hasCrypto) {
+    console.error('[Bitcoin] crypto.getRandomValues not available!');
+    throw new Error('crypto.getRandomValues must be defined. Polyfill not loaded correctly.');
+  }
+  
   const bits = strength === 12 ? 128 : 256;
-  const mnemonic = bip39.generateMnemonic(wordlist, bits);
-  console.log('[Bitcoin] Generated new mnemonic with', strength, 'words');
-  return mnemonic;
+  try {
+    const mnemonic = bip39.generateMnemonic(wordlist, bits);
+    console.log('[Bitcoin] Generated new mnemonic with', strength, 'words');
+    return mnemonic;
+  } catch (err: any) {
+    console.error('[Bitcoin] Failed to generate mnemonic:', err);
+    throw new Error(`Failed to generate mnemonic: ${err.message}`);
+  }
 }
 
 export function validateMnemonic(mnemonic: string): boolean {

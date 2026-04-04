@@ -33,14 +33,14 @@ export interface WalletSeedState {
   isImporting: boolean;
   generateError: Error | null;
   importError: Error | null;
-  generateNewWallet: (strength?: 12 | 24) => void;
-  importWallet: (mnemonic: string) => void;
-  deleteWallet: () => void;
+  generateNewWallet: (strength?: 12 | 24) => Promise<void>;
+  importWallet: (mnemonic: string) => Promise<void>;
+  deleteWallet: () => Promise<void>;
   getFormattedAddress: () => string;
   /** Exporte le mnemonic chiffré avec un mot de passe (PBKDF2 + AES-GCM). Retourne JSON string. */
   exportWallet: (password: string) => string;
   /** Importe un backup chiffré. Lance une erreur si mot de passe incorrect. */
-  importEncryptedWallet: (backupJson: string, password: string) => void;
+  importEncryptedWallet: (backupJson: string, password: string) => Promise<void>;
 }
 
 // ─── Thin wrapper → Zustand walletStore ──────────────────────────────────────
@@ -59,13 +59,19 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook((): WalletSe
     isImporting: store.isImporting,
     generateError: store.generateError,
     importError: store.importError,
-    generateNewWallet: (strength?: 12 | 24) => { store.generateWallet(strength); },
-    importWallet: (mnemonic: string) => { store.importWallet(mnemonic); },
-    deleteWallet: () => { store.deleteWallet(); },
+    generateNewWallet: async (strength?: 12 | 24) => { 
+      await store.generateWallet(strength); 
+    },
+    importWallet: async (mnemonic: string) => { 
+      await store.importWallet(mnemonic); 
+    },
+    deleteWallet: async () => { 
+      await store.deleteWallet(); 
+    },
     getFormattedAddress: store.getFormattedAddress,
     exportWallet: store.exportWallet,
-    importEncryptedWallet: (backupJson: string, password: string) => {
-      store.importEncryptedWallet(backupJson, password);
+    importEncryptedWallet: async (backupJson: string, password: string) => {
+      await store.importEncryptedWallet(backupJson, password);
     },
   };
 });

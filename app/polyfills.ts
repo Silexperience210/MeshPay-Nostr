@@ -24,12 +24,26 @@ const getRandomValuesPolyfill = <T extends ArrayBufferView>(array: T): T => {
   return array;
 };
 
+// Initialiser crypto sur global et globalThis (utilisé par @noble/hashes)
 if (typeof global.crypto === 'undefined') {
   global.crypto = {
     getRandomValues: getRandomValuesPolyfill,
   } as Crypto;
+  console.log('[Polyfills] global.crypto initialized');
 } else if (typeof global.crypto.getRandomValues !== 'function') {
   (global.crypto as Crypto).getRandomValues = getRandomValuesPolyfill;
+  console.log('[Polyfills] global.crypto.getRandomValues patched');
+}
+
+// @noble/hashes utilise globalThis.crypto
+if (typeof globalThis === 'object') {
+  if (typeof globalThis.crypto === 'undefined') {
+    (globalThis as any).crypto = global.crypto;
+    console.log('[Polyfills] globalThis.crypto initialized');
+  } else if (typeof globalThis.crypto.getRandomValues !== 'function') {
+    globalThis.crypto.getRandomValues = getRandomValuesPolyfill;
+    console.log('[Polyfills] globalThis.crypto.getRandomValues patched');
+  }
 }
 
 // URL polyfill
