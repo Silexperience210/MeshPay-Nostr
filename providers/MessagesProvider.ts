@@ -36,6 +36,7 @@ import { useNostr } from '@/providers/NostrProvider';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
 // Import BLE provider pour communication LoRa via gateway ESP32
 import { useBle } from '@/providers/BleProvider';
+import { useUsbSerial } from '@/providers/UsbSerialProvider';
 // Import Gateway provider pour tracking peers, relay LoRa et Cashu
 import { useGateway } from '@/providers/GatewayProvider';
 import { type GatewayPeer } from '@/utils/gateway';
@@ -95,6 +96,7 @@ export interface MessagesState {
 export const [MessagesContext, useMessages] = createContextHook((): MessagesState => {
   const { mnemonic } = useWalletSeed();
   const ble = useBle(); // Accès au BLE gateway pour LoRa
+  const usbSerial = useUsbSerial(); // Accès USB Serial (transport alternatif)
   const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu } = useGateway();
   const { isConnected: nostrConnected } = useNostr();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
@@ -680,6 +682,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         .catch(err => console.warn('[MeshCore] Erreur SelfAdvert:', err));
     }
   }, [ble.connected, identity, handleIncomingMeshCorePacket]);
+
+  // ✅ Enregistrer le handler USB Serial (transport alternatif au BLE)
+  // UsbSerialProvider utilise un ref interne — onPacket() est idempotent et bon marché.
+  useEffect(() => {
+    if (usbSerial.connected && identity) {
+      console.log('[MeshCore] Connexion USB Serial établie, enregistrement handler');
+      usbSerial.onPacket(handleIncomingMeshCorePacket);
+    }
+  }, [usbSerial.connected, identity, handleIncomingMeshCorePacket]);
 
   // Polling périodique des messages en file (filet de sécurité si PUSH_MSG_WAITING manqué)
   // Le firmware peut parfois ne pas envoyer PUSH_MSG_WAITING (firmware edge case, BLE restart...)

@@ -1256,7 +1256,10 @@ export class BleGatewayClient {
     const pathLen    = payload[1];
     const txtType    = payload[2];
     const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(3, true);
-    const text       = new TextDecoder().decode(payload.slice(7)).replace(/\0/g, '');
+    // ✅ FIX: txtType==2 (TXT_TYPE_SIGNED_PLAIN) ajoute un préfixe 4 bytes avant le texte
+    // Même traitement que parseDirectMsgLegacy et parseChannelMsgV3
+    const textOffset = txtType === 2 ? 11 : 7;
+    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] Canal (legacy) ch=${channelIdx}: "${text.slice(0, 40)}"`);
     const msg: MeshCoreIncomingMsg = {
