@@ -17,6 +17,8 @@ import {
   DBConversation,
   DBMessage,
 } from '@/utils/database';
+// @ts-ignore - subpath exports use .js extension
+import { randomBytes } from '@noble/hashes/utils.js';
 
 // Re-export des types pour compatibilité
 export type MessageType = 'text' | 'cashu' | 'btc_tx' | 'lora' | 'audio' | 'image' | 'gif';
@@ -81,8 +83,40 @@ export async function updateMessageStatus(
 
 // --- Utils ---
 
+/**
+ * Génère une chaîne aléatoire sécurisée en base36
+ * Utilise randomBytes de @noble/hashes pour la sécurité cryptographique
+ * 
+ * SÉCURITÉ (Fix VULN-007):
+ * - Remplace Math.random() qui n'est pas cryptographiquement sûr
+ * - Utilise un CSPRNG (Cryptographically Secure Pseudo-Random Number Generator)
+ * 
+ * @param length - Longueur souhaitée de la chaîne
+ * @returns Chaîne aléatoire en base36
+ */
+function generateRandomBase36(length: number): string {
+  const bytes = randomBytes(length);
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    // Convertir chaque byte en caractère base36 (0-9, a-z)
+    result += (bytes[i] % 36).toString(36);
+  }
+  return result;
+}
+
+/**
+ * Génère un ID de message unique.
+ * 
+ * SÉCURITÉ (Fix VULN-007):
+ * - N'utilise PLUS Math.random() qui est prévisible
+ * - Utilise randomBytes() de @noble/hashes pour l'unpredictibilité cryptographique
+ * 
+ * @returns ID de message unique au format msg-{timestamp}-{random}
+ */
 export function generateMsgId(): string {
-  return `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const timestamp = Date.now().toString(36);
+  const random = generateRandomBase36(5);
+  return `msg-${timestamp}-${random}`;
 }
 
 /**
@@ -92,5 +126,7 @@ export function generateMsgId(): string {
 export async function generateUniqueMsgId(): Promise<string> {
   const { getNextMessageId } = await import('@/utils/database');
   const counter = await getNextMessageId();
-  return `msg-${Date.now().toString(36)}-${counter.toString(36)}`;
+  const timestamp = Date.now().toString(36);
+  const counterBase36 = counter.toString(36);
+  return `msg-${timestamp}-${counterBase36}`;
 }

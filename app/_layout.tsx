@@ -10,9 +10,14 @@ import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ActivityIndicator, View, Text, TouchableOpacity, Alert } from "react-native";
 import Colors from "@/constants/colors";
-import { WalletSeedContext } from "@/providers/WalletSeedProvider";
+
+// ─── Stores Zustand (nouveau) ────────────────────────────────────────────────
+// Ces stores remplacent les anciens providers context
+import { useWalletStore } from "@/stores/walletStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+
+// ─── Providers restants (pas encore migrés) ──────────────────────────────────
 import { BitcoinContext } from "@/providers/BitcoinProvider";
-import { AppSettingsContext } from "@/providers/AppSettingsProvider";
 import { GatewayContext } from "@/providers/GatewayProvider";
 import { MessagesContext } from "@/providers/MessagesProvider";
 import { BleProvider } from "@/providers/BleProvider";
@@ -22,9 +27,9 @@ import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
 import { ShopProvider } from "@/providers/ShopProvider";
+
 import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener } from "@/utils/notifications";
 import { router } from "expo-router";
-import { useAppInitialization } from "@/hooks/useAppInitialization";
 import { WelcomeModal } from "@/components/WelcomeModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -49,8 +54,23 @@ function RootLayoutNav() {
   );
 }
 
+/**
+ * Hook de synchronisation des stores
+ * S'assure que les stores Zustand sont réhydratés avant d'afficher l'app
+ */
+function useStoreHydration() {
+  const walletHydrated = useWalletStore((state) => state._hasHydrated);
+  const settingsHydrated = useSettingsStore((state) => state._hasHydrated);
+  
+  return {
+    isHydrated: walletHydrated && settingsHydrated,
+    walletHydrated,
+    settingsHydrated,
+  };
+}
+
 function AppContent() {
-  const { isReady, isMigrating, error } = useAppInitialization();
+  const { isHydrated } = useStoreHydration();
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -73,10 +93,10 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (isReady && onboardingDone !== null) {
+    if (isHydrated && onboardingDone !== null) {
       SplashScreen.hideAsync();
     }
-  }, [isReady, onboardingDone]);
+  }, [isHydrated, onboardingDone]);
 
   useEffect(() => {
     // Demander la permission notifications + configurer les canaux Android
@@ -104,54 +124,13 @@ function AppContent() {
   };
 
   // Écran de chargement pendant l'initialisation
-  if (!isReady || onboardingDone === null) {
+  if (!isHydrated || onboardingDone === null) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background, padding: 20 }}>
-        {!error && <ActivityIndicator size="large" color={Colors.tint} />}
-        {isMigrating && (
-          <Text style={{ marginTop: 16, color: Colors.text }}>
-            Migration des données...
-          </Text>
-        )}
-        {error && (
-          <>
-            <Text style={{ marginTop: 16, color: 'red', textAlign: 'center' }}>
-              Erreur: {error}
-            </Text>
-            <Text style={{ marginTop: 8, color: Colors.textMuted, fontSize: 12, textAlign: 'center' }}>
-              La base de données semble corrompue. Vider le cache peut résoudre le problème.
-            </Text>
-            <TouchableOpacity
-              style={{ marginTop: 20, backgroundColor: Colors.purple, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 }}
-              onPress={() => {
-                Alert.alert(
-                  'Vider le cache',
-                  'Cela supprimera toutes les données locales. Continuer?',
-                  [
-                    { text: 'Annuler', style: 'cancel' },
-                    { 
-                      text: 'Vider', 
-                      style: 'destructive',
-                      onPress: async () => {
-                        try {
-                          await AsyncStorage.clear();
-                          // Reload app
-                          if (typeof window !== 'undefined' && window.location) {
-                            window.location.reload();
-                          }
-                        } catch (e) {
-                          console.error('Erreur vidage cache:', e);
-                        }
-                      }
-                    },
-                  ]
-                );
-              }}
-            >
-              <Text style={{ color: 'white', fontWeight: '600' }}>Vider le cache</Text>
-            </TouchableOpacity>
-          </>
-        )}
+        <ActivityIndicator size="large" color={Colors.tint} />
+        <Text style={{ marginTop: 16, color: Colors.textMuted }}>
+          Chargement...
+        </Text>
       </View>
     );
   }
@@ -164,39 +143,49 @@ function AppContent() {
   );
 }
 
+/**
+ * Layout principal avec stores Zustand
+ * 
+ * Architecture:
+ * - WalletStore: Remplace WalletSeedProvider (SecureStore)
+ * - SettingsStore: Remplace AppSettingsProvider (AsyncStorage)
+ * - UIStore: Nouveau store pour la gestion UI
+ * 
+ * Providers restants à migrer:
+ * - BitcoinContext, NostrContext, GatewayContext, MessagesContext
+ * - BleProvider, UsbSerialProvider, etc.
+ */
 export default function RootLayout() {
   return (
     <ErrorBoundary>
-    <QueryClientProvider client={queryClient}>
-      <AppSettingsContext>
-        <WalletSeedContext>
-          <BitcoinContext>
-            <NostrContext>
-              <MessagingBusContext>
-                <TxRelayContext>
-                  <BleProvider>
-                    <UsbSerialProvider>
-                      <GatewayContext>
-                        <MessagesContext>
-                          <RadarProvider>
-                            <ShopProvider>
+      <QueryClientProvider client={queryClient}>
+        {/* Les stores Zustand sont initialisés automatiquement */}
+        {/* Pas besoin de Provider wrapper car Zustand crée des stores globaux */}
+        <BitcoinContext>
+          <NostrContext>
+            <MessagingBusContext>
+              <TxRelayContext>
+                <BleProvider>
+                  <UsbSerialProvider>
+                    <GatewayContext>
+                      <MessagesContext>
+                        <RadarProvider>
+                          <ShopProvider>
                             <GestureHandlerRootView style={{ flex: 1 }}>
                               <StatusBar style="light" />
                               <AppContent />
                             </GestureHandlerRootView>
-                            </ShopProvider>
-                          </RadarProvider>
-                        </MessagesContext>
-                      </GatewayContext>
-                    </UsbSerialProvider>
-                  </BleProvider>
-                </TxRelayContext>
-              </MessagingBusContext>
-            </NostrContext>
-          </BitcoinContext>
-        </WalletSeedContext>
-      </AppSettingsContext>
-    </QueryClientProvider>
+                          </ShopProvider>
+                        </RadarProvider>
+                      </MessagesContext>
+                    </GatewayContext>
+                  </UsbSerialProvider>
+                </BleProvider>
+              </TxRelayContext>
+            </MessagingBusContext>
+          </NostrContext>
+        </BitcoinContext>
+      </QueryClientProvider>
     </ErrorBoundary>
   );
 }

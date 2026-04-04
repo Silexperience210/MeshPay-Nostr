@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react'; // ✅ useMemo ajouté
 import { useMutation, useQuery } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
@@ -163,11 +163,24 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
     saveMutation.mutate(DEFAULT_SETTINGS);
   }, [saveMutation]);
 
-  const isInternetMode = settings.connectionMode === 'internet' || settings.connectionMode === 'bridge';
-  const isLoRaMode = settings.connectionMode === 'lora' || settings.connectionMode === 'bridge';
-  const isBridgeMode = settings.connectionMode === 'bridge';
+  // ✅ OPTIMISATION: useMemo pour les valeurs dérivées
+  const isInternetMode = useMemo(() => 
+    settings.connectionMode === 'internet' || settings.connectionMode === 'bridge',
+    [settings.connectionMode]
+  );
+  
+  const isLoRaMode = useMemo(() => 
+    settings.connectionMode === 'lora' || settings.connectionMode === 'bridge',
+    [settings.connectionMode]
+  );
+  
+  const isBridgeMode = useMemo(() => 
+    settings.connectionMode === 'bridge',
+    [settings.connectionMode]
+  );
 
-  return {
+  // ✅ OPTIMISATION: useMemo pour l'objet retourné
+  const value = useMemo(() => ({
     settings,
     updateSettings,
     getMempoolUrl,
@@ -179,5 +192,19 @@ export const [AppSettingsContext, useAppSettings] = createContextHook(() => {
     isBridgeMode,
     isLoading: loadQuery.isLoading,
     isSaving: saveMutation.isPending,
-  };
+  }), [
+    settings,
+    updateSettings,
+    getMempoolUrl,
+    getCashuMintUrl,
+    getActiveRelayUrls,
+    resetToDefaults,
+    isInternetMode,
+    isLoRaMode,
+    isBridgeMode,
+    loadQuery.isLoading,
+    saveMutation.isPending,
+  ]);
+
+  return value;
 });

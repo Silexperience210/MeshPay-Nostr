@@ -3,6 +3,7 @@
  * Remplace AsyncStorage pour une persistance robuste
  */
 import * as SQLite from 'expo-sqlite';
+import * as FileSystem from 'expo-file-system';
 
 // ✅ UTILITAIRE: Remplacer Buffer pour React Native
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -15,12 +16,22 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return Uint8Array.from(binary.split('').map(c => c.charCodeAt(0)));
 }
 
-// ✅ UTILITAIRE: Convertir les paramètres pour SQLite
+// ✅ UTILITAIRE: Convertir les paramètres pour SQLite avec validation stricte
 function toSQLiteParams(params: any[]): any[] {
-  return params.map(p => {
+  return params.map((p, index) => {
     if (p === null || p === undefined) return null;
     if (typeof p === 'boolean') return p ? 1 : 0;
-    if (typeof p === 'number') return Math.floor(p);
+    if (typeof p === 'number') {
+      // ✅ CORRECTION: Validation et warning pour les nombres
+      if (!Number.isFinite(p)) {
+        console.warn(`[DB] Paramètre ${index} est un nombre invalide:`, p);
+        return null;
+      }
+      if (!Number.isInteger(p)) {
+        console.warn(`[DB] Paramètre ${index} (${p}) sera tronqué en entier`);
+      }
+      return Math.floor(p);
+    }
     if (typeof p === 'string') return p;
     if (p instanceof Uint8Array) return uint8ArrayToBase64(p);
     // ✅ CORRECTION: Convertir les objets en JSON string
@@ -164,10 +175,45 @@ export async function saveMessageAndUpdateConversation(
 }
 
 /**
- * Reset la base de données en cas de corruption
+ * Crée un backup de la base de données avant reset
+ */
+async function createDatabaseBackup(): Promise<string | null> {
+  try {
+    const timestamp = Date.now();
+    const backupPath = `${FileSystem.documentDirectory}bitmesh_backup_${timestamp}.db`;
+    const dbPath = `${FileSystem.documentDirectory}bitmesh.db`;
+    
+    // Vérifier si le fichier existe
+    const fileInfo = await FileSystem.getInfoAsync(dbPath);
+    if (!fileInfo.exists) {
+      console.log('[Database] Pas de base à sauvegarder');
+      return null;
+    }
+    
+    await FileSystem.copyAsync({
+      from: dbPath,
+      to: backupPath
+    });
+    
+    console.log('[Database] Backup créé:', backupPath);
+    return backupPath;
+  } catch (error) {
+    console.error('[Database] Erreur backup:', error);
+    return null;
+  }
+}
+
+/**
+ * Reset la base de données en cas de corruption avec backup préalable
  */
 export async function resetDatabase(): Promise<void> {
   try {
+    // ✅ CORRECTION: Créer un backup avant suppression
+    const backupPath = await createDatabaseBackup();
+    if (backupPath) {
+      console.log('[Database] Backup créé avant reset:', backupPath);
+    }
+    
     if (db) {
       await db.closeAsync();
       db = null;
@@ -258,6 +304,9 @@ async function initDatabase(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversationId, timestamp ASC);
     CREATE INDEX IF NOT EXISTS idx_msg_status ON messages(status) WHERE status IN ('pending', 'sending');
+    -- ✅ CORRECTION: Index manquants pour performances
+    CREATE INDEX IF NOT EXISTS idx_msg_timestamp ON messages(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_msg_from ON messages(fromNodeId);
   `);
   console.log('[Database] Table messages OK');
 
@@ -337,6 +386,8 @@ async function initDatabase(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_cashu_state ON cashu_tokens(state) WHERE state IN ('unspent', 'unverified');
     CREATE INDEX IF NOT EXISTS idx_cashu_mint ON cashu_tokens(mintUrl);
+    -- ✅ CORRECTION: Index manquant pour ordre chronologique
+    CREATE INDEX IF NOT EXISTS idx_cashu_received ON cashu_tokens(receivedAt DESC);
   `);
   console.log('[Database] Table cashu_tokens OK');
 
@@ -354,14 +405,26 @@ async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_contacts_sort ON contacts(isFavorite DESC, displayName ASC);
   `);
 
-  // Migration: ajouter colonnes audio aux messages existants (silencieux si déjà présentes)
-  try { await db.execAsync('ALTER TABLE messages ADD COLUMN audioData TEXT'); } catch {}
-  try { await db.execAsync('ALTER TABLE messages ADD COLUMN audioDuration INTEGER DEFAULT 0'); } catch {}
-  // Migration: colonnes image/gif
-  try { await db.execAsync('ALTER TABLE messages ADD COLUMN imageData TEXT'); } catch {}
-  try { await db.execAsync('ALTER TABLE messages ADD COLUMN imageMime TEXT'); } catch {}
-  // Migration: colonne transport (Nostr/LoRa/BLE)
-  try { await db.execAsync('ALTER TABLE messages ADD COLUMN transport TEXT'); } catch {}
+  // ✅ CORRECTION: Migrations inline dans une transaction
+  await db.execAsync(`
+    BEGIN TRANSACTION;
+    
+    -- Migration: ajouter colonnes audio aux messages existants
+    ALTER TABLE messages ADD COLUMN audioData TEXT;
+    ALTER TABLE messages ADD COLUMN audioDuration INTEGER DEFAULT 0;
+    
+    -- Migration: colonnes image/gif
+    ALTER TABLE messages ADD COLUMN imageData TEXT;
+    ALTER TABLE messages ADD COLUMN imageMime TEXT;
+    
+    -- Migration: colonne transport (Nostr/LoRa/BLE)
+    ALTER TABLE messages ADD COLUMN transport TEXT;
+    
+    COMMIT;
+  `).catch(() => {
+    // Ignorer les erreurs si les colonnes existent déjà
+    console.log('[Database] Colonnes migrations déjà présentes ou erreur');
+  });
 
   console.log('[Database] Tables initialisées');
 
@@ -1042,39 +1105,73 @@ export async function exportCashuTokens(): Promise<DBCashuToken[]> {
   }
 }
 
-// ✅ NOUVEAU : Import tokens (restore)
+// ✅ CORRECTION: Import tokens avec batch insert optimisé
 export async function importCashuTokens(tokens: DBCashuToken[]): Promise<number> {
   const database = await getDatabase();
   let imported = 0;
   
-  for (const token of tokens) {
-    try {
-      await database.runAsync(`
-        INSERT OR IGNORE INTO cashu_tokens 
-        (id, mintUrl, amount, token, proofs, keysetId, receivedAt, state, spentAt, source, memo, unverified, retryCount, lastCheckAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, toSQLiteParams([
-        token.id,
-        token.mintUrl,
-        token.amount,
-        token.token,
-        token.proofs,
-        token.keysetId || null,
-        token.receivedAt,
-        token.state || 'unspent',
-        token.spentAt || null,
-        token.source || null,
-        token.memo || null,
-        token.unverified ? 1 : 0,
-        token.retryCount || 0,
-        token.lastCheckAt || null,
-      ]));
-      imported++;
-    } catch (err) {
-      console.log('[Database] Erreur import token:', token.id, err);
+  // ✅ CORRECTION: Utiliser une transaction et batch insert
+  await withTransaction(async (db) => {
+    const BATCH_SIZE = 100;
+    
+    for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
+      const batch = tokens.slice(i, i + BATCH_SIZE);
+      
+      // Construire une requête INSERT multiple
+      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const params: any[] = [];
+      
+      for (const token of batch) {
+        params.push(
+          token.id,
+          token.mintUrl,
+          token.amount,
+          token.token,
+          token.proofs,
+          token.keysetId || null,
+          token.receivedAt,
+          token.state || 'unspent',
+          token.spentAt || null,
+          token.source || null,
+          token.memo || null,
+          token.unverified ? 1 : 0,
+          token.retryCount || 0,
+          token.lastCheckAt || null
+        );
+      }
+      
+      try {
+        await db.runAsync(`
+          INSERT OR IGNORE INTO cashu_tokens 
+          (id, mintUrl, amount, token, proofs, keysetId, receivedAt, state, spentAt, source, memo, unverified, retryCount, lastCheckAt)
+          VALUES ${placeholders}
+        `, toSQLiteParams(params));
+        imported += batch.length;
+      } catch (err) {
+        console.error('[DB] Erreur batch import tokens:', err);
+        // Fallback: insertion individuelle pour ce batch
+        for (const token of batch) {
+          try {
+            await db.runAsync(`
+              INSERT OR IGNORE INTO cashu_tokens 
+              (id, mintUrl, amount, token, proofs, keysetId, receivedAt, state, spentAt, source, memo, unverified, retryCount, lastCheckAt)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, toSQLiteParams([
+              token.id, token.mintUrl, token.amount, token.token, token.proofs,
+              token.keysetId || null, token.receivedAt, token.state || 'unspent',
+              token.spentAt || null, token.source || null, token.memo || null,
+              token.unverified ? 1 : 0, token.retryCount || 0, token.lastCheckAt || null
+            ]));
+            imported++;
+          } catch (err) {
+            console.log('[Database] Erreur import token:', token.id, err);
+          }
+        }
+      }
     }
-  }
+  });
   
+  console.log(`[DB] ${imported} tokens importés sur ${tokens.length}`);
   return imported;
 }
 
@@ -1237,8 +1334,11 @@ export async function migrateFromAsyncStorage(): Promise<void> {
   try {
     const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
     
+    // ✅ CORRECTION: Clé de migration unifiée avec MigrationService
+    const MIGRATION_KEY = 'migration_v1_completed';
+    
     // Vérifier si migration déjà faite
-    const migrationDone = await AsyncStorage.getItem('meshcore_migration_done');
+    const migrationDone = await AsyncStorage.getItem(MIGRATION_KEY);
     if (migrationDone === 'true') {
       console.log('[Database] Migration déjà effectuée');
       return;
@@ -1252,72 +1352,91 @@ export async function migrateFromAsyncStorage(): Promise<void> {
     
     if (hasConversations) {
       console.log('[Database] Données SQLite existantes, pas de migration nécessaire');
-      await AsyncStorage.setItem('meshcore_migration_done', 'true');
+      await AsyncStorage.setItem(MIGRATION_KEY, 'true');
       return;
     }
     
-    // Migrer les conversations
-    const convsJson = await AsyncStorage.getItem('meshcore_conversations');
-    if (convsJson) {
-      const conversations = JSON.parse(convsJson);
-      console.log(`[Database] Migration de ${conversations.length} conversations...`);
-      
-      for (const conv of conversations) {
-        // ✅ CORRECTION: Utiliser toSQLiteParams pour conversion des types
-        const params = toSQLiteParams([
-          String(conv.id),
-          String(conv.name),
-          conv.isForum ? 1 : 0,
-          conv.peerPubkey || null,
-          conv.lastMessage || '',
-          Math.floor(Number(conv.lastMessageTime || Date.now())),
-          Math.floor(Number(conv.unreadCount || 0)),
-          conv.online ? 1 : 0
-        ]);
+    // ✅ CORRECTION: Migration avec batch insert dans une transaction
+    await withTransaction(async (database) => {
+      // Migrer les conversations
+      const convsJson = await AsyncStorage.getItem('meshcore_conversations');
+      if (convsJson) {
+        const conversations = JSON.parse(convsJson);
+        console.log(`[Database] Migration de ${conversations.length} conversations...`);
         
-        await db.runAsync(
-          `INSERT OR IGNORE INTO conversations 
-           (id, name, isForum, peerPubkey, lastMessage, lastMessageTime, unreadCount, online)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          params
-        );
+        if (conversations.length > 0) {
+          // Batch insert pour conversations
+          const placeholders = conversations.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const params: any[] = [];
+          
+          for (const conv of conversations) {
+            params.push(
+              String(conv.id),
+              String(conv.name),
+              conv.isForum ? 1 : 0,
+              conv.peerPubkey || null,
+              conv.lastMessage || '',
+              Math.floor(Number(conv.lastMessageTime || Date.now())),
+              Math.floor(Number(conv.unreadCount || 0)),
+              conv.online ? 1 : 0
+            );
+          }
+          
+          await database.runAsync(
+            `INSERT OR IGNORE INTO conversations 
+             (id, name, isForum, peerPubkey, lastMessage, lastMessageTime, unreadCount, online)
+             VALUES ${placeholders}`,
+            toSQLiteParams(params)
+          );
+        }
+        console.log('[Database] Conversations migrées');
       }
-      console.log('[Database] Conversations migrées');
-    }
-    
-    // Migrer les messages
-    const messagesJson = await AsyncStorage.getItem('meshcore_messages');
-    if (messagesJson) {
-      const messages = JSON.parse(messagesJson);
-      console.log(`[Database] Migration de ${messages.length} messages...`);
       
-      for (const msg of messages) {
-        // ✅ CORRECTION: Utiliser toSQLiteParams pour conversion des types
-        const params = toSQLiteParams([
-          String(msg.id),
-          String(msg.conversationId),
-          String(msg.from),
-          msg.fromPubkey || null,
-          String(msg.text),
-          String(msg.type),
-          Math.floor(Number(msg.timestamp)),
-          msg.isMine ? 1 : 0,
-          String(msg.status),
-          msg.cashuAmount || null,
-          msg.cashuToken || null
-        ]);
+      // Migrer les messages
+      const messagesJson = await AsyncStorage.getItem('meshcore_messages');
+      if (messagesJson) {
+        const messages = JSON.parse(messagesJson);
+        console.log(`[Database] Migration de ${messages.length} messages...`);
         
-        await db.runAsync(
-          `INSERT OR IGNORE INTO messages 
-           (id, conversationId, fromNodeId, fromPubkey, text, type, timestamp, isMine, status, cashuAmount, cashuToken)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          params
-        );
+        if (messages.length > 0) {
+          const BATCH_SIZE = 100;
+          
+          for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+            const batch = messages.slice(i, i + BATCH_SIZE);
+            const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const params: any[] = [];
+            
+            for (const msg of batch) {
+              params.push(
+                String(msg.id),
+                String(msg.conversationId),
+                String(msg.from),
+                msg.fromPubkey || null,
+                String(msg.text),
+                String(msg.type),
+                Math.floor(Number(msg.timestamp)),
+                msg.isMine ? 1 : 0,
+                String(msg.status),
+                msg.cashuAmount || null,
+                msg.cashuToken || null
+              );
+            }
+            
+            await database.runAsync(
+              `INSERT OR IGNORE INTO messages 
+               (id, conversationId, fromNodeId, fromPubkey, text, type, timestamp, isMine, status, cashuAmount, cashuToken)
+               VALUES ${placeholders}`,
+              toSQLiteParams(params)
+            );
+          }
+        }
+        console.log('[Database] Messages migrés');
       }
-      console.log('[Database] Messages migrés');
-    }
+    });
     
-    // Marquer la migration comme terminée
+    // Marquer la migration comme terminée dans les deux systèmes
+    await AsyncStorage.setItem(MIGRATION_KEY, 'true');
+    // ✅ CORRECTION: Marquer aussi l'ancienne clé pour compatibilité
     await AsyncStorage.setItem('meshcore_migration_done', 'true');
     console.log('[Database] Migration terminée avec succès');
     

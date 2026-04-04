@@ -131,7 +131,10 @@ class AckService {
       if (now - pending.timestamp > maxAge) {
         clearTimeout(pending.timeout);
         this.pendingAcks.delete(msgId);
-        updateMessageStatusDB(msgId, 'failed');
+        // ✅ FIX: Gérer l'erreur de updateMessageStatusDB (Promise non await)
+        updateMessageStatusDB(msgId, 'failed').catch(err => {
+          console.error('[AckService] Erreur mise à jour statut cleanup:', err);
+        });
       }
     }
   }

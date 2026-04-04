@@ -319,7 +319,7 @@ function AudioBubble({ audioData, audioDuration, isMe }: { audioData?: string; a
   );
 }
 
-function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; imageMime?: string; isMe: boolean }) {
+const ImageBubble = React.memo(function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; imageMime?: string; isMe: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState(false);
   if (!imageData) return null;
@@ -363,7 +363,7 @@ function ImageBubble({ imageData, imageMime, isMe }: { imageData?: string; image
       </Modal>
     </>
   );
-}
+});
 
 const MessageBubble = React.memo(function MessageBubble({ message, displayName, onLongPress, onCashuPress, onSenderTap, reactions, onReactionPress }: {
   message: StoredMessage;
@@ -721,7 +721,7 @@ export default function ChatScreen() {
     } finally {
       setIsSending(false);
     }
-  }, [inputText, isSending, convId, sendMessage, replyTo, contactNameMap]);
+  }, [inputText, isSending, convId, sendMessage, replyTo, contactNameMap]); // ✅ Dépendances complètes
 
   const router = useRouter();
 
@@ -737,7 +737,7 @@ export default function ChatScreen() {
         { text: 'Aller au wallet', onPress: () => router.push('/(tabs)/wallet') },
       ]
     );
-  }, [router]);
+  }, [router]); // ✅ Dépendance router stable
 
   const handleReclaimToken = useCallback(async (item: StoredMessage) => {
     if (!item.cashuToken) return;
@@ -857,7 +857,7 @@ export default function ChatScreen() {
       const msg = err instanceof Error ? err.message : 'Erreur';
       Alert.alert('Erreur', msg);
     }
-  }, [isRecording, isSendingMedia, convId, sendImage]);
+  }, [isRecording, isSendingMedia, convId, sendImage]); // ✅ Dépendances complètes
 
   const handleMicPressOut = useCallback(async (sendIt = true) => {
     if (!recordingRef.current) return;
@@ -879,7 +879,7 @@ export default function ChatScreen() {
       const msg = err instanceof Error ? err.message : 'Erreur envoi audio';
       setError(msg);
     }
-  }, [convId, sendAudio]);
+  }, [convId, sendAudio]); // ✅ Dépendances complètes
 
   const handleMicPressIn = useCallback(async () => {
     const granted = await requestAudioPermissions();
@@ -903,7 +903,7 @@ export default function ChatScreen() {
     } catch {
       Alert.alert('Erreur', 'Impossible de démarrer l\'enregistrement.');
     }
-  }, [handleMicPressOut]);
+  }, [handleMicPressOut]); // ✅ Dépendance stable
 
   // Ref pour que renderMessage accède aux reactions sans les avoir dans ses deps
   // (évite de recréer renderMessage — et donc re-rendre tous les items — à chaque reaction)
@@ -937,43 +937,52 @@ export default function ChatScreen() {
 
   const convName = conv?.name ?? convId;
 
+  // ✅ OPTIMISATION: useMemo pour éviter les recalculs à chaque render
+  const headerTitleComponent = useMemo(() => {
+    const transportLabel = ble.loraActive
+      ? (nostrConnected ? 'LoRa+Nostr' : 'LoRa')
+      : ble.connected ? 'BLE (pas de relay)'
+      : nostrConnected ? 'Nostr' : 'Offline';
+    const transportColor = ble.loraActive ? Colors.cyan
+      : ble.connected ? Colors.yellow
+      : nostrConnected ? Colors.green : Colors.textMuted;
+    const TransportIcon = ble.loraActive || ble.connected ? Radio : Globe;
+
+    return (
+      <View style={styles.headerTitle}>
+        <View style={styles.headerNameRow}>
+          {isForum ? <Hash size={14} color={Colors.cyan} /> : <Lock size={12} color={Colors.accent} />}
+          <Text style={styles.headerName}>{convName}</Text>
+        </View>
+        <View style={styles.headerMeta}>
+          <TransportIcon size={10} color={transportColor} />
+          <Text style={[styles.headerTransport, { color: transportColor }]}>{transportLabel}</Text>
+          <Text style={styles.headerNodeId}> • {convId.slice(0, 15)}</Text>
+        </View>
+      </View>
+    );
+  }, [ble.loraActive, ble.connected, nostrConnected, convName, isForum, convId]);
+
+  // ✅ OPTIMISATION: headerRight mémorisé
+  const headerRightComponent = useMemo(() => {
+    if (isForum) return null;
+    return (
+      <TouchableOpacity
+        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowTipModal(true); }}
+        style={{ paddingHorizontal: 12, paddingVertical: 8 }}
+        activeOpacity={0.7}
+      >
+        <Zap size={20} color={Colors.yellow} />
+      </TouchableOpacity>
+    );
+  }, [isForum]);
+
   return (
     <>
       <Stack.Screen
         options={{
-          headerRight: () => !isForum ? (
-            <TouchableOpacity
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowTipModal(true); }}
-              style={{ paddingHorizontal: 12, paddingVertical: 8 }}
-              activeOpacity={0.7}
-            >
-              <Zap size={20} color={Colors.yellow} />
-            </TouchableOpacity>
-          ) : null,
-          headerTitle: () => {
-            const transportLabel = ble.loraActive
-              ? (nostrConnected ? 'LoRa+Nostr' : 'LoRa')
-              : ble.connected ? 'BLE (pas de relay)'
-              : nostrConnected ? 'Nostr' : 'Offline';
-            const transportColor = ble.loraActive ? Colors.cyan
-              : ble.connected ? Colors.yellow
-              : nostrConnected ? Colors.green : Colors.textMuted;
-            const TransportIcon = ble.loraActive || ble.connected ? Radio : Globe;
-
-            return (
-              <View style={styles.headerTitle}>
-                <View style={styles.headerNameRow}>
-                  {isForum ? <Hash size={14} color={Colors.cyan} /> : <Lock size={12} color={Colors.accent} />}
-                  <Text style={styles.headerName}>{convName}</Text>
-                </View>
-                <View style={styles.headerMeta}>
-                  <TransportIcon size={10} color={transportColor} />
-                  <Text style={[styles.headerTransport, { color: transportColor }]}>{transportLabel}</Text>
-                  <Text style={styles.headerNodeId}> • {convId.slice(0, 15)}</Text>
-                </View>
-              </View>
-            );
-          },
+          headerRight: () => headerRightComponent,
+          headerTitle: () => headerTitleComponent,
         }}
       />
       <KeyboardAvoidingView
@@ -1009,11 +1018,16 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          windowSize={8}
-          initialNumToRender={12}
-          maxToRenderPerBatch={8}
+          windowSize={5}
+          initialNumToRender={10}
+          maxToRenderPerBatch={5}
           updateCellsBatchingPeriod={50}
           removeClippedSubviews={true}
+          getItemLayout={(data, index) => ({
+            length: 80, // Hauteur estimée d'un message
+            offset: 80 * index,
+            index,
+          })}
           // NOTE: extraData={reactions} retiré car utilise une ref dans renderMessage
           // Cela évite le re-render de tous les messages à chaque changement de réaction
           ListEmptyComponent={emptyChatComponent}

@@ -135,8 +135,13 @@ export class MessagingBus {
   /** Clé publique Nostr hex de l'utilisateur (pour s'abonner aux DMs entrants) */
   private localNostrPubkey: string = '';
 
+  /** Ref pour les handlers à jour - évite le stale closure problem */
+  private handlersRef: { current: Set<BusMessageHandler> } = { current: this.handlers };
+
   constructor(nostrClientInstance: NostrClient = defaultNostrClient) {
     this.nostr = nostrClientInstance;
+    // Synchroniser la ref avec le Set réel
+    this.handlersRef.current = this.handlers;
   }
 
   // ── Configuration ───────────────────────────────────────────────────────────
@@ -235,6 +240,8 @@ export class MessagingBus {
    */
   subscribe(handler: BusMessageHandler): () => void {
     this.handlers.add(handler);
+    // Mettre à jour la ref pour que les closures aient toujours la dernière version
+    this.handlersRef.current = this.handlers;
 
     // Démarrer les listeners si c'est le premier subscriber
     if (this.handlers.size === 1) {
@@ -243,6 +250,8 @@ export class MessagingBus {
 
     return () => {
       this.handlers.delete(handler);
+      // Mettre à jour la ref après suppression
+      this.handlersRef.current = this.handlers;
       if (this.handlers.size === 0) {
         this._stopListeners();
       }
@@ -356,7 +365,7 @@ export class MessagingBus {
     }
   }
 
-  /** Dispatch avec déduplication */
+  /** Dispatch avec déduplication - utilise la ref pour éviter les stale handlers */
   private _dispatch(message: BusMessage): void {
     if (this.dedup.has(message.id)) {
       console.log('[Bus] Doublon ignoré (id:', message.id.slice(0, 12) + '…)');
@@ -364,7 +373,9 @@ export class MessagingBus {
     }
     this.dedup.add(message.id);
 
-    for (const handler of this.handlers) {
+    // Utiliser la ref pour garantir l'accès aux handlers les plus récents
+    const currentHandlers = this.handlersRef.current;
+    for (const handler of currentHandlers) {
       try {
         handler(message);
       } catch (err) {

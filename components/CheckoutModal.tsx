@@ -8,7 +8,7 @@
  *  4. LoRa Cashu Offline  → encode token → BLE sendChannelMessage → vendeur reçoit offline
  *  5. DM Flow (fallback)  → envoie commande → vendeur répond avec invoice/adresse
  */
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react'; // ✅ useMemo ajouté
 import {
   Modal,
   View,
@@ -113,7 +113,7 @@ function selectCashuTokens(
   return null;
 }
 
-export default function CheckoutModal({
+function CheckoutModalComponent({
   visible,
   product,
   shippingZones = [],
@@ -137,6 +137,9 @@ export default function CheckoutModal({
     shippingZones.length > 0 ? shippingZones[0] : null,
   );
   const shippingSats = selectedZone?.costSats ?? 0;
+  
+  // ✅ OPTIMISATION: useMemo pour les calculs coûteux
+  const totalSats = useMemo(() => (product?.priceSats ?? 0) + shippingSats, [product?.priceSats, shippingSats]);
 
   // Cashu wallet
   const [cashuBalance, setCashuBalance] = useState(0);
@@ -149,23 +152,26 @@ export default function CheckoutModal({
     }
   }, [visible, step]);
 
-  const totalSats = (product?.priceSats ?? 0) + shippingSats;
+  // ✅ totalSats est maintenant calculé avec useMemo ci-dessus
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const handleClose = useCallback(() => {
     setStep('delivery');
     setLoading(false);
     onClose();
-  }, [onClose]);
+  }, [onClose]); // ✅ Dépendance stable
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const validateDelivery = useCallback(() => {
     if (!delivery.name.trim()) { Alert.alert('Champ manquant', 'Entrez votre nom'); return false; }
     if (!delivery.address.trim()) { Alert.alert('Champ manquant', 'Entrez votre adresse'); return false; }
     if (!delivery.city.trim()) { Alert.alert('Champ manquant', 'Entrez votre ville'); return false; }
     if (!delivery.postalCode.trim()) { Alert.alert('Champ manquant', 'Entrez votre code postal'); return false; }
     return true;
-  }, [delivery]);
+  }, [delivery]); // ✅ Dépendance complète
 
   // ── Cashu direct ───────────────────────────────────────────────────────────
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const handleCashuDirect = useCallback(async () => {
     if (!product) return;
     setLoading(true);
@@ -205,7 +211,7 @@ export default function CheckoutModal({
     } finally {
       setLoading(false);
     }
-  }, [product, cashuTokens, cashuBalance, totalSats, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]);
+  }, [product, cashuTokens, cashuBalance, totalSats, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]); // ✅ Toutes les dépendances
 
   // ── Lightning via Cashu Melt (autonome — LNURL-pay → invoice → meltTokens) ─
   // Le buyer n'attend PAS la réponse du vendeur : le mint paie l'invoice directement.
@@ -249,7 +255,7 @@ export default function CheckoutModal({
     } finally {
       setLoading(false);
     }
-  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]);
+  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, handleClose, onOrderPlaced, settings.defaultCashuMint]); // ✅ Toutes les dépendances
 
   // ── LoRa Cashu Offline (BLE gateway requis — zéro internet) ─────────────────
   // Encode le token Cashu et l'envoie via le mesh LoRa local.
@@ -289,7 +295,7 @@ export default function CheckoutModal({
     } finally {
       setLoading(false);
     }
-  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, ble, handleClose, onOrderPlaced, settings.defaultCashuMint]);
+  }, [product, totalSats, cashuTokens, cashuBalance, delivery, shippingSats, placeOrder, ble, handleClose, onOrderPlaced, settings.defaultCashuMint]); // ✅ Toutes les dépendances
 
   // ── On-chain direct (si vendeur a publié son adresse) ──────────────────────
   const handleOnchainDirect = useCallback(async (sellerAddress: string) => {
@@ -306,7 +312,7 @@ export default function CheckoutModal({
     } finally {
       setLoading(false);
     }
-  }, [product, totalSats, delivery, shippingSats, sendBitcoin, feeEstimates, placeOrder, handleClose, onOrderPlaced]);
+  }, [product, totalSats, delivery, shippingSats, sendBitcoin, feeEstimates, placeOrder, handleClose, onOrderPlaced]); // ✅ Toutes les dépendances
 
   // ── DM flow (Lightning + on-chain sans adresse) ────────────────────────────
   const handleDMFlow = useCallback(async () => {
@@ -321,11 +327,15 @@ export default function CheckoutModal({
     } finally {
       setLoading(false);
     }
-  }, [product, delivery, paymentMethod, shippingSats, placeOrder, handleClose, onOrderPlaced]);
+  }, [product, delivery, paymentMethod, shippingSats, placeOrder, handleClose, onOrderPlaced]); // ✅ Toutes les dépendances
 
   if (!product) return null;
 
-  const cashuSelection = cashuTokens.length ? selectCashuTokens(cashuTokens, totalSats) : null;
+  // ✅ OPTIMISATION: useMemo pour éviter les recalculs
+  const cashuSelection = useMemo(() => 
+    cashuTokens.length ? selectCashuTokens(cashuTokens, totalSats) : null,
+    [cashuTokens, totalSats]
+  );
   const hasEnoughCashu = cashuSelection !== null;
   const sellerBtcAddress = product.sellerBitcoinAddress;
   const sellerLnAddress = product.sellerLightningAddress;
@@ -750,6 +760,10 @@ export default function CheckoutModal({
     </Modal>
   );
 }
+
+// ✅ OPTIMISATION: React.memo pour éviter les re-renders inutiles
+const CheckoutModal = React.memo(CheckoutModalComponent);
+export default CheckoutModal;
 
 function Field({ label, value, onChangeText, placeholder, multiline, keyboardType }: {
   label: string; value: string; onChangeText: (v: string) => void;

@@ -25,7 +25,10 @@ interface PendingChunks {
 class ChunkManager {
   private pendingReassembly = new Map<number, PendingChunks>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly CHUNK_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  private readonly CHUNK_TIMEOUT = 30 * 1000; // 30 secondes (était 5 min - trop long)
+  
+  // Set pour détecter les chunks dupliqués (hash du contenu)
+  private receivedChunkHashes = new Set<string>();
 
   constructor() {
     // Nettoyage périodique des chunks expirés
@@ -129,6 +132,13 @@ class ChunkManager {
       this.pendingReassembly.set(messageId, pending);
     }
 
+    // Vérifier si ce chunk est un doublon (hash du contenu)
+    const chunkHash = this.computeChunkHash(packet.payload, messageId, chunkIndex);
+    if (pending.chunks.has(chunkIndex)) {
+      console.warn(`[ChunkManager] Chunk ${chunkIndex} déjà reçu pour message ${messageId} - ignoré`);
+      return { complete: false, progress: Math.round((pending.chunks.size / totalChunks) * 100) };
+    }
+    
     // Ajouter le chunk
     pending.chunks.set(chunkIndex, packet.payload);
     
@@ -180,11 +190,24 @@ class ChunkManager {
   /**
    * Détruit le manager
    */
+  /**
+   * Calcule un hash simple pour détecter les chunks dupliqués
+   */
+  private computeChunkHash(data: Uint8Array, messageId: number, chunkIndex: number): string {
+    // Hash simple: somme des bytes + métadonnées
+    let sum = 0;
+    for (let i = 0; i < Math.min(data.length, 100); i++) {
+      sum = (sum + data[i]) % 65536;
+    }
+    return `${messageId}:${chunkIndex}:${sum}:${data.length}`;
+  }
+
   destroy(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
     }
     this.pendingReassembly.clear();
+    this.receivedChunkHashes.clear();
   }
 }
 

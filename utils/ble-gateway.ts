@@ -234,6 +234,9 @@ export class BleGatewayClient {
   private pendingPackets: MeshCorePacket[] = [];
   private readonly PENDING_PACKETS_MAX = 50; // limite anti-fuite mémoire
 
+  // MTU négocié avec le device (utilisé pour le chunking BLE)
+  private negotiatedMtu = BLE_MAX_WRITE;
+
   // Gestion canaux
   private channelConfigs: Map<number, ChannelConfig> = new Map();
 
@@ -348,8 +351,14 @@ export class BleGatewayClient {
     this.awaitingSelfInfo = false;
     this.canWriteWithoutResponse = false;
     this.channelConfigs.clear();
+    this.negotiatedMtu = BLE_MAX_WRITE;
 
     console.log(`[BleGateway] Connexion à ${deviceId}...`);
+    
+    // Écouteurs temporaires à nettoyer en cas d'erreur
+    let notifListener: BleSubscription | null = null;
+    let discListener: BleSubscription | null = null;
+    
     try {
 
     // ── 1. Connexion BLE ──
@@ -360,9 +369,11 @@ export class BleGatewayClient {
     // ── 2. MTU 185 (meshcore-open standard) ──
     try {
       const mtu = await BleManager.requestMTU(deviceId, 185);
-      console.log(`[BleGateway] MTU négocié : ${mtu}`);
+      this.negotiatedMtu = Math.min(mtu - 3, BLE_MAX_WRITE); // ATT overhead = 3 bytes
+      console.log(`[BleGateway] MTU négocié : ${mtu}, utilisable : ${this.negotiatedMtu}`);
     } catch {
-      console.log('[BleGateway] MTU request ignoré');
+      this.negotiatedMtu = BLE_MAX_WRITE;
+      console.log('[BleGateway] MTU request ignoré, utilisation défaut:', this.negotiatedMtu);
     }
 
     // ── 3. Découverte services — vérifier NUS présent (deux formats) ──
@@ -411,7 +422,7 @@ export class BleGatewayClient {
     }
 
     // Écouter les trames entrantes
-    const notifListener = this.emitter.addListener(
+    notifListener = this.emitter.addListener(
       'BleManagerDidUpdateValueForCharacteristic',
       (data: any) => {
         if (data.peripheral !== deviceId) return;
@@ -422,9 +433,10 @@ export class BleGatewayClient {
       }
     );
     this.listeners.push(notifListener);
+    notifListener = null; // Transféré au tableau listeners
 
     // Écouter déconnexion
-    const discListener = this.emitter.addListener(
+    discListener = this.emitter.addListener(
       'BleManagerDisconnectPeripheral',
       (data: any) => {
         if (data.peripheral !== deviceId) return;
@@ -435,6 +447,7 @@ export class BleGatewayClient {
       }
     );
     this.listeners.push(discListener);
+    discListener = null; // Transféré au tableau listeners
 
     // ── 6. Handshake MeshCore ──
     this.awaitingSelfInfo = true;
@@ -471,6 +484,11 @@ export class BleGatewayClient {
     this.sendSelfAdvert(1).catch((e) => console.warn('[BleGateway] sendSelfAdvert:', e));
 
     console.log('[BleGateway] Handshake terminé');
+    } catch (error) {
+      // Nettoyer les listeners temporaires en cas d'erreur
+      notifListener?.remove();
+      discListener?.remove();
+      throw error;
     } finally {
       this.isConnecting = false;
     }
@@ -1531,15 +1549,18 @@ export class BleGatewayClient {
     frame[0] = cmd;
     frame.set(payload, 1);
 
-    for (let offset = 0; offset < frame.length; offset += BLE_MAX_WRITE) {
-      const chunk = Array.from(frame.slice(offset, offset + BLE_MAX_WRITE));
+    // Utiliser le MTU négocié ou la valeur par défaut
+    const chunkSize = this.negotiatedMtu;
+
+    for (let offset = 0; offset < frame.length; offset += chunkSize) {
+      const chunk = Array.from(frame.slice(offset, offset + chunkSize));
       if (this.canWriteWithoutResponse) {
         await BleManager.writeWithoutResponse(
-          this.connectedId, SERVICE_UUID, TX_UUID, chunk, BLE_MAX_WRITE
+          this.connectedId, SERVICE_UUID, TX_UUID, chunk, chunkSize
         );
       } else {
         await BleManager.write(
-          this.connectedId, SERVICE_UUID, TX_UUID, chunk, BLE_MAX_WRITE
+          this.connectedId, SERVICE_UUID, TX_UUID, chunk, chunkSize
         );
       }
     }
@@ -1553,4 +1574,23 @@ let _instance: BleGatewayClient | null = null;
 export function getBleGatewayClient(): BleGatewayClient {
   if (!_instance) _instance = new BleGatewayClient();
   return _instance;
+}
+
+/**
+ * Réinitialise le singleton BleGatewayClient
+ * À appeler lors du logout ou pour forcer une reconnexion propre
+ */
+export function resetBleGatewayClient(): void {
+  if (_instance) {
+    _instance.disconnect().catch(() => {});
+    _instance = null;
+  }
+}
+
+/**
+ * Crée une nouvelle instance du client (sans affecter le singleton global)
+ * Utile pour les tests ou scénarios multi-device
+ */
+export function createBleGatewayClient(): BleGatewayClient {
+  return new BleGatewayClient();
 }

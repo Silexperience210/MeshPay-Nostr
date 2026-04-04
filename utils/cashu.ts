@@ -3,6 +3,12 @@ import { sha256 } from '@noble/hashes/sha2.js';
 // @ts-ignore - subpath exports use .js extension
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
+import { logger } from '@/utils/logger';
+
+// ─── Configuration de validation ──────────────────────────────────────────────
+const DLEQ_REQUIRED = true; // DLEQ requis par défaut (NUT-12)
+const MAX_PROOFS_PER_TOKEN = 100; // Limite anti-DoS
+const MIN_DUST_AMOUNT = 1; // Minimum 1 satoshi par proof
 
 export interface CashuMintInfo {
   name: string;
@@ -41,7 +47,9 @@ export function isMintQuotePaid(quote: CashuMintQuote): boolean {
 }
 
 const mintInfoCache: Map<string, { info: CashuMintInfo; timestamp: number }> = new Map();
+const keysetCache: Map<string, { keysets: CashuKeysetInfo[]; timestamp: number }> = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
+const KEYSET_CACHE_TTL = 10 * 60 * 1000;
 
 // ─── Mint whitelist ───────────────────────────────────────────────────────────
 //
@@ -220,11 +228,25 @@ export function splitAmountIntoPowerOfTwo(amount: number): number[] {
   return amounts.sort((a, b) => a - b);
 }
 
+/**
+ * Vérifie la preuve DLEQ (NUT-12).
+ * @param proof - Le proof à vérifier
+ * @param mintPubkeyHex - La clé publique du mint
+ * @param requireDleq - Si true, rejette les proofs sans DLEQ
+ * @returns true si DLEQ valide ou non requis, false sinon
+ */
 export function verifyDleqProof(
   proof: CashuProof,
-  mintPubkeyHex: string
+  mintPubkeyHex: string,
+  requireDleq: boolean = DLEQ_REQUIRED
 ): boolean {
+  // Si DLEQ est requis et absent → rejet
   if (!proof.dleq || !proof.dleq.e || !proof.dleq.s) {
+    if (requireDleq) {
+      logger.warn('[Cashu] DLEQ manquant pour proof:', proof.id, '- rejeté');
+      return false;
+    }
+    // DLEQ non requis et absent → accepter (mode legacy)
     return true;
   }
 
@@ -257,23 +279,23 @@ export function verifyDleqProof(
 
     const eHex = proof.dleq.e.padStart(64, '0');
     if (eComputedHex === eHex) {
-      console.log('[Cashu] DLEQ proof verified for proof:', proof.id);
+      logger.info('[Cashu] DLEQ proof verified for proof:', proof.id);
       return true;
     }
 
-    console.warn('[Cashu] DLEQ verification FAILED for proof:', proof.id);
+    logger.warn('[Cashu] DLEQ verification FAILED for proof:', proof.id);
     return false;
   } catch (err) {
-    console.warn('[Cashu] DLEQ verification error:', err);
+    logger.warn('[Cashu] DLEQ verification error:', err);
     return false;
   }
 }
 
-export function verifyTokenProofs(token: CashuToken, mintPubkey: string): boolean {
+export function verifyTokenProofs(token: CashuToken, mintPubkey: string, requireDleq: boolean = DLEQ_REQUIRED): boolean {
   for (const entry of token.token) {
     for (const proof of entry.proofs) {
-      if (!verifyDleqProof(proof, mintPubkey)) {
-        console.log('[Cashu] DLEQ verification failed pour proof:', proof.id);
+      if (!verifyDleqProof(proof, mintPubkey, requireDleq)) {
+        logger.info('[Cashu] DLEQ verification failed pour proof:', proof.id);
         return false;
       }
     }
@@ -307,15 +329,51 @@ export interface CashuWalletBalance {
   }>;
 }
 
+/**
+ * Valide le format d'une URL de mint.
+ * @throws si l'URL est invalide ou non HTTPS en production
+ */
+export function validateMintUrl(mintUrl: string, allowHttp: boolean = false): void {
+  let url: URL;
+  try {
+    url = new URL(mintUrl);
+  } catch {
+    throw new Error(`URL de mint invalide: ${mintUrl}`);
+  }
+
+  // Vérifier le protocole
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(`Protocole invalide pour le mint: ${url.protocol}`);
+  }
+
+  // En production, exiger HTTPS (sauf localhost)
+  const isLocal = url.hostname === 'localhost' || 
+                  url.hostname === '127.0.0.1' || 
+                  url.hostname === '::1';
+  
+  if (!allowHttp && !isLocal && url.protocol !== 'https:') {
+    throw new Error(`Le mint doit utiliser HTTPS en production: ${mintUrl}`);
+  }
+
+  // Vérifier que le hostname n'est pas vide
+  if (!url.hostname || url.hostname.length < 1) {
+    throw new Error(`Hostname invalide pour le mint: ${mintUrl}`);
+  }
+}
+
 export async function fetchMintInfo(mintUrl: string, fallbackUrl?: string): Promise<CashuMintInfo> {
+  // Validation de l'URL
+  validateMintUrl(mintUrl);
+  if (fallbackUrl) validateMintUrl(fallbackUrl);
+
   const cached = mintInfoCache.get(mintUrl);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log('[Cashu] Using cached mint info:', mintUrl);
+    logger.info('[Cashu] Using cached mint info:', mintUrl);
     return cached.info;
   }
 
   const url = `${mintUrl}/v1/info`;
-  console.log('[Cashu] Fetching mint info:', url);
+  logger.info('[Cashu] Fetching mint info:', url);
 
   try {
     const response = await fetch(url);
@@ -324,14 +382,14 @@ export async function fetchMintInfo(mintUrl: string, fallbackUrl?: string): Prom
     }
 
     const data = await response.json();
-    console.log('[Cashu] Mint info:', data.name);
+    logger.secure('info', '[Cashu] Mint info loaded', data.name);
 
     mintInfoCache.set(mintUrl, { info: data as CashuMintInfo, timestamp: Date.now() });
 
     return data as CashuMintInfo;
   } catch (err) {
     if (fallbackUrl) {
-      console.log('[Cashu] Primary mint failed, trying fallback:', fallbackUrl);
+      logger.info('[Cashu] Primary mint failed, trying fallback:', fallbackUrl);
       return fetchMintInfo(fallbackUrl);
     }
     throw err;
@@ -339,8 +397,16 @@ export async function fetchMintInfo(mintUrl: string, fallbackUrl?: string): Prom
 }
 
 export async function fetchMintKeysets(mintUrl: string): Promise<{ keysets: CashuKeysetInfo[] }> {
+  validateMintUrl(mintUrl);
+
+  const cached = keysetCache.get(mintUrl);
+  if (cached && Date.now() - cached.timestamp < KEYSET_CACHE_TTL) {
+    logger.info('[Cashu] Using cached keysets:', mintUrl);
+    return { keysets: cached.keysets };
+  }
+
   const url = `${mintUrl}/v1/keysets`;
-  console.log('[Cashu] Fetching keysets:', url);
+  logger.info('[Cashu] Fetching keysets:', url);
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -348,15 +414,39 @@ export async function fetchMintKeysets(mintUrl: string): Promise<{ keysets: Cash
   }
 
   const data = await response.json();
-  console.log('[Cashu] Keysets received:', (data as { keysets: CashuKeysetInfo[] }).keysets?.length);
-  return data as { keysets: CashuKeysetInfo[] };
+  const keysets = (data as { keysets: CashuKeysetInfo[] }).keysets;
+  logger.info('[Cashu] Keysets received:', keysets?.length);
+
+  // Mettre en cache
+  keysetCache.set(mintUrl, { keysets, timestamp: Date.now() });
+
+  return { keysets };
+}
+
+/**
+ * Vérifie qu'un keyset est actif.
+ * @throws si le keyset est inactif ou inconnu
+ */
+export async function assertActiveKeyset(mintUrl: string, keysetId: string): Promise<void> {
+  const { keysets } = await fetchMintKeysets(mintUrl);
+  const keyset = keysets.find(k => k.id === keysetId);
+  
+  if (!keyset) {
+    throw new Error(`Keyset inconnu: ${keysetId}`);
+  }
+  
+  if (!keyset.active) {
+    throw new Error(`Keyset inactif: ${keysetId} - rotation nécessaire`);
+  }
 }
 
 export async function fetchMintKeys(mintUrl: string, keysetId?: string): Promise<CashuKeyset[]> {
+  validateMintUrl(mintUrl);
+
   const url = keysetId
     ? `${mintUrl}/v1/keys/${keysetId}`
     : `${mintUrl}/v1/keys`;
-  console.log('[Cashu] Fetching keys:', url);
+  logger.info('[Cashu] Fetching keys:', url);
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -372,6 +462,10 @@ export async function fetchMintKeys(mintUrl: string, keysetId?: string): Promise
     if (!match) {
       throw new Error(`Le mint n'a pas retourné le keyset demandé (${keysetId})`);
     }
+    // Vérifier que le keyset est actif
+    if (!match.active) {
+      logger.warn(`[Cashu] Keyset ${keysetId} est inactif - risque de rotation`);
+    }
     return [match];
   }
 
@@ -384,8 +478,10 @@ export async function requestMintQuote(
   unit: string = 'sat'
 ): Promise<CashuMintQuote> {
   assertTrustedMint(mintUrl); // 🔒 Whitelist check
+  validateMintUrl(mintUrl);
+
   const url = `${mintUrl}/v1/mint/quote/bolt11`;
-  console.log('[Cashu] Requesting mint quote for', amount, unit);
+  logger.info('[Cashu] Requesting mint quote for', amount, unit);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -399,7 +495,7 @@ export async function requestMintQuote(
   }
 
   const data = await response.json();
-  console.log('[Cashu] Mint quote received:', (data as CashuMintQuote).quote);
+  logger.info('[Cashu] Mint quote received');
   return data as CashuMintQuote;
 }
 
@@ -407,8 +503,9 @@ export async function checkMintQuoteStatus(
   mintUrl: string,
   quoteId: string
 ): Promise<CashuMintQuote> {
+  validateMintUrl(mintUrl);
   const url = `${mintUrl}/v1/mint/quote/bolt11/${quoteId}`;
-  console.log('[Cashu] Checking mint quote status:', quoteId);
+  logger.info('[Cashu] Checking mint quote status:', quoteId);
 
   const response = await fetch(url);
   if (!response.ok) {
@@ -416,7 +513,7 @@ export async function checkMintQuoteStatus(
   }
 
   const data = await response.json();
-  console.log('[Cashu] Quote status - paid:', (data as CashuMintQuote).paid);
+  logger.info('[Cashu] Quote status - paid:', (data as CashuMintQuote).paid);
   return data as CashuMintQuote;
 }
 
@@ -428,7 +525,9 @@ export async function mintTokens(
   mintKeys: Record<string, string>
 ): Promise<CashuProof[]> {
   assertTrustedMint(mintUrl); // 🔒 Whitelist check
-  console.log('[Cashu] Minting tokens for quote:', quoteId, 'amount:', amount);
+  validateMintUrl(mintUrl);
+
+  logger.info('[Cashu] Minting tokens for quote');
 
   const denominations = splitAmountIntoPowerOfTwo(amount);
   const blindedMessages = createBlindedMessages(denominations, keysetId);
@@ -454,7 +553,7 @@ export async function mintTokens(
   const data = await response.json();
   const signatures = (data as { signatures: Array<{ amount: number; C_: string; id: string }> }).signatures;
 
-  console.log('[Cashu] Received', signatures.length, 'signatures from mint');
+  logger.info('[Cashu] Received', signatures.length, 'signatures from mint');
 
   if (signatures.length !== blindedMessages.length) {
     throw new Error(`Mint a renvoyé ${signatures.length} signatures pour ${blindedMessages.length} outputs`);
@@ -477,7 +576,7 @@ export async function mintTokens(
     };
   });
 
-  console.log('[Cashu] Minted', proofs.length, 'proofs, total:', proofs.reduce((s, p) => s + p.amount, 0), 'sats');
+  logger.info('[Cashu] Minted', proofs.length, 'proofs');
   return proofs;
 }
 
@@ -486,8 +585,9 @@ export async function requestMeltQuote(
   request: string,
   unit: string = 'sat'
 ): Promise<CashuMeltQuote> {
+  validateMintUrl(mintUrl);
   const url = `${mintUrl}/v1/melt/quote/bolt11`;
-  console.log('[Cashu] Requesting melt quote');
+  logger.info('[Cashu] Requesting melt quote');
 
   const response = await fetch(url, {
     method: 'POST',
@@ -501,7 +601,7 @@ export async function requestMeltQuote(
   }
 
   const data = await response.json();
-  console.log('[Cashu] Melt quote - amount:', (data as CashuMeltQuote).amount, 'fee:', (data as CashuMeltQuote).fee_reserve);
+  logger.info('[Cashu] Melt quote received');
   return data as CashuMeltQuote;
 }
 
@@ -509,8 +609,9 @@ export async function checkProofsSpent(
   mintUrl: string,
   proofs: CashuProof[]
 ): Promise<{ spendable: boolean[] }> {
+  validateMintUrl(mintUrl);
   const url = `${mintUrl}/v1/checkstate`;
-  console.log('[Cashu] Checking', proofs.length, 'proofs state');
+  logger.info('[Cashu] Checking', proofs.length, 'proofs state');
 
   const Ys = proofs.map(p => {
     try {
@@ -553,11 +654,11 @@ export function encodeCashuToken(token: CashuToken): string {
 export function decodeCashuToken(encoded: string): CashuToken | null {
   try {
     if (encoded.startsWith('cashuB')) {
-      console.log('[Cashu] Format cashuB (V3/CBOR) non supporté');
+      logger.info('[Cashu] Format cashuB (V3/CBOR) non supporté');
       return null;
     }
     if (!encoded.startsWith('cashuA')) {
-      console.log('[Cashu] Préfixe de token invalide');
+      logger.info('[Cashu] Préfixe de token invalide');
       return null;
     }
     const base64 = encoded.slice(6);
@@ -574,10 +675,10 @@ export function decodeCashuToken(encoded: string): CashuToken | null {
       }
     }
 
-    console.log('[Cashu] Token décodé avec', token.token?.length, 'entrée(s)');
+    logger.info('[Cashu] Token décodé');
     return token;
   } catch (err) {
-    console.log('[Cashu] Erreur décodage token:', err);
+    logger.info('[Cashu] Erreur décodage token');
     return null;
   }
 }
@@ -592,58 +693,170 @@ export function getTokenAmount(token: CashuToken): number {
   return total;
 }
 
-export async function verifyCashuToken(
-  encoded: string,
-  trustedMints?: string[]
-): Promise<{
+/**
+ * Vérifie qu'il n'y a pas de double-spend interne dans le token
+ * (même secret utilisé plusieurs fois)
+ */
+export function checkInternalDoubleSpend(token: CashuToken): { valid: boolean; duplicates: string[] } {
+  const seenSecrets = new Set<string>();
+  const duplicates: string[] = [];
+
+  for (const entry of token.token) {
+    for (const proof of entry.proofs) {
+      if (seenSecrets.has(proof.secret)) {
+        duplicates.push(proof.secret);
+      } else {
+        seenSecrets.add(proof.secret);
+      }
+    }
+  }
+
+  return { valid: duplicates.length === 0, duplicates };
+}
+
+/**
+ * Vérifie la validité structurelle des proofs
+ */
+export function validateProofsStructure(proofs: CashuProof[]): { valid: boolean; error?: string } {
+  if (!Array.isArray(proofs)) {
+    return { valid: false, error: 'Proofs doit être un tableau' };
+  }
+
+  if (proofs.length === 0) {
+    return { valid: false, error: 'Aucun proof' };
+  }
+
+  if (proofs.length > MAX_PROOFS_PER_TOKEN) {
+    return { valid: false, error: `Trop de proofs: ${proofs.length} > ${MAX_PROOFS_PER_TOKEN}` };
+  }
+
+  for (const proof of proofs) {
+    // Vérifier les champs requis
+    if (!proof.id || typeof proof.id !== 'string') {
+      return { valid: false, error: 'Proof sans ID valide' };
+    }
+    if (typeof proof.amount !== 'number' || !Number.isSafeInteger(proof.amount)) {
+      return { valid: false, error: `Montant invalide pour proof ${proof.id}` };
+    }
+    if (proof.amount < MIN_DUST_AMOUNT) {
+      return { valid: false, error: `Montant trop petit: ${proof.amount} < ${MIN_DUST_AMOUNT}` };
+    }
+    if (!proof.secret || typeof proof.secret !== 'string') {
+      return { valid: false, error: `Secret manquant pour proof ${proof.id}` };
+    }
+    if (!proof.C || typeof proof.C !== 'string') {
+      return { valid: false, error: `C manquant pour proof ${proof.id}` };
+    }
+
+    // Vérifier que C est un point secp256k1 valide (format hex 66 chars)
+    if (proof.C.length !== 66) {
+      return { valid: false, error: `C invalide (longueur ${proof.C.length} != 66) pour proof ${proof.id}` };
+    }
+  }
+
+  return { valid: true };
+}
+
+export interface TokenVerificationResult {
   valid: boolean;
+  verified: boolean; // true = vérifié cryptographiquement, false = non vérifié (mint inaccessible)
   token?: CashuToken;
   amount?: number;
   mintUrl?: string;
   error?: string;
-  unverified?: boolean;
-}> {
+  warnings?: string[];
+}
+
+export async function verifyCashuToken(
+  encoded: string,
+  trustedMints?: string[]
+): Promise<TokenVerificationResult> {
+  const warnings: string[] = [];
+
   const token = decodeCashuToken(encoded);
   if (!token) {
-    return { valid: false, error: 'Format de token invalide' };
+    return { valid: false, verified: false, error: 'Format de token invalide' };
   }
 
   if (!token.token || token.token.length === 0) {
-    return { valid: false, error: 'Token vide' };
+    return { valid: false, verified: false, error: 'Token vide' };
   }
 
   const entry = token.token[0];
   const mintUrl = entry.mint;
   const proofs = entry.proofs;
 
-  if (!proofs || proofs.length === 0) {
-    return { valid: false, error: 'Aucun proof dans le token' };
+  // Validation de l'URL du mint
+  try {
+    validateMintUrl(mintUrl);
+  } catch (err) {
+    return { valid: false, verified: false, error: `URL de mint invalide: ${err instanceof Error ? err.message : 'unknown'}` };
   }
 
+  // Validation structurelle des proofs
+  const structureCheck = validateProofsStructure(proofs);
+  if (!structureCheck.valid) {
+    return { valid: false, verified: false, error: structureCheck.error };
+  }
+
+  // Vérification du double-spend interne
+  const doubleSpendCheck = checkInternalDoubleSpend(token);
+  if (!doubleSpendCheck.valid) {
+    return { valid: false, verified: false, error: `Double-spend interne détecté: ${doubleSpendCheck.duplicates.length} secret(s) dupliqué(s)` };
+  }
+
+  // Calcul et vérification de la somme
+  const declaredAmount = getTokenAmount(token);
+  const proofsSum = proofs.reduce((sum, p) => sum + p.amount, 0);
+  if (declaredAmount !== proofsSum) {
+    return { valid: false, verified: false, error: `Somme des proofs invalide: déclaré ${declaredAmount} != calculé ${proofsSum}` };
+  }
+
+  // Vérification du mint de confiance
   if (trustedMints && trustedMints.length > 0) {
     const isTrusted = trustedMints.some(m =>
       mintUrl.toLowerCase().includes(m.toLowerCase()) ||
       m.toLowerCase().includes(mintUrl.toLowerCase())
     );
     if (!isTrusted) {
-      return { valid: false, error: `Mint non de confiance: ${mintUrl}` };
+      return { valid: false, verified: false, error: `Mint non de confiance: ${mintUrl}` };
     }
   }
 
+  // Vérification auprès du mint (checkstate)
   try {
     const result = await checkProofsSpent(mintUrl, proofs);
     const anySpent = result.spendable.some(s => !s);
     if (anySpent) {
-      return { valid: false, error: 'Token déjà dépensé' };
+      return { valid: false, verified: true, error: 'Token déjà dépensé' };
     }
   } catch (err) {
-    console.log('[Cashu] Mint inaccessible, token accepté mais non vérifié:', err);
-    const amount = getTokenAmount(token);
-    return { valid: true, token, amount, mintUrl, unverified: true };
+    // Mint inaccessible - token non vérifié mais potentiellement valide
+    logger.info('[Cashu] Mint inaccessible, token non vérifié');
+    warnings.push('Mint inaccessible - vérification non complète');
+    
+    // IMPORTANT: en mode unverified, on retourne valid=false et verified=false
+    // L'appelant doit explicitement décider d'accepter les tokens non vérifiés
+    return { 
+      valid: false,      // PAS valid car non vérifié
+      verified: false,   // PAS vérifié
+      token, 
+      amount: declaredAmount, 
+      mintUrl, 
+      error: 'Mint inaccessible - token non vérifié',
+      warnings 
+    };
   }
 
-  const amount = getTokenAmount(token);
-  return { valid: true, token, amount, mintUrl, unverified: false };
+  // Token entièrement vérifié
+  return { 
+    valid: true, 
+    verified: true,  // Vérification complète réussie
+    token, 
+    amount: declaredAmount, 
+    mintUrl,
+    warnings: warnings.length > 0 ? warnings : undefined
+  };
 }
 
 export function generateTokenId(token: CashuToken): string {
@@ -658,13 +871,14 @@ export async function testMintConnection(mintUrl: string): Promise<{
   error?: string;
 }> {
   try {
-    console.log('[Cashu] Testing mint connection:', mintUrl);
+    logger.info('[Cashu] Testing mint connection:', mintUrl);
+    validateMintUrl(mintUrl);
     const info = await fetchMintInfo(mintUrl);
-    console.log('[Cashu] Mint connection OK:', info.name);
+    logger.info('[Cashu] Mint connection OK');
     return { ok: true, name: info.name };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.log('[Cashu] Mint connection FAILED:', message);
+    logger.info('[Cashu] Mint connection FAILED:', message);
     return { ok: false, error: message };
   }
 }
@@ -677,7 +891,7 @@ export function formatMintUrl(url: string): string {
   // Forcer HTTPS sauf pour localhost (tests/dev local)
   const isLocal = clean.includes('localhost') || clean.includes('127.0.0.1') || clean.includes('::1');
   if (!isLocal && clean.startsWith('http://')) {
-    console.warn('[Cashu] URL mint non chiffrée (HTTP) — upgrade forcé vers HTTPS');
+    logger.warn('[Cashu] URL mint non chiffrée (HTTP) — upgrade forcé vers HTTPS');
     clean = 'https://' + clean.slice(7);
   }
   return clean;
@@ -707,12 +921,27 @@ export async function swapTokens(
   keysetId: string,
   mintKeys: Record<string, string>
 ): Promise<CashuProof[]> {
-  console.log('[Cashu] Swapping', inputs.length, 'proofs for', targetAmounts.length, 'outputs');
+  validateMintUrl(mintUrl);
+  logger.info('[Cashu] Swapping', inputs.length, 'proofs for', targetAmounts.length, 'outputs');
+
+  // Validation des inputs
+  const inputCheck = validateProofsStructure(inputs);
+  if (!inputCheck.valid) {
+    throw new Error(`Inputs invalides: ${inputCheck.error}`);
+  }
 
   const inputTotal = inputs.reduce((s, p) => s + p.amount, 0);
   const outputTotal = targetAmounts.reduce((s, a) => s + a, 0);
   if (inputTotal !== outputTotal) {
     throw new Error(`Swap invalide: inputs=${inputTotal} sats ≠ outputs=${outputTotal} sats`);
+  }
+
+  // Vérifier que le keyset est actif
+  try {
+    await assertActiveKeyset(mintUrl, keysetId);
+  } catch (err) {
+    logger.warn('[Cashu] Keyset inactif ou inconnu');
+    throw err;
   }
 
   const blindedMessages = createBlindedMessages(targetAmounts, keysetId);
@@ -738,7 +967,7 @@ export async function swapTokens(
   const data = await response.json();
   const signatures = (data as SwapResponse).signatures;
 
-  console.log('[Cashu] Swap: received', signatures.length, 'signatures');
+  logger.info('[Cashu] Swap: received', signatures.length, 'signatures');
 
   if (signatures.length !== blindedMessages.length) {
     throw new Error(`Swap: mint a renvoyé ${signatures.length} signatures pour ${blindedMessages.length} outputs`);
@@ -761,7 +990,7 @@ export async function swapTokens(
     };
   });
 
-  console.log('[Cashu] Swap successful, new proofs:', proofs.length);
+  logger.info('[Cashu] Swap successful, new proofs:', proofs.length);
   return proofs;
 }
 
@@ -773,8 +1002,16 @@ export async function reclaimProofs(
   keysetId: string,
   mintKeys: Record<string, string>
 ): Promise<CashuProof[]> {
+  validateMintUrl(mintUrl);
+
   const totalAmount = proofs.reduce((s, p) => s + p.amount, 0);
-  console.log('[Cashu] Reclaiming', proofs.length, 'proofs,', totalAmount, 'sats');
+  logger.info('[Cashu] Reclaiming', proofs.length, 'proofs');
+
+  // Validation des proofs
+  const proofCheck = validateProofsStructure(proofs);
+  if (!proofCheck.valid) {
+    throw new Error(`Proofs invalides: ${proofCheck.error}`);
+  }
 
   const { spendable } = await checkProofsSpent(mintUrl, proofs);
   const unspentProofs = proofs.filter((_, i) => spendable[i] === true);
@@ -785,13 +1022,13 @@ export async function reclaimProofs(
 
   if (unspentProofs.length < proofs.length) {
     const spentCount = proofs.length - unspentProofs.length;
-    console.warn(`[Cashu] Reclaim partiel: ${spentCount}/${proofs.length} proofs déjà dépensés, reclaim de ${unspentProofs.length}`);
+    logger.warn(`[Cashu] Reclaim partiel: ${spentCount}/${proofs.length} proofs déjà dépensés, reclaim de ${unspentProofs.length}`);
   }
 
   const unspentTotal = unspentProofs.reduce((s, p) => s + p.amount, 0);
   const targetAmounts = splitAmountIntoPowerOfTwo(unspentTotal);
   const newProofs = await swapTokens(mintUrl, unspentProofs, targetAmounts, keysetId, mintKeys);
-  console.log('[Cashu] Reclaim successful:', newProofs.length, 'new proofs,', unspentTotal, 'sats');
+  logger.info('[Cashu] Reclaim successful:', newProofs.length, 'new proofs');
   return newProofs;
 }
 
@@ -803,10 +1040,18 @@ export async function meltTokens(
   changeMintKeys?: Record<string, string>
 ): Promise<{ paid: boolean; preimage?: string; change?: CashuProof[] }> {
   assertTrustedMint(mintUrl); // 🔒 Whitelist check
-  console.log('[Cashu] Melting', proofs.length, 'proofs for invoice');
+  validateMintUrl(mintUrl);
+
+  logger.info('[Cashu] Melting', proofs.length, 'proofs for invoice');
+
+  // Validation des proofs
+  const proofCheck = validateProofsStructure(proofs);
+  if (!proofCheck.valid) {
+    throw new Error(`Proofs invalides: ${proofCheck.error}`);
+  }
 
   const meltQuote = await requestMeltQuote(mintUrl, invoice);
-  console.log('[Cashu] Got melt quote:', meltQuote.quote, 'amount:', meltQuote.amount, 'fee:', meltQuote.fee_reserve);
+  logger.info('[Cashu] Got melt quote');
 
   const totalProofsValue = proofs.reduce((s, p) => s + p.amount, 0);
   const required = meltQuote.amount + meltQuote.fee_reserve;
@@ -825,6 +1070,13 @@ export async function meltTokens(
   };
 
   if (changeKeysetId && changeMintKeys && meltQuote.fee_reserve > 0) {
+    // Vérifier que le keyset est actif
+    try {
+      await assertActiveKeyset(mintUrl, changeKeysetId);
+    } catch (err) {
+      logger.warn('[Cashu] Keyset de change inactif');
+    }
+
     const changeAmounts = splitAmountIntoPowerOfTwo(meltQuote.fee_reserve);
     changeBlindedMessages = createBlindedMessages(changeAmounts, changeKeysetId);
     requestBody.outputs = changeBlindedMessages.map(bm => ({
@@ -832,7 +1084,7 @@ export async function meltTokens(
       B_: bm.B_,
       id: bm.id,
     }));
-    console.log('[Cashu] Sending', changeBlindedMessages.length, 'change outputs (NUT-05 v2)');
+    logger.info('[Cashu] Sending', changeBlindedMessages.length, 'change outputs (NUT-05 v2)');
   }
 
   const url = `${mintUrl}/v1/melt/bolt11`;
@@ -848,7 +1100,7 @@ export async function meltTokens(
   }
 
   const data = await response.json();
-  console.log('[Cashu] Melt result - paid:', data.paid);
+  logger.info('[Cashu] Melt result - paid:', data.paid);
 
   // Désaveugler les signatures de change (NUT-05 v2)
   let changeProofs: CashuProof[] | undefined;
@@ -869,11 +1121,11 @@ export async function meltTokens(
         };
       });
       const changeTotal = changeProofs.reduce((s, p) => s + p.amount, 0);
-      console.log('[Cashu] Change désaveuglé:', changeTotal, 'sats récupérés (frais réels =', meltQuote.fee_reserve - changeTotal, 'sats)');
+      logger.info('[Cashu] Change désaveuglé:', changeTotal, 'sats récupérés');
     } else {
       // Fallback : mint ancien qui retourne des proofs déjà émis
       changeProofs = rawChange as unknown as CashuProof[];
-      console.log('[Cashu] Change reçu (format ancien mint):', changeProofs.length, 'proofs');
+      logger.info('[Cashu] Change reçu (format ancien mint):', changeProofs.length, 'proofs');
     }
   }
 
@@ -898,7 +1150,7 @@ export function splitTokenForQrAnimation(
     chunks.push(`CASHU${partNumber}/${totalParts}:${chunk}`);
   }
 
-  console.log('[Cashu] Token split into', chunks.length, 'QR chunks');
+  logger.info('[Cashu] Token split into', chunks.length, 'QR chunks');
   return chunks;
 }
 
@@ -917,14 +1169,14 @@ export function rebuildTokenFromQrChunks(chunks: string[]): CashuToken | null {
 
     const total = sortedChunks[0]!.total;
     if (sortedChunks.length !== total) {
-      console.log('[Cashu] Missing QR chunks:', sortedChunks.length, '/', total);
+      logger.info('[Cashu] Missing QR chunks:', sortedChunks.length, '/', total);
       return null;
     }
 
     const encoded = sortedChunks.map(c => c!.data).join('');
     return decodeCashuToken(encoded);
   } catch (err) {
-    console.log('[Cashu] Error rebuilding token from chunks:', err);
+    logger.info('[Cashu] Error rebuilding token from chunks');
     return null;
   }
 }
@@ -961,7 +1213,7 @@ export function createAtomicSwap(
     timelock,
   };
 
-  console.log('[Cashu] Atomic swap created:', id, direction, amount, 'sats');
+  logger.info('[Cashu] Atomic swap created');
   return swap;
 }
 
@@ -974,7 +1226,7 @@ export function claimAtomicSwap(
   secret: string
 ): boolean {
   if (!isAtomicSwapValid(swap)) {
-    console.log('[Cashu] Swap expired');
+    logger.info('[Cashu] Swap expired');
     return false;
   }
 
@@ -983,11 +1235,11 @@ export function claimAtomicSwap(
   const providedHash = bytesToHex(hashBytes);
 
   if (providedHash !== swap.hashlock) {
-    console.log('[Cashu] Invalid secret');
+    logger.info('[Cashu] Invalid secret');
     return false;
   }
 
-  console.log('[Cashu] Atomic swap claimed:', swap.id);
+  logger.info('[Cashu] Atomic swap claimed');
   return true;
 }
 
@@ -1068,6 +1320,6 @@ export async function fetchLNURLInvoice(
   if (s2 === 'ERROR') throw new Error(reason ?? 'Erreur génération invoice');
   if (!pr || typeof pr !== 'string') throw new Error('Invoice BOLT11 invalide reçue du vendeur');
 
-  console.log('[LNURL] Invoice générée pour', lnAddress, amountSats, 'sat');
+  logger.info('[LNURL] Invoice générée');
   return pr;
 }

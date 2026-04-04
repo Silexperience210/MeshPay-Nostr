@@ -650,8 +650,10 @@ function CashuBalanceCard({
     setReceiveLoading(true);
     try {
       const verification = await verifyCashuToken(tokenStr);
-      if (!verification.valid && !verification.unverified) {
-        Alert.alert('Token invalide', verification.error ?? 'Token refusé par le mint');
+      if (!verification.valid) {
+        // En mode strict, on rejette les tokens non vérifiés
+        // L'utilisateur peut réessayer quand le mint est accessible
+        Alert.alert('Token invalide', verification.error ?? 'Token non vérifié - le mint est peut-être inaccessible');
         return;
       }
       if (!verification.token) {
@@ -666,10 +668,10 @@ function CashuBalanceCard({
         amount: verification.amount ?? 0,
         token: tokenStr,
         proofs: JSON.stringify(entry.proofs),
-        state: verification.unverified ? 'unverified' : 'unspent',
+        state: 'unspent',
         source: 'manual',
         memo: 'Importé manuellement',
-        unverified: verification.unverified ?? false,
+        unverified: false,
         retryCount: 0,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -760,8 +762,8 @@ function CashuBalanceCard({
       }
       const { token: tokenStr, amount } = result.record;
       const verification = await verifyCashuToken(tokenStr);
-      if (!verification.valid && !verification.unverified) {
-        Alert.alert('Token invalide', verification.error ?? 'Token refusé');
+      if (!verification.valid) {
+        Alert.alert('Token invalide', verification.error ?? 'Token non vérifié');
         return;
       }
       if (!verification.token) return;
@@ -773,10 +775,10 @@ function CashuBalanceCard({
         amount: verification.amount ?? amount,
         token: tokenStr,
         proofs: JSON.stringify(entry.proofs),
-        state: verification.unverified ? 'unverified' : 'unspent',
+        state: 'unspent',
         source: 'nfc',
         memo: 'Reçu par NFC',
-        unverified: verification.unverified ?? false,
+        unverified: false,
         retryCount: 0,
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

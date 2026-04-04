@@ -4,6 +4,7 @@ import { HDKey } from '@scure/bip32';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { ripemd160 } from '@noble/hashes/legacy.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import { logger } from '@/utils/logger';
 
 const BIP44_BTC_PATH = "m/84'/0'/0'";
 
@@ -13,21 +14,37 @@ export interface DerivedWalletInfo {
   fingerprint: string;
 }
 
+/**
+ * Génère une phrase mnémonique BIP39.
+ * 
+ * SÉCURITÉ: Utilise un CSPRNG via @scure/bip39
+ * Le mnemonic n'est JAMAIS loggé (même partiellement)
+ */
 export function generateMnemonic(strength: 12 | 24 = 12): string {
   const bits = strength === 12 ? 128 : 256;
   const mnemonic = bip39.generateMnemonic(wordlist, bits);
-  console.log('[Bitcoin-Web] Generated new mnemonic with', strength, 'words');
+  logger.secure('info', '[Bitcoin-Web] Generated new mnemonic');
   return mnemonic;
 }
 
+/**
+ * Valide une phrase mnémonique.
+ * 
+ * SÉCURITÉ: La phrase n'est jamais loggée.
+ */
 export function validateMnemonic(mnemonic: string): boolean {
   const valid = bip39.validateMnemonic(mnemonic, wordlist);
-  console.log('[Bitcoin-Web] Mnemonic validation:', valid);
+  logger.info('[Bitcoin-Web] Mnemonic validation:', valid ? 'valid' : 'invalid');
   return valid;
 }
 
+/**
+ * Dérive une seed à partir d'une phrase mnémonique.
+ * 
+ * SÉCURITÉ: La phrase et la seed ne sont jamais loggées.
+ */
 export function mnemonicToSeed(mnemonic: string, passphrase?: string): Uint8Array {
-  console.log('[Bitcoin-Web] Deriving seed from mnemonic...');
+  logger.secure('info', '[Bitcoin-Web] Deriving seed from mnemonic');
   return bip39.mnemonicToSeedSync(mnemonic, passphrase);
 }
 
@@ -156,8 +173,15 @@ export function pubkeyToLegacyAddress(pubkey: Uint8Array, mainnet: boolean = tru
   return base58check(payload);
 }
 
+/**
+ * Dérive les informations du wallet depuis une phrase mnémonique.
+ * 
+ * SÉCURITÉ: 
+ * - La phrase mnémonique n'est jamais loggée
+ * - Seules les informations publiques (xpub, adresses) sont loggées
+ */
 export function deriveWalletInfo(mnemonic: string, passphrase?: string): DerivedWalletInfo {
-  console.log('[Bitcoin-Web] Deriving wallet info from mnemonic...');
+  logger.secure('info', '[Bitcoin-Web] Deriving wallet info from mnemonic');
   const seed = mnemonicToSeed(mnemonic, passphrase);
   const master = HDKey.fromMasterSeed(seed);
   const account = master.derive(BIP44_BTC_PATH);
@@ -174,8 +198,8 @@ export function deriveWalletInfo(mnemonic: string, passphrase?: string): Derived
     ? pubkeyToSegwitAddress(firstChild.publicKey, true)
     : 'unknown';
 
-  console.log('[Bitcoin-Web] Derived wallet - fingerprint:', fingerprint);
-  console.log('[Bitcoin-Web] First receive address:', firstReceiveAddress);
+  logger.secure('info', '[Bitcoin-Web] Derived wallet - fingerprint:', fingerprint);
+  logger.info('[Bitcoin-Web] First receive address:', firstReceiveAddress);
 
   return {
     xpub,
@@ -184,6 +208,11 @@ export function deriveWalletInfo(mnemonic: string, passphrase?: string): Derived
   };
 }
 
+/**
+ * Dérive les adresses de réception.
+ * 
+ * SÉCURITÉ: La phrase mnémonique n'est jamais exposée.
+ */
 export function deriveReceiveAddresses(mnemonic: string, count: number = 5, passphrase?: string): string[] {
   const seed = mnemonicToSeed(mnemonic, passphrase);
   const master = HDKey.fromMasterSeed(seed);
@@ -196,7 +225,7 @@ export function deriveReceiveAddresses(mnemonic: string, count: number = 5, pass
       addresses.push(pubkeyToSegwitAddress(child.publicKey, true));
     }
   }
-  console.log('[Bitcoin-Web] Derived', addresses.length, 'receive addresses');
+  logger.info('[Bitcoin-Web] Derived', addresses.length, 'receive addresses');
   return addresses;
 }
 

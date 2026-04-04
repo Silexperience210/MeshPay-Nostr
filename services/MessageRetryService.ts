@@ -91,7 +91,6 @@ class MessageRetryService {
       const pending = await getPendingMessages();
 
       if (pending.length === 0) {
-        this.isProcessing = false;
         return;
       }
 
@@ -102,7 +101,6 @@ class MessageRetryService {
 
       if (!isConnected) {
         console.log('[MessageRetryService] BLE non connecté, report...');
-        this.isProcessing = false;
         return;
       }
 
@@ -135,6 +133,7 @@ class MessageRetryService {
     } catch (error) {
       console.error('[MessageRetryService] Erreur traitement queue:', error);
     } finally {
+      // ✅ FIX: Toujours réinitialiser isProcessing dans finally pour éviter race condition
       this.isProcessing = false;
     }
   }

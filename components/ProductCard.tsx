@@ -1,7 +1,8 @@
 /**
  * ProductCard — Carte produit marketplace
+ * ✅ OPTIMISÉ: React.memo pour éviter les re-renders inutiles
  */
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { Package, Radio, ShoppingCart } from 'lucide-react-native';
 import Colors from '@/constants/colors';
@@ -14,10 +15,13 @@ interface ProductCardProps {
   onPress: (product: ShopProduct) => void;
 }
 
-export default function ProductCard({ product, onPress }: ProductCardProps) {
+function ProductCardComponent({ product, onPress }: ProductCardProps) {
   const { getProductReputation } = useShop();
   const rep = getProductReputation(product.id);
   const hasImage = product.images.length > 0;
+  
+  // ✅ OPTIMISATION: Mémoriser les calculs
+  const formattedPrice = useMemo(() => formatSats(product.priceSats), [product.priceSats]);
 
   return (
     <TouchableOpacity style={styles.card} onPress={() => onPress(product)} activeOpacity={0.75}>
@@ -51,7 +55,7 @@ export default function ProductCard({ product, onPress }: ProductCardProps) {
         )}
 
         <View style={styles.footer}>
-          <Text style={styles.price}>{formatSats(product.priceSats)}</Text>
+          <Text style={styles.price}>{formattedPrice}</Text>
           <View style={styles.buyBtn}>
             <ShoppingCart size={14} color={Colors.accent} />
           </View>
@@ -66,6 +70,10 @@ export default function ProductCard({ product, onPress }: ProductCardProps) {
     </TouchableOpacity>
   );
 }
+
+// ✅ OPTIMISATION: React.memo pour éviter les re-renders si les props n'ont pas changé
+const ProductCard = React.memo(ProductCardComponent);
+export default ProductCard;
 
 const styles = StyleSheet.create({
   card: {

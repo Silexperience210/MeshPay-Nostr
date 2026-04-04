@@ -1,5 +1,5 @@
 // Provider principal pour la messagerie MeshCore P2P chiffrée
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'; // ✅ useMemo ajouté
 import createContextHook from '@nkzw/create-context-hook';
 import * as Notifications from 'expo-notifications';
 import {
@@ -796,7 +796,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     listConversations().then(convs => {
       setConversations(convs);
     });
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   // Charger les forums persistés + leurs PSKs au démarrage
   useEffect(() => {
@@ -893,7 +893,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     );
 
     console.log('[Nostr→Forum]', channelName, '—', fromId.slice(0, 12), ':', event.content.slice(0, 40));
-  }, [identity]);
+  }, [identity]); // ✅ Dépendance complète
 
   // Synchroniser le ref pour que les callbacks de subscription utilisent toujours le handler à jour
   useEffect(() => {
@@ -939,43 +939,45 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }, 60 * 60 * 1000); // 1 heure
     
     return () => clearInterval(interval);
-  }, []);
+  }, []); // ✅ Aucune dépendance - fonctionne au montage uniquement
 
   // ✅ NOUVEAU : Vérification périodique des tokens unverified (P2)
-  useEffect(() => {
-    async function verifyUnverifiedTokens() {
-      try {
-        const allUnverified = await getUnverifiedCashuTokens();
-        if (allUnverified.length === 0) return;
-        // Limite : max 5 tokens par cycle, et on saute ceux qui ont déjà trop échoué
-        const unverified = allUnverified
-          .filter(t => (t.retryCount ?? 0) < 10)
-          .slice(0, 5);
-        if (unverified.length === 0) return;
+  // ✅ OPTIMISATION: useCallback pour la fonction de vérification
+  const verifyUnverifiedTokens = useCallback(async () => {
+    try {
+      const allUnverified = await getUnverifiedCashuTokens();
+      if (allUnverified.length === 0) return;
+      // Limite : max 5 tokens par cycle, et on saute ceux qui ont déjà trop échoué
+      const unverified = allUnverified
+        .filter(t => (t.retryCount ?? 0) < 10)
+        .slice(0, 5);
+      if (unverified.length === 0) return;
 
-        console.log('[Cashu] Vérification de', unverified.length, '/', allUnverified.length, 'tokens');
+      console.log('[Cashu] Vérification de', unverified.length, '/', allUnverified.length, 'tokens');
 
-        // Vérifier tous les tokens en parallèle (était séquentiel → N requêtes HTTP en série)
-        await Promise.all(unverified.map(async (token) => {
-          try {
-            const verification = await verifyCashuToken(token.token);
-            if (verification.valid && !verification.unverified) {
-              await markCashuTokenVerified(token.id);
-              console.log('[Cashu] Token vérifié avec succès:', token.id);
-            } else {
-              await incrementRetryCount(token.id);
-              if (!verification.valid) console.log('[Cashu] Token invalide:', token.id, verification.error);
-            }
-          } catch (err) {
-            console.log('[Cashu] Erreur vérif token:', token.id, err);
+      // Vérifier tous les tokens en parallèle (était séquentiel → N requêtes HTTP en série)
+      await Promise.all(unverified.map(async (token) => {
+        try {
+          const verification = await verifyCashuToken(token.token);
+          // Un token est marqué comme vérifié uniquement s'il est valide ET vérifié cryptographiquement
+          if (verification.valid && verification.verified) {
+            await markCashuTokenVerified(token.id);
+            console.log('[Cashu] Token vérifié avec succès:', token.id);
+          } else {
             await incrementRetryCount(token.id);
+            if (!verification.valid) console.log('[Cashu] Token invalide:', token.id, verification.error);
           }
-        }));
-      } catch (err) {
-        console.log('[Cashu] Erreur batch verification:', err);
-      }
+        } catch (err) {
+          console.log('[Cashu] Erreur vérif token:', token.id, err);
+          await incrementRetryCount(token.id);
+        }
+      }));
+    } catch (err) {
+      console.log('[Cashu] Erreur batch verification:', err);
     }
-    
+  }, []); // ✅ Pas de dépendances externes
+
+  useEffect(() => {
     // Vérifier toutes les 5 minutes
     const interval = setInterval(verifyUnverifiedTokens, 5 * 60 * 1000);
     
@@ -983,9 +985,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setTimeout(verifyUnverifiedTokens, 10000);
     
     return () => clearInterval(interval);
-  }, []);
+  }, [verifyUnverifiedTokens]); // ✅ Dépendance stable
 
   // Publier un message sur le réseau + le sauvegarder localement (déclaré avant sendMessage)
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const publishAndStore = useCallback(async (
     msgId: string,
     convId: string,
@@ -1032,9 +1035,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts }
         : c
     ));
-  }, []); // ✅ FIX: ble n'est pas utilisé ici — dep spurieuse supprimée (stable)
+  }, []); // ✅ FIX: Aucune dépendance externe - fonction pure de stockage
 
   // Envoyer un message (DM ou forum)
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const sendMessage = useCallback(async (
     convId: string,
     text: string,
@@ -1234,9 +1238,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
       ));
     }
-  }, [identity, conversations, publishAndStore, ble.connected]);
+  }, [identity, conversations, publishAndStore, ble.connected]); // ✅ Toutes les dépendances
 
   // Envoyer un message vocal (base64 m4a)
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const sendAudio = useCallback(async (
     convId: string,
     base64: string,
@@ -1281,9 +1286,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: audioLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations, nostrClient]);
+  }, [identity, conversations]); // ✅ nostrClient retiré - utilisation de la méthode statique
 
   // Envoyer une image (base64 jpeg/png)
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const sendImage = useCallback(async (
     convId: string,
     base64: string,
@@ -1325,18 +1331,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: imageLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations, nostrClient]);
+  }, [identity, conversations]); // ✅ nostrClient retiré - utilisation de la méthode statique
 
   // Envoyer un Cashu token
+  // ✅ OPTIMISATION: useCallback avec dépendance stable
   const sendCashu = useCallback(async (
     convId: string,
     token: string,
     amountSats: number
   ): Promise<void> => {
     await sendMessage(convId, token, 'cashu');
-  }, [sendMessage]);
+  }, [sendMessage]); // ✅ Dépendance stable
 
   // Charger les messages d'une conversation depuis AsyncStorage
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const loadConversationMessages = useCallback(async (convId: string): Promise<void> => {
     try {
       const msgs = await loadMessages(convId);
@@ -1346,9 +1354,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.error('[Messages] Erreur chargement messages:', err);
       // Ne pas bloquer l'UI, juste loguer l'erreur
     }
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   // Démarrer une nouvelle conversation DM
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const startConversation = useCallback(async (
     peerNodeId: string,
     peerName?: string,
@@ -1383,9 +1392,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.error('[Messages] Erreur démarrage conversation:', err);
       throw err;
     }
-  }, [conversations]);
+  }, [conversations]); // ✅ Dépendance complète
 
   // Rejoindre un forum
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const joinForum = useCallback(async (channelName: string, description?: string, pskHex?: string, skipAnnounce?: boolean): Promise<void> => {
     const convId = `forum:${channelName}`;
     joinedForums.current.add(channelName);
@@ -1445,6 +1455,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, [conversations]);
 
   // ✅ NOUVEAU : Mettre à jour le display name
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const setDisplayName = useCallback(async (name: string): Promise<void> => {
     if (!identity) return;
 
@@ -1463,6 +1474,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, [identity]);
 
   // Quitter un forum
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const leaveForum = useCallback((channelName: string): void => {
     joinedForums.current.delete(channelName);
     setJoinedForumsList([...joinedForums.current]);
@@ -1483,6 +1495,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, []);
 
   // Marquer une conversation comme lue
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const markRead = useCallback(async (convId: string): Promise<void> => {
     try {
       await markConversationRead(convId);
@@ -1493,32 +1506,37 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } catch (err) {
       console.error('[Messages] Erreur markRead:', err);
     }
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   // --- Contacts ---
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const refreshContacts = useCallback(async () => {
     const list = await getContacts();
     setContacts(list);
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   useEffect(() => { refreshContacts(); }, []);
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const addContact = useCallback(async (nodeId: string, displayName: string, pubkeyHex?: string) => {
     await saveContact({ nodeId, displayName, pubkeyHex, isFavorite: false });
     await refreshContacts();
-  }, [refreshContacts]);
+  }, [refreshContacts]); // ✅ Dépendance stable
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const removeContact = useCallback(async (nodeId: string) => {
     await deleteContact(nodeId);
     await refreshContacts();
-  }, [refreshContacts]);
+  }, [refreshContacts]); // ✅ Dépendance stable
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const toggleFavorite = useCallback(async (nodeId: string) => {
     await toggleContactFavorite(nodeId);
     await refreshContacts();
-  }, [refreshContacts]);
+  }, [refreshContacts]); // ✅ Dépendance stable
 
   // Supprimer un message localement
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const deleteMessage = useCallback(async (msgId: string, convId: string): Promise<void> => {
     try {
       await deleteMessageDB(msgId);
@@ -1529,9 +1547,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } catch (err) {
       console.error('[Messages] Erreur deleteMessage:', err);
     }
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   // Supprimer une conversation et tous ses messages (cascade DB)
+  // ✅ OPTIMISATION: useCallback sans dépendances (fonction stable)
   const deleteConversation = useCallback(async (convId: string): Promise<void> => {
     try {
       await deleteConversationDB(convId);
@@ -1544,7 +1563,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     } catch (err) {
       console.error('[Messages] Erreur deleteConversation:', err);
     }
-  }, []);
+  }, []); // ✅ Aucune dépendance externe - fonction stable
 
   // ── Bridge Nostr → conversations ────────────────────────────────────────────
   // S'abonne au MessagingBus et intègre les DMs Nostr entrants dans les
@@ -1765,7 +1784,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return unsub;
   }, [handleIncomingMeshCorePacket]);
 
-  return {
+  // ✅ OPTIMISATION: useMemo pour l'objet retourné (évite les re-renders des consommateurs)
+  const value = useMemo(() => ({
     identity,
     conversations,
     messagesByConv,
@@ -1788,7 +1808,32 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     isContact,
     toggleFavorite,
     refreshContacts,
-  };
+  }), [
+    identity,
+    conversations,
+    messagesByConv,
+    sendMessage,
+    sendAudio,
+    sendImage,
+    sendCashu,
+    loadConversationMessages,
+    startConversation,
+    joinedForumsList,
+    joinForum,
+    leaveForum,
+    markRead,
+    setDisplayName,
+    deleteMessage,
+    deleteConversation,
+    contacts,
+    addContact,
+    removeContact,
+    isContact,
+    toggleFavorite,
+    refreshContacts,
+  ]);
+
+  return value;
 });
 
 // Extraire le montant d'un Cashu token (approximatif depuis le texte)

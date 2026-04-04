@@ -1,3 +1,21 @@
+/**
+ * SYSTÈME DE CHUNKING TEXTE (MCHK)
+ * =================================
+ * 
+ * Ce système de chunking est utilisé pour les messages texte longs
+ * qui transitent via le protocole MeshCore natif (companion_radio).
+ * 
+ * Format: Texte avec header MCHK|version|msgId|index/total|type|
+ * Usage: Messages applicatifs (Cashu, Lightning, Bitcoin)
+ * 
+ * ⚠️ DIFFÉRENCE avec meshcore-protocol.ts:
+ * - chunking.ts  : Chunking TEXTE (MCHK) pour messages applicatifs
+ * - meshcore-protocol.ts : Chunking BINAIRE natif pour protocole MeshCore
+ * 
+ * Ne pas confondre avec MessageChunk/MessageCoreMessageType.CHUNK_* 
+ * dans meshcore-protocol.ts qui est le chunking binaire natif LoRa.
+ */
+
 const LORA_MAX_PAYLOAD = 200;
 const CHUNK_HEADER_SIZE = 12;
 const CHUNK_DATA_SIZE = LORA_MAX_PAYLOAD - CHUNK_HEADER_SIZE;

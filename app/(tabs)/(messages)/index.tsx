@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react';
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react'; // ✅ useCallback et useMemo importés
 import {
   View,
   Text,
@@ -28,7 +28,10 @@ import type { StoredConversation } from '@/utils/messages-store';
 import type { DBContact } from '@/utils/database';
 import type { NostrEvent } from 'nostr-tools';
 
-function SignalDots({ strength }: { strength: number }) {
+// ✅ OPTIMISATION: Separator component (défini après les styles pour éviter les références avant déclaration)
+const SeparatorComponent = React.memo(() => <View style={{ height: 0.5, backgroundColor: Colors.border, marginLeft: 80 }} />);
+
+const SignalDots = React.memo(function SignalDots({ strength }: { strength: number }) {
   const bars = strength >= 70 ? 3 : strength >= 40 ? 2 : 1;
   const color = strength >= 70 ? Colors.green : strength >= 40 ? Colors.yellow : Colors.red;
   return (
@@ -44,13 +47,19 @@ function SignalDots({ strength }: { strength: number }) {
       ))}
     </View>
   );
-}
+});
 
-function ConvItem({ conv, onPress, onLongPress }: { conv: StoredConversation; onPress: () => void; onLongPress: () => void }) {
+// ✅ OPTIMISATION: React.memo pour éviter les re-renders inutiles
+const ConvItem = React.memo(function ConvItem({ conv, onPress, onLongPress }: { conv: StoredConversation; onPress: () => void; onLongPress: () => void }) {
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
-  const handlePressIn = () => Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true }).start();
-  const handlePressOut = () => Animated.spring(scaleAnim, { toValue: 1, friction: 3, useNativeDriver: true }).start();
+  const handlePressIn = useCallback(() => {
+    Animated.spring(scaleAnim, { toValue: 0.97, useNativeDriver: true }).start();
+  }, [scaleAnim]);
+  
+  const handlePressOut = useCallback(() => {
+    Animated.spring(scaleAnim, { toValue: 1, friction: 3, useNativeDriver: true }).start();
+  }, [scaleAnim]);
 
   const avatar = conv.isForum ? '#' : conv.name.charAt(0).toUpperCase();
   const avatarBg = conv.isForum ? Colors.cyanDim : Colors.surfaceLight;
@@ -111,7 +120,7 @@ function ConvItem({ conv, onPress, onLongPress }: { conv: StoredConversation; on
       </TouchableOpacity>
     </Animated.View>
   );
-}
+});
 
 // Valider le nom de forum
 function validateForumName(name: string): string | null {
@@ -699,13 +708,18 @@ export default function MessagesScreen() {
     );
   }, [conversations]);
 
-  const modeLabel = settings.connectionMode === 'internet' ? 'Internet Mode'
-    : settings.connectionMode === 'bridge' ? 'Bridge Mode' : 'LoRa Mesh';
-  const modeColor = settings.connectionMode === 'internet' ? Colors.blue
-    : settings.connectionMode === 'bridge' ? Colors.cyan : Colors.green;
-  const ModeIcon = settings.connectionMode === 'internet' ? Globe
-    : settings.connectionMode === 'bridge' ? Wifi : Radio;
+  // ✅ OPTIMISATION: useMemo pour les calculs de mode
+  const { modeLabel, modeColor, ModeIcon } = useMemo(() => {
+    const modeLabel = settings.connectionMode === 'internet' ? 'Internet Mode'
+      : settings.connectionMode === 'bridge' ? 'Bridge Mode' : 'LoRa Mesh';
+    const modeColor = settings.connectionMode === 'internet' ? Colors.blue
+      : settings.connectionMode === 'bridge' ? Colors.cyan : Colors.green;
+    const ModeIcon = settings.connectionMode === 'internet' ? Globe
+      : settings.connectionMode === 'bridge' ? Wifi : Radio;
+    return { modeLabel, modeColor, ModeIcon };
+  }, [settings.connectionMode]);
 
+  // ✅ OPTIMISATION: useCallback stable avec toutes les dépendances
   const handleLongPressConv = useCallback((item: StoredConversation) => {
     Alert.alert(
       item.isForum ? `Quitter #${item.name} ?` : `Supprimer la conversation avec ${item.name} ?`,
@@ -719,8 +733,9 @@ export default function MessagesScreen() {
         },
       ]
     );
-  }, [deleteConversation]);
+  }, [deleteConversation]); // ✅ Dépendance stable
 
+  // ✅ OPTIMISATION: renderConv optimisé avec dépendances minimales
   const renderConv = useCallback(
     ({ item }: { item: StoredConversation }) => (
       <ConvItem
@@ -729,7 +744,7 @@ export default function MessagesScreen() {
         onLongPress={() => handleLongPressConv(item)}
       />
     ),
-    [router, handleLongPressConv]
+    [router, handleLongPressConv] // ✅ Dépendances stables
   );
 
   const handleDM = async (nodeId: string, name: string, pubkey?: string) => {
@@ -790,13 +805,23 @@ export default function MessagesScreen() {
         </ScrollView>
       </View>
 
+      {/* ✅ OPTIMISATION: FlatList optimisée avec getItemLayout et removeClippedSubviews */}
       <FlatList
         data={uniqueConversations}
         keyExtractor={(item) => item.id}
         renderItem={renderConv}
         contentContainerStyle={[styles.listContent, uniqueConversations.length === 0 && styles.emptyList]}
         showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        ItemSeparatorComponent={SeparatorComponent}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
+        getItemLayout={(data, index) => ({
+          length: 78, // Hauteur estimée d'un item (padding 14*2 + avatar 50)
+          offset: 78 * index,
+          index,
+        })}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Radio size={48} color={Colors.textMuted} />

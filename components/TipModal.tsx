@@ -3,7 +3,7 @@
  * Sélection automatique des proofs depuis le wallet local, sans mint actif requis.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react'; // ✅ useMemo ajouté
 import {
   View,
   Text,
@@ -52,7 +52,7 @@ function selectTokens(tokens: DBCashuToken[], target: number): { selected: DBCas
   return null; // solde insuffisant
 }
 
-export default function TipModal({ visible, onClose, convId, convName, sendCashu }: TipModalProps) {
+function TipModalComponent({ visible, onClose, convId, convName, sendCashu }: TipModalProps) {
   const [balance, setBalance] = useState(0);
   const [tokens, setTokens] = useState<DBCashuToken[]>([]);
   const [amount, setAmount] = useState<number>(100);
@@ -76,11 +76,21 @@ export default function TipModal({ visible, onClose, convId, convName, sendCashu
     })();
   }, [visible]);
 
-  const effectiveAmount = isCustom ? (parseInt(customStr, 10) || 0) : amount;
-  const selection = tokens.length ? selectTokens(tokens, effectiveAmount) : null;
+  // ✅ OPTIMISATION: useMemo pour les calculs
+  const effectiveAmount = useMemo(() => 
+    isCustom ? (parseInt(customStr, 10) || 0) : amount,
+    [isCustom, customStr, amount]
+  );
+  
+  const selection = useMemo(() => 
+    tokens.length ? selectTokens(tokens, effectiveAmount) : null,
+    [tokens, effectiveAmount]
+  );
+  
   const willSend = selection?.total ?? 0;
   const overpay = willSend > effectiveAmount ? willSend - effectiveAmount : 0;
 
+  // ✅ OPTIMISATION: useCallback avec dépendances complètes
   const handleConfirm = useCallback(async () => {
     if (effectiveAmount <= 0) { setError('Montant invalide.'); return; }
     if (!selection) { setError('Solde insuffisant.'); return; }
@@ -120,7 +130,7 @@ export default function TipModal({ visible, onClose, convId, convName, sendCashu
     } finally {
       setIsSending(false);
     }
-  }, [effectiveAmount, selection, convId, sendCashu, onClose]);
+  }, [effectiveAmount, selection, convId, sendCashu, onClose]); // ✅ Toutes les dépendances
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -229,6 +239,10 @@ export default function TipModal({ visible, onClose, convId, convName, sendCashu
     </Modal>
   );
 }
+
+// ✅ OPTIMISATION: React.memo pour éviter les re-renders inutiles
+const TipModal = React.memo(TipModalComponent);
+export default TipModal;
 
 const styles = StyleSheet.create({
   overlay: {

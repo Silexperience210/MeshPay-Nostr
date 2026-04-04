@@ -8,7 +8,7 @@
  * - MQTT reste fonctionnel en parallèle pendant la migration
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
@@ -95,6 +95,17 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [relays, setRelays] = useState<RelayInfo[]>([]);
 
+  // Mémoriser le keypair pour éviter de le régénérer à chaque render
+  const keypair = useMemo(() => {
+    if (!mnemonic) return null;
+    try {
+      return deriveNostrKeypair(mnemonic);
+    } catch (err) {
+      console.error('[NostrProvider] Échec dérivation keypair:', err);
+      return null;
+    }
+  }, [mnemonic]);
+
   // Ref pour éviter les mises à jour d'état après démontage
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -157,8 +168,9 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
       try {
         if (mountedRef.current) setIsConnecting(true);
 
-        // Dériver les clés Nostr depuis le même seed BIP39 que le wallet Bitcoin
-        const keypair: NostrKeypair = deriveNostrKeypair(mnemonic);
+        if (!keypair) {
+          throw new Error('[NostrProvider] Keypair non disponible');
+        }
         nostrClient.setKeypair(keypair);
 
         // Observer les changements d'état des relays
@@ -200,13 +212,17 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     return () => {
       cancelled = true;
     };
-  }, [isInitialized, mnemonic]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isInitialized, mnemonic, keypair, getActiveRelayUrls]);
 
   // ── DMs ──────────────────────────────────────────────────────────────────
 
   const publishDM = useCallback(
-    (recipientPubKey: string, content: string) =>
-      nostrClient.publishDM(recipientPubKey, content),
+    (recipientPubKey: string, content: string) => {
+      if (!nostrClient.isConnected) {
+        return Promise.reject(new Error('[Nostr] Non connecté — impossible d\'envoyer le DM'));
+      }
+      return nostrClient.publishDM(recipientPubKey, content);
+    },
     [],
   );
 
@@ -219,8 +235,12 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   // ── DMs scellés (NIP-17) ─────────────────────────────────────────────────
 
   const publishDMSealed = useCallback(
-    (recipientPubKey: string, content: string) =>
-      nostrClient.publishDMSealed(recipientPubKey, content),
+    (recipientPubKey: string, content: string) => {
+      if (!nostrClient.isConnected) {
+        return Promise.reject(new Error('[Nostr] Non connecté — impossible d\'envoyer le DM scellé'));
+      }
+      return nostrClient.publishDMSealed(recipientPubKey, content);
+    },
     [],
   );
 

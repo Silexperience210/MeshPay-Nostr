@@ -11,6 +11,10 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 
 const BIP44_BTC_PATH = "m/84'/0'/0'";
 
+// ─── Constantes de validation ───────────────────────────────────────────────
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
 export interface DerivedWalletInfo {
   xpub: string;
   firstReceiveAddress: string;
@@ -45,7 +49,66 @@ function hash160(data: Uint8Array): Uint8Array {
   return ripemd160(sha256(data));
 }
 
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+/**
+ * Décode une chaîne base58check et vérifie le checksum.
+ * @returns Le payload décodé ou null si invalide
+ */
+function base58checkDecode(str: string): Uint8Array | null {
+  try {
+    // Vérifier que tous les caractères sont valides
+    for (const char of str) {
+      if (!BASE58_ALPHABET.includes(char)) {
+        return null;
+      }
+    }
+
+    // Compter les zéros de tête
+    let leadingZeros = 0;
+    for (const char of str) {
+      if (char === '1') leadingZeros++;
+      else break;
+    }
+
+    // Convertir base58 en nombre
+    let num = 0n;
+    for (const char of str) {
+      const charIndex = BASE58_ALPHABET.indexOf(char);
+      if (charIndex === -1) return null;
+      num = num * 58n + BigInt(charIndex);
+    }
+
+    // Convertir en bytes
+    const hex = num.toString(16).padStart(2, '0');
+    const bytes = new Uint8Array(Math.ceil(hex.length / 2));
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+    }
+
+    // Ajouter les zéros de tête
+    const result = new Uint8Array(leadingZeros + bytes.length);
+    result.fill(0, 0, leadingZeros);
+    result.set(bytes, leadingZeros);
+
+    // Vérifier la taille minimum (version + hash + checksum)
+    if (result.length < 25) return null;
+
+    // Séparer payload et checksum
+    const payload = result.slice(0, -4);
+    const checksum = result.slice(-4);
+
+    // Vérifier le checksum
+    const computedChecksum = sha256(sha256(payload)).slice(0, 4);
+    for (let i = 0; i < 4; i++) {
+      if (checksum[i] !== computedChecksum[i]) {
+        return null; // Checksum invalide
+      }
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 function base58check(payload: Uint8Array): string {
   const checksum = sha256(sha256(payload)).slice(0, 4);
@@ -71,6 +134,8 @@ function base58check(payload: Uint8Array): string {
 
   return result;
 }
+
+// ─── Validation Bech32 ─────────────────────────────────────────────────────
 
 function bech32Polymod(values: number[]): number {
   const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
@@ -99,6 +164,15 @@ function bech32HrpExpand(hrp: string): number[] {
   return ret;
 }
 
+/**
+ * Vérifie le checksum Bech32 d'une adresse.
+ * @returns true si le checksum est valide
+ */
+function verifyBech32Checksum(hrp: string, data: number[]): boolean {
+  const polymod = bech32Polymod(bech32HrpExpand(hrp).concat(data));
+  return polymod === 1;
+}
+
 function bech32CreateChecksum(hrp: string, data: number[]): number[] {
   const values = bech32HrpExpand(hrp).concat(data).concat([0, 0, 0, 0, 0, 0]);
   const polymod = bech32Polymod(values) ^ 1;
@@ -108,8 +182,6 @@ function bech32CreateChecksum(hrp: string, data: number[]): number[] {
   }
   return ret;
 }
-
-const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 
 function convertBits(data: Uint8Array, fromBits: number, toBits: number, pad: boolean): number[] {
   let acc = 0;
@@ -145,6 +217,55 @@ function encodeBech32(hrp: string, witnessVersion: number, witnessProgram: Uint8
   return result;
 }
 
+/**
+ * Décode et valide une adresse Bech32/Bech32m.
+ * @returns Les composants de l'adresse ou null si invalide
+ */
+function decodeBech32(address: string): { hrp: string; version: number; program: Uint8Array } | null {
+  // Vérifier la casse (Bech32 doit être tout en minuscules ou tout en majuscules)
+  const hasLower = /[a-z]/.test(address);
+  const hasUpper = /[A-Z]/.test(address);
+  if (hasLower && hasUpper) return null; // Casse mixte invalide
+
+  const addr = address.toLowerCase();
+
+  // Trouver le séparateur '1'
+  const sepIndex = addr.lastIndexOf('1');
+  if (sepIndex < 1 || sepIndex + 7 > addr.length) return null;
+
+  const hrp = addr.slice(0, sepIndex);
+  const dataPart = addr.slice(sepIndex + 1);
+
+  // Vérifier que le HRP est valide (bc pour mainnet, tb pour testnet)
+  if (hrp !== 'bc' && hrp !== 'tb') return null;
+
+  // Décoder les caractères
+  const data: number[] = [];
+  for (const char of dataPart) {
+    const index = BECH32_CHARSET.indexOf(char);
+    if (index === -1) return null;
+    data.push(index);
+  }
+
+  // Vérifier le checksum
+  if (!verifyBech32Checksum(hrp, data)) return null;
+
+  // Extraire la version et le programme witness
+  const version = data[0];
+  if (version > 16) return null;
+
+  const fiveBitProgram = data.slice(1, -6); // Exclure le checksum
+  const program = convertBits(new Uint8Array(fiveBitProgram), 5, 8, false);
+
+  // Vérifier la taille du programme witness
+  if (program.length < 2 || program.length > 40) return null;
+
+  // Vérifier la taille pour v0 (P2WPKH doit faire 20 bytes, P2WSH doit faire 32 bytes)
+  if (version === 0 && program.length !== 20 && program.length !== 32) return null;
+
+  return { hrp, version, program: new Uint8Array(program) };
+}
+
 export function pubkeyToSegwitAddress(pubkey: Uint8Array, mainnet: boolean = true): string {
   const h160 = hash160(pubkey);
   const hrp = mainnet ? 'bc' : 'tb';
@@ -158,6 +279,159 @@ export function pubkeyToLegacyAddress(pubkey: Uint8Array, mainnet: boolean = tru
   payload[0] = prefix;
   payload.set(h160, 1);
   return base58check(payload);
+}
+
+/**
+ * Valide une adresse Bitcoin avec vérification complète du checksum.
+ * Supporte les adresses Legacy (P2PKH), P2SH, et Bech32 (SegWit).
+ * 
+ * @param address - L'adresse à valider
+ * @param options - Options de validation
+ * @returns true si l'adresse est valide et le checksum correct
+ */
+export function validateAddress(
+  address: string, 
+  options: { 
+    allowTestnet?: boolean;
+    requireSegwit?: boolean;
+  } = {}
+): boolean {
+  if (!address || typeof address !== 'string') {
+    return false;
+  }
+
+  // Vérifier la longueur raisonnable
+  if (address.length < 26 || address.length > 90) {
+    return false;
+  }
+
+  const { allowTestnet = false, requireSegwit = false } = options;
+
+  // Essayer de décoder comme Bech32 (SegWit)
+  const bech32Result = decodeBech32(address);
+  if (bech32Result) {
+    // Vérifier le réseau
+    if (bech32Result.hrp === 'bc') {
+      return true; // Mainnet
+    }
+    if (bech32Result.hrp === 'tb' && allowTestnet) {
+      return true; // Testnet autorisé
+    }
+    return false; // Testnet non autorisé
+  }
+
+  // Si on exige SegWit, rejeter les adresses Legacy
+  if (requireSegwit) {
+    return false;
+  }
+
+  // Essayer de décoder comme Base58Check (Legacy ou P2SH)
+  const base58Payload = base58checkDecode(address);
+  if (!base58Payload) {
+    return false; // Checksum invalide ou format incorrect
+  }
+
+  // Vérifier la version et la taille
+  if (base58Payload.length !== 21) {
+    return false;
+  }
+
+  const version = base58Payload[0];
+
+  // Version byte pour P2PKH mainnet: 0x00, testnet: 0x6f
+  // Version byte pour P2SH mainnet: 0x05, testnet: 0xc4
+  const isP2PKHMainnet = version === 0x00;
+  const isP2SHMainnet = version === 0x05;
+  const isP2PKHTestnet = version === 0x6f;
+  const isP2SHTestnet = version === 0xc4;
+
+  if (isP2PKHMainnet || isP2SHMainnet) {
+    return true; // Mainnet Legacy ou P2SH
+  }
+
+  if ((isP2PKHTestnet || isP2SHTestnet) && allowTestnet) {
+    return true; // Testnet autorisé
+  }
+
+  return false; // Version inconnue ou testnet non autorisé
+}
+
+/**
+ * Valide une adresse Bitcoin et retourne des détails sur le type d'adresse.
+ * @returns Les détails de l'adresse ou null si invalide
+ */
+export function validateAddressDetailed(address: string): {
+  valid: boolean;
+  type?: 'p2pkh' | 'p2sh' | 'p2wpkh' | 'p2wsh' | 'p2tr' | 'unknown';
+  network?: 'mainnet' | 'testnet';
+  error?: string;
+} {
+  if (!address || typeof address !== 'string') {
+    return { valid: false, error: 'Adresse invalide' };
+  }
+
+  if (address.length < 26 || address.length > 90) {
+    return { valid: false, error: 'Longueur d\'adresse invalide' };
+  }
+
+  // Essayer Bech32
+  const bech32Result = decodeBech32(address);
+  if (bech32Result) {
+    const network = bech32Result.hrp === 'bc' ? 'mainnet' : 'testnet';
+    let type: 'p2wpkh' | 'p2wsh' | 'p2tr' | 'unknown';
+    
+    if (bech32Result.version === 0) {
+      type = bech32Result.program.length === 20 ? 'p2wpkh' : 'p2wsh';
+    } else if (bech32Result.version === 1) {
+      type = 'p2tr';
+    } else {
+      type = 'unknown';
+    }
+
+    return { valid: true, type, network };
+  }
+
+  // Essayer Base58Check
+  const base58Payload = base58checkDecode(address);
+  if (base58Payload) {
+    if (base58Payload.length !== 21) {
+      return { valid: false, error: 'Taille de payload invalide' };
+    }
+
+    const version = base58Payload[0];
+    
+    switch (version) {
+      case 0x00:
+        return { valid: true, type: 'p2pkh', network: 'mainnet' };
+      case 0x05:
+        return { valid: true, type: 'p2sh', network: 'mainnet' };
+      case 0x6f:
+        return { valid: true, type: 'p2pkh', network: 'testnet' };
+      case 0xc4:
+        return { valid: true, type: 'p2sh', network: 'testnet' };
+      default:
+        return { valid: false, error: 'Version byte inconnu' };
+    }
+  }
+
+  return { valid: false, error: 'Checksum invalide ou format non reconnu' };
+}
+
+/**
+ * Valide une adresse avant envoi de fonds.
+ * Lève une exception si l'adresse est invalide.
+ * @throws si l'adresse est invalide
+ */
+export function assertValidAddress(address: string, allowTestnet: boolean = false): void {
+  const validation = validateAddressDetailed(address);
+  
+  if (!validation.valid) {
+    throw new Error(`Adresse Bitcoin invalide: ${validation.error || 'inconnue'}`);
+  }
+
+  if (validation.network === 'testnet' && !allowTestnet) {
+    throw new Error('Adresse testnet non autorisée en production');
+  }
 }
 
 export function deriveWalletInfo(mnemonic: string, passphrase?: string): DerivedWalletInfo {

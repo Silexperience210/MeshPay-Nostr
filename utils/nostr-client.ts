@@ -206,6 +206,13 @@ export class NostrClient {
   private _reconnectDelay = 2000; // commence à 2s, double jusqu'à 30s
   private _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private _intentionalDisconnect = false;
+  // Active subscriptions for auto-resubscription after reconnect
+  private _activeSubscriptions: Array<{
+    filters: Filter[];
+    onEvent: (event: NostrEvent) => void;
+    onEOSE?: () => void;
+    unsub: (() => void) | null;
+  }> = [];
 
   constructor(relayUrls?: string[]) {
     this.pool = new SimplePool();
@@ -325,6 +332,8 @@ export class NostrClient {
       this._reconnectTimer = null;
       if (this._intentionalDisconnect || this.isConnected) return;
       try {
+        // Fermer proprement l'ancien pool pour éviter les fuites de connexion
+        this.pool.close(this.relayUrls);
         // Recréer le pool pour éviter les WS zombies
         this.pool = new SimplePool();
         for (const url of this.relayUrls) {
@@ -335,10 +344,89 @@ export class NostrClient {
         // Reconnexion réussie : reset delay
         this._reconnectDelay = 2000;
         console.log('[Nostr] Reconnexion réussie');
+        // Réabonner automatiquement aux subscriptions actives
+        this._resubscribeAll();
       } catch {
         console.warn('[Nostr] Reconnexion échouée, retry dans', this._reconnectDelay / 1000, 's');
       }
     }, delay);
+  }
+
+  /**
+   * Réabonne toutes les subscriptions actives après une reconnexion.
+   * Les subscriptions précédentes sont mortes car le pool a été recréé.
+   */
+  private _resubscribeAll(): void {
+    if (this._activeSubscriptions.length === 0) return;
+    console.log(`[Nostr] Réabonnement de ${this._activeSubscriptions.length} subscription(s) active(s)`);
+    for (const sub of this._activeSubscriptions) {
+      // Fermer l'ancienne subscription si elle existe encore
+      if (sub.unsub) {
+        try { sub.unsub(); } catch { /* ignore */ }
+      }
+      // Réabonner avec les mêmes paramètres
+      sub.unsub = this._doSubscribe(sub.filters, sub.onEvent, sub.onEOSE);
+    }
+  }
+
+  /**
+   * Implémentation interne de la subscription.
+   */
+  private _doSubscribe(
+    filters: Filter[],
+    onEvent: (event: NostrEvent) => void,
+    onEOSE?: () => void,
+  ): () => void {
+    const handler = (event: NostrEvent): void => {
+      // Double validation : hash + signature + timestamp
+      if (!this._validateEvent(event)) return;
+      onEvent(event);
+    };
+
+    let eoseFired = 0;
+    const subs = filters.map((filter) =>
+      this.pool.subscribeMany(this.relayUrls, filter as any, {
+        onevent: handler,
+        oneose: onEOSE
+          ? () => {
+              eoseFired++;
+              if (eoseFired === filters.length) onEOSE();
+            }
+          : undefined,
+      })
+    );
+
+    return () => { for (const s of subs) s.close(); };
+  }
+
+  /**
+   * Validation complète d'un event Nostr.
+   * Vérifie hash, signature et timestamp (pas trop vieux).
+   */
+  private _validateEvent(event: NostrEvent): boolean {
+    // Vérification hash
+    if (getEventHash(event) !== event.id) {
+      console.warn('[Nostr] Hash/ID invalide — event ignoré:', event.id.slice(0, 12));
+      return false;
+    }
+    // Vérification signature
+    if (!verifyEvent(event)) {
+      console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
+      return false;
+    }
+    // Vérification timestamp (pas plus vieux que 24h, pas dans le futur de plus de 1h)
+    const now = Math.floor(Date.now() / 1000);
+    const maxAge = 24 * 60 * 60; // 24 heures
+    const maxFuture = 60 * 60; // 1 heure
+    if (event.created_at < now - maxAge) {
+      console.warn('[Nostr] Event trop vieux — ignoré:', event.id.slice(0, 12));
+      return false;
+    }
+    if (event.created_at > now + maxFuture) {
+      console.warn('[Nostr] Event dans le futur — ignoré:', event.id.slice(0, 12));
+      return false;
+    }
+    return true;
   }
 
   get isConnected(): boolean {
@@ -396,38 +484,21 @@ export class NostrClient {
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
   ): () => void {
-    const handler = (event: NostrEvent): void => {
-      // Double validation : hash + signature (verifyEvent seul ne vérifie pas le hash)
-      if (getEventHash(event) !== event.id) {
-        console.warn('[Nostr] Hash/ID invalide — event ignoré:', event.id.slice(0, 12));
-        return;
+    // Créer la subscription
+    const unsub = this._doSubscribe(filters, onEvent, onEOSE);
+    
+    // Stocker pour réabonnement auto après reconnect
+    const subRecord = { filters, onEvent, onEOSE, unsub };
+    this._activeSubscriptions.push(subRecord);
+
+    // Retourner une fonction de cleanup qui retire aussi du registre
+    return () => {
+      unsub();
+      const idx = this._activeSubscriptions.indexOf(subRecord);
+      if (idx !== -1) {
+        this._activeSubscriptions.splice(idx, 1);
       }
-      if (!verifyEvent(event)) {
-        console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
-        return;
-      }
-      onEvent(event);
     };
-
-    // ✅ FIX CRITIQUE: nostr-tools v2.x pool.subscribeMany(relays, filter, params)
-    // `filter` est passé DIRECTEMENT (non enveloppé dans un tableau).
-    // En interne, subscribeMap fait already grouped.get(url).push(filter) → [filter].
-    // Si on passe [filter], le relay reçoit [[filter]] → REQ invalide → aucun event reçu.
-    // Passer chaque filtre individuellement (un subscribeMany par filtre) est correct.
-    let eoseFired = 0;
-    const subs = filters.map((filter) =>
-      this.pool.subscribeMany(this.relayUrls, filter as any, {
-        onevent: handler,
-        oneose: onEOSE
-          ? () => {
-              eoseFired++;
-              if (eoseFired === filters.length) onEOSE();
-            }
-          : undefined,
-      })
-    );
-
-    return () => { for (const s of subs) s.close(); };
   }
 
   // ── NIP-44 : DMs chiffrés (ChaCha20-Poly1305) ────────────────────────────

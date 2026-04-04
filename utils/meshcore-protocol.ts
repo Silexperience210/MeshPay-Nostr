@@ -5,7 +5,8 @@
  * Compatible avec firmware MeshCore Companion
  */
 
-import { compressMeshCoreMessage, decompressMeshCoreMessage, shouldCompress } from './lzw';
+// Compression functions imported from compression.ts (not lzw.ts to avoid circular imports)
+import { compressWithFallback, decompressFromLora, isCompressed } from './compression';
 
 // UUIDs BLE MeshCore (Nordic UART Service standard)
 export const MESHCORE_BLE = {
@@ -257,7 +258,6 @@ export function uint64ToNodeId(value: bigint): string {
 }
 
 import { getNextMessageId } from './database';
-import { compressWithFallback, isCompressed, decompress } from './compression';
 
 /**
  * Créer un message texte MeshCore
@@ -353,7 +353,7 @@ export function createTextMessageSync(
   };
 }
 
-import { decompressFromLora } from './compression';
+// Note: decompressFromLora already imported at top of file
 
 /**
  * Extraire le texte d'un paquet MeshCore
@@ -632,8 +632,16 @@ export function extractAckInfo(payload: Uint8Array): { originalMessageId: number
 }
 
 // ============================================================================
-// CHUNKING / BATCH MESSAGING
+// CHUNKING / BATCH MESSAGING (BINAIRE NATIF)
 // Pour envoyer des messages longs en plusieurs paquets LoRa
+// 
+// ⚠️ DIFFÉRENCE avec chunking.ts:
+// - meshcore-protocol.ts : Chunking BINAIRE natif (headers binaires)
+// - chunking.ts          : Chunking TEXTE MCHK (headers texte)
+// 
+// Ce chunking binaire est utilisé par le protocole MeshCore natif
+// pour fragmenter les messages qui dépassent LORA_MAX_PAYLOAD (200 bytes).
+// Format: [msgId(4 bytes BE) | chunkIdx(1) | totalChunks(1) | data...]
 // ============================================================================
 
 const CHUNK_HEADER_SIZE = 6; // bytes: [msgId(4) | chunkIdx(1) | totalChunks(1)]
