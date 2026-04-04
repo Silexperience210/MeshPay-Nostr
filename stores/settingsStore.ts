@@ -265,8 +265,9 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: SETTINGS_KEY,
       storage: createJSONStorage(() => AsyncStorage),
-      onRehydrateStorage: () => (state) => {
-        console.log('[SettingsStore] Rehydrated from storage');
+      onRehydrateStorage: () => (state, error) => {
+        console.log('[SettingsStore] Rehydrated from storage', { hasState: !!state, error });
+        // FIX: Toujours marquer comme hydraté pour éviter le freeze sur le splash screen
         if (state) {
           state.setHasHydrated(true);
           // Synchroniser la whitelist Cashu dès le chargement

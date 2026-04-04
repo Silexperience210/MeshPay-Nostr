@@ -178,8 +178,9 @@ export const useWalletStore = create<WalletState>()(
     {
       name: 'wallet-storage-web',
       storage: createJSONStorage(() => localStorage),
-      onRehydrateStorage: () => (state) => {
-        console.log('[WalletStore-Web] Rehydrated from storage');
+      onRehydrateStorage: () => (state, error) => {
+        console.log('[WalletStore-Web] Rehydrated from storage', { hasState: !!state, error });
+        // FIX: Toujours marquer comme hydraté pour éviter le freeze
         if (state) {
           state.setHasHydrated(true);
           if (state.mnemonic) {

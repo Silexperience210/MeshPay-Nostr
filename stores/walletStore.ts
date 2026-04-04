@@ -131,7 +131,15 @@ const secureWalletStorage = {
             });
           }
         }
-        return null;
+        // FIX: Retourner un état minimal pour premier démarrage (pas de freeze)
+        return JSON.stringify({
+          state: {
+            mnemonic: null,
+            isInitialized: false,
+            _hasHydrated: true,
+          },
+          version: 0,
+        });
       }
 
       return JSON.stringify({
@@ -353,8 +361,10 @@ export const useWalletStore = create<WalletState>()(
     {
       name: 'wallet-storage',
       storage: createJSONStorage(() => secureWalletStorage),
-      onRehydrateStorage: () => (state) => {
-        console.log('[WalletStore] Rehydrated from storage');
+      onRehydrateStorage: () => (state, error) => {
+        console.log('[WalletStore] Rehydrated from storage', { hasState: !!state, error });
+        // FIX: Toujours marquer comme hydraté, même si pas de wallet (premier démarrage)
+        // ou en cas d'erreur, pour éviter le freeze sur le splash screen
         if (state) {
           state.setHasHydrated(true);
           // Dériver les données du wallet après réhydratation
