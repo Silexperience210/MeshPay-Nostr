@@ -11,10 +11,18 @@
  *  • Un event kind:9001 (TxRelay) reçu de Nostr est injecté dans le flux BLE
  *
  * Format unifié BusMessage — valide pour Nostr et LoRa.
+ * 
+ * Phase 2.3: Intégration Hermès Engine (double écriture)
+ *  • Émission d'événements Hermès pour tous les messages (envoyés/reçus)
+ *  • Maintien de la compatibilité legacy avec les handlers existants
  */
 
 import { nostrClient as defaultNostrClient, Kind, type NostrClient } from '@/utils/nostr-client';
 import type { Event as NostrEvent } from 'nostr-tools';
+
+// ─── Imports Hermès Engine ─────────────────────────────────────────────────────
+
+import { hermes, EventType, Transport as HermesTransport } from '@/engine';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -177,13 +185,14 @@ export class MessagingBus {
   /**
    * Envoie un DM via Nostr.
    * Publie un kind:4 avec tag meshcore-to pour le nodeId.
+   * Émet également un événement Hermès DM_SENT (double écriture Phase 2.3).
    */
   async sendDM(params: {
     toNodeId: string;
     toNostrPubkey: string;
     content: string;
   }): Promise<Transport> {
-    const { toNostrPubkey, content } = params;
+    const { toNodeId, toNostrPubkey, content } = params;
 
     if (this.nostr.isConnected) {
       // NIP-17 Gift Wrap (expéditeur masqué, chiffrement NIP-44) — fallback NIP-04 si nécessaire
@@ -192,6 +201,31 @@ export class MessagingBus {
       } else {
         await this.nostr.publishDM(toNostrPubkey, content);
       }
+
+      // NOUVEAU (Phase 2.3): Émettre événement Hermès (double écriture)
+      try {
+        await hermes.createEvent(
+          EventType.DM_SENT,
+          {
+            content,
+            contentType: 'text',
+            encryption: typeof this.nostr.publishDMSealed === 'function' ? 'nip44' : 'nip04',
+            to: toNodeId,
+          },
+          {
+            from: this.localNodeId,
+            to: toNodeId,
+            transport: HermesTransport.NOSTR,
+          }
+        );
+        if (__DEV__) {
+          console.log('[Bus] Événement Hermès DM_SENT émis');
+        }
+      } catch (err) {
+        // Ne pas bloquer le flux en cas d'erreur Hermès
+        console.warn('[Bus] Échec émission Hermès DM_SENT:', err);
+      }
+
       return 'nostr';
     }
 
@@ -200,6 +234,7 @@ export class MessagingBus {
 
   /**
    * Envoie un message de channel via Nostr (kind:42 NIP-28).
+   * Émet également un événement Hermès CHANNEL_MSG_SENT (double écriture Phase 2.3).
    */
   async sendChannelMessage(params: {
     channelId: string;
@@ -211,6 +246,30 @@ export class MessagingBus {
     if (this.nostr.isConnected) {
       const ncId = nostrChannelId ?? channelId;
       await this.nostr.publishChannelMessage(ncId, content);
+
+      // NOUVEAU (Phase 2.3): Émettre événement Hermès
+      try {
+        await hermes.createEvent(
+          EventType.CHANNEL_MSG_SENT,
+          {
+            content,
+            contentType: 'text',
+            channelName: channelId,
+          },
+          {
+            from: this.localNodeId,
+            to: channelId,
+            transport: HermesTransport.NOSTR,
+          }
+        );
+        if (__DEV__) {
+          console.log('[Bus] Événement Hermès CHANNEL_MSG_SENT émis');
+        }
+      } catch (err) {
+        // Ne pas bloquer le flux en cas d'erreur Hermès
+        console.warn('[Bus] Échec émission Hermès CHANNEL_MSG_SENT:', err);
+      }
+
       return 'nostr';
     }
 
@@ -221,13 +280,38 @@ export class MessagingBus {
    * Bridge LoRa → Nostr.
    * Un message LoRa brut est republié sur Nostr (kind:9001) pour qu'un
    * nœud gateway internet puisse le recevoir et le traiter.
+   * Émet également un événement Hermès BRIDGE_LORA_TO_NOSTR (double écriture Phase 2.3).
    */
   async bridgeLoraToNostr(rawPayload: string): Promise<void> {
     if (!this.nostr.isConnected) return;
+
     await this.nostr.publishTxRelay({
       type: 'lora_relay',
       data: rawPayload,
     });
+
+    // NOUVEAU (Phase 2.3): Émettre événement Hermès
+    try {
+      await hermes.createEvent(
+        EventType.BRIDGE_LORA_TO_NOSTR,
+        {
+          originalTransport: HermesTransport.LORA,
+          targetTransport: HermesTransport.NOSTR,
+          rawPayload,
+        },
+        {
+          from: this.localNodeId,
+          transport: HermesTransport.INTERNAL,
+        }
+      );
+      if (__DEV__) {
+        console.log('[Bus] Événement Hermès BRIDGE_LORA_TO_NOSTR émis');
+      }
+    } catch (err) {
+      // Ne pas bloquer le flux en cas d'erreur Hermès
+      console.warn('[Bus] Échec émission Hermès BRIDGE_LORA_TO_NOSTR:', err);
+    }
+
     console.log('[Bus] Message LoRa bridgé vers Nostr (kind:9001)');
   }
 
@@ -365,13 +449,51 @@ export class MessagingBus {
     }
   }
 
-  /** Dispatch avec déduplication - utilise la ref pour éviter les stale handlers */
+  /**
+   * Dispatch avec déduplication - utilise la ref pour éviter les stale handlers.
+   * Émet également les événements Hermès DM_RECEIVED / CHANNEL_MSG_RECEIVED (Phase 2.3).
+   */
   private _dispatch(message: BusMessage): void {
     if (this.dedup.has(message.id)) {
       console.log('[Bus] Doublon ignoré (id:', message.id.slice(0, 12) + '…)');
       return;
     }
     this.dedup.add(message.id);
+
+    // NOUVEAU (Phase 2.3): Émettre événement Hermès selon le type de message reçu
+    const eventType = message.type === 'dm'
+      ? EventType.DM_RECEIVED
+      : message.type === 'channel'
+      ? EventType.CHANNEL_MSG_RECEIVED
+      : null;
+
+    if (eventType) {
+      hermes.createEvent(
+        eventType,
+        {
+          content: message.content,
+          contentType: 'text',
+          from: message.from,
+        },
+        {
+          from: message.from,
+          to: message.to,
+          transport: HermesTransport.NOSTR,
+          meta: {
+            originalId: message.id,
+          },
+        }
+      ).catch((err) => {
+        // Ne pas bloquer le flux en cas d'erreur Hermès
+        if (__DEV__) {
+          console.warn('[Bus] Échec émission Hermès', eventType, ':', err);
+        }
+      });
+
+      if (__DEV__) {
+        console.log('[Bus] Événement Hermès', eventType, 'émis');
+      }
+    }
 
     // Utiliser la ref pour garantir l'accès aux handlers les plus récents
     const currentHandlers = this.handlersRef.current;
