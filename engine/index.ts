@@ -24,3 +24,9 @@ export { HermesEngine, hermes, ProtocolAdapter } from './HermesEngine';
 
 // ─── Identity (gestion d'identité unifiée) ───────────────────────────────────
 export * from './identity';
+
+// ─── Services (couche métier) ────────────────────────────────────────────────
+export * from './services';
+
+// ─── Gateway (bridge LoRa ↔ Nostr) ───────────────────────────────────────────
+export * from './gateway';

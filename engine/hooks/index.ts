@@ -22,11 +22,13 @@
 // ─── Hooks principaux ─────────────────────────────────────────────────────────
 
 export { useHermes, type UseHermesReturn } from './useHermes';
-export { useMessages, type UseMessagesReturn, type Conversation, type Message, type SendMessageOptions } from './useMessages';
+export { useMessages, type UseMessagesReturn } from './useMessages';
 export { useConnection, type UseConnectionReturn, type ConnectionStatus, type TransportState } from './useConnection';
 export { useWalletHermes, type UseWalletHermesReturn } from './useWalletHermes';
 export { useBridge, type UseBridgeReturn, type BridgeStats } from './useBridge';
 export { useUnifiedIdentity, type UseUnifiedIdentityReturn, type UseUnifiedIdentityState, type UseUnifiedIdentityActions } from './useUnifiedIdentity';
+export { useNostrHermes, type UseNostrHermesReturn } from './useNostrHermes';
+export { useGateway, type UseGatewayReturn } from './useGateway';
 
 // ─── Re-exports utiles depuis les modules engine ───────────────────────────────
 
