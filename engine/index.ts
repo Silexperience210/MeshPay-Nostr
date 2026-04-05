@@ -1,24 +1,33 @@
 /**
  * Hermès Engine - Architecture event-sourced pour MeshPay
+ * 
+ * Export minimal qui fonctionne avec Metro bundler.
+ * Les modules avancés doivent être importés directement depuis leurs chemins.
  */
 
-// Export minimal pour test
-export { HermesEngine, hermes, ProtocolAdapter } from './HermesEngine';
+// Types
 export * from './types';
 
-// Core - éviter les imports problématiques pour l'instant
-// export * from './core/EventStore';
+// Engine core
+export { HermesEngine, hermes, ProtocolAdapter } from './HermesEngine';
+
+// Hooks essentiels uniquement
+export { useHermes } from './hooks/useHermes';
+export { useUnifiedIdentity } from './hooks/useUnifiedIdentity';
+
+// Identity
+export { 
+  UnifiedIdentityManager, 
+  getIdentityManager,
+  resetIdentityManager 
+} from './identity/UnifiedIdentityManager';
 
 // Utils
 export { EventBuilder, eb } from './utils/EventBuilder';
 
-// Identity
-export { UnifiedIdentityManager, getIdentityManager } from './identity/UnifiedIdentityManager';
-
-// Hooks basiques uniquement
-export { useHermes } from './hooks/useHermes';
-export { useUnifiedIdentity } from './hooks/useUnifiedIdentity';
-
-// Adapters
-export { NostrAdapter } from './adapters/NostrAdapter';
-export { LoRaAdapter } from './adapters/LoRaAdapter';
+// NOTE: Les modules suivants doivent être importés directement:
+// - import { useNostrHermes } from '@/engine/hooks/useNostrHermes';
+// - import { useMessages } from '@/engine/hooks/useMessages';
+// - import { messageService } from '@/engine/services/MessageService';
+// - import { gatewayManager } from '@/engine/gateway/GatewayManager';
+// - import { eventStore } from '@/engine/core/EventStore';

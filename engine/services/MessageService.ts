@@ -11,14 +11,14 @@
  * - Historique des conversations
  */
 
-import { hermes } from '../HermesEngine';
-import { eventStore } from '../core/EventStore';
+import { hermes } from '@/engine/HermesEngine';
+import { eventStore } from '@/engine/core/EventStore';
 import {
   EventType,
   Transport,
   HermesEvent,
   MessageEvent,
-} from '../types';
+} from '@/engine/types';
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────
 
