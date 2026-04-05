@@ -33,6 +33,7 @@
     "@noble/ciphers": "^1.1.0",
     "@noble/curves": "^1.6.0",
     "@noble/hashes": "^2.0.1",
+    "@noble/secp256k1": "^2.1.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@rork-ai/toolkit-sdk": "^0.2.51",
     "@scure/bip32": "^2.0.1",
