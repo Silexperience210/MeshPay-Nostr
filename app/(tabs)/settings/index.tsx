@@ -429,9 +429,16 @@ function SeedManagementCard() {
               style={styles.seedActionSmall}
               onPress={() => handleGenerate(24)}
               activeOpacity={0.7}
+              disabled={isGenerating}
             >
-              <Plus size={14} color={Colors.accent} />
-              <Text style={styles.seedActionSmallText}>New 24w</Text>
+              {isGenerating ? (
+                <ActivityIndicator color={Colors.accent} size="small" />
+              ) : (
+                <>
+                  <Plus size={14} color={Colors.accent} />
+                  <Text style={styles.seedActionSmallText}>New 24w</Text>
+                </>
+              )}
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.seedActionSmall, styles.seedActionDestructive]}

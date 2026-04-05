@@ -22,16 +22,32 @@ export interface DerivedWalletInfo {
 }
 
 export function generateMnemonic(strength: 12 | 24 = 12): string {
+  console.log('[Bitcoin] generateMnemonic called with strength:', strength);
+  
   // Vérifier que crypto.getRandomValues est disponible
-  const hasCrypto = typeof globalThis !== 'undefined' && 
-                    typeof (globalThis as any).crypto === 'object' &&
-                    typeof (globalThis as any).crypto.getRandomValues === 'function';
-  if (!hasCrypto) {
+  const hasGlobalCrypto = typeof global !== 'undefined' && 
+                          typeof (global as any).crypto === 'object' &&
+                          typeof (global as any).crypto.getRandomValues === 'function';
+  const hasGlobalThisCrypto = typeof globalThis !== 'undefined' && 
+                              typeof (globalThis as any).crypto === 'object' &&
+                              typeof (globalThis as any).crypto.getRandomValues === 'function';
+  
+  console.log('[Bitcoin] crypto check - global:', hasGlobalCrypto, 'globalThis:', hasGlobalThisCrypto);
+  
+  if (!hasGlobalCrypto && !hasGlobalThisCrypto) {
     console.error('[Bitcoin] crypto.getRandomValues not available!');
     throw new Error('crypto.getRandomValues must be defined. Polyfill not loaded correctly.');
   }
   
+  // Si globalThis.crypto n'est pas défini mais global.crypto oui, copier
+  if (!hasGlobalThisCrypto && hasGlobalCrypto) {
+    console.log('[Bitcoin] Copying global.crypto to globalThis.crypto');
+    (globalThis as any).crypto = (global as any).crypto;
+  }
+  
   const bits = strength === 12 ? 128 : 256;
+  console.log('[Bitcoin] Calling bip39.generateMnemonic with bits:', bits);
+  
   try {
     const mnemonic = bip39.generateMnemonic(wordlist, bits);
     console.log('[Bitcoin] Generated new mnemonic with', strength, 'words');

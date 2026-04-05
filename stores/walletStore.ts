@@ -6,6 +6,29 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Vérifier que le polyfill crypto est bien chargé avant d'importer @noble/hashes
+const checkCryptoPolyfill = () => {
+  const hasGlobalCrypto = typeof global !== 'undefined' && 
+                          typeof (global as any).crypto === 'object' &&
+                          typeof (global as any).crypto.getRandomValues === 'function';
+  const hasGlobalThisCrypto = typeof globalThis !== 'undefined' && 
+                              typeof (globalThis as any).crypto === 'object' &&
+                              typeof (globalThis as any).crypto.getRandomValues === 'function';
+  
+  if (!hasGlobalCrypto && !hasGlobalThisCrypto) {
+    console.error('[WalletStore] CRITICAL: crypto.getRandomValues not available!');
+    console.error('[WalletStore] Polyfill should be loaded in app/_layout.tsx before any store import');
+    throw new Error('crypto.getRandomValues must be defined. Import polyfills in _layout.tsx first.');
+  }
+  
+  console.log('[WalletStore] Crypto polyfill check passed');
+  return true;
+};
+
+// Vérifier avant d'importer les modules qui utilisent crypto
+checkCryptoPolyfill();
+
 // @ts-ignore — subpath exports
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
 // @ts-ignore — subpath exports
@@ -234,27 +257,43 @@ export const useWalletStore = create<WalletState>()(
 
       // Actions
       generateWallet: async (strength: 12 | 24 = 12) => {
+        console.log('[WalletStore] === generateWallet START ===');
         console.log('[WalletStore] Generating new wallet with', strength, 'words...');
-        get()._setGenerating(true);
-        get()._setGenerateError(null);
-
+        
         try {
-          console.log('[WalletStore] Calling generateMnemonic...');
-          const newMnemonic = generateMnemonic(strength);
-          console.log('[WalletStore] Mnemonic generated successfully, saving to SecureStore...');
+          get()._setGenerating(true);
+          get()._setGenerateError(null);
+          console.log('[WalletStore] State updated: isGenerating=true');
+
+          console.log('[WalletStore] About to call generateMnemonic...');
+          let newMnemonic: string;
+          try {
+            newMnemonic = generateMnemonic(strength);
+            console.log('[WalletStore] generateMnemonic returned successfully');
+          } catch (mnemonicErr: any) {
+            console.error('[WalletStore] generateMnemonic FAILED:', mnemonicErr);
+            throw mnemonicErr;
+          }
           
-          await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
-          await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+          console.log('[WalletStore] Saving to SecureStore...');
+          try {
+            await SecureStore.setItemAsync(MNEMONIC_KEY, newMnemonic);
+            await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+            console.log('[WalletStore] Saved to SecureStore OK');
+          } catch (secureStoreErr: any) {
+            console.error('[WalletStore] SecureStore FAILED:', secureStoreErr);
+            throw secureStoreErr;
+          }
           
-          console.log('[WalletStore] Saved to SecureStore (TEE/Keychain)');
-          
+          console.log('[WalletStore] Setting wallet data...');
           get()._setWalletData(newMnemonic);
           console.log('[WalletStore] Wallet initialized successfully');
         } catch (error: any) {
-          console.error('[WalletStore] Generation error:', error?.message || error);
+          console.error('[WalletStore] === generateWallet ERROR ===', error?.message || error);
           get()._setGenerateError(error instanceof Error ? error : new Error(String(error)));
-          throw error;
+          // Ne pas rethrow pour éviter de casser l'UI, l'erreur est dans generateError
         } finally {
+          console.log('[WalletStore] === generateWallet FINALLY ===');
           get()._setGenerating(false);
         }
       },
