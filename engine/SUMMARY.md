@@ -39,13 +39,29 @@
 
 **Tests** : 20+ tests d'intégration ✅
 
-#### LoRaAdapter
-- ✅ Connexion BLE au gateway MeshCore
-- ✅ Envoi/réception messages directs
-- ✅ Messages de channel
-- ✅ Gestion des contacts
-- ✅ Auto-bridge vers Nostr
-- ✅ Détection de types de contenu
+#### LoRaAdapter (Protocole MeshCore)
+
+**⚡ Protocole MeshCore natif utilisé**
+
+- ✅ **MeshCore Protocol** via `BleGatewayClient` et `meshcore-protocol.ts`
+- ✅ **Commandes MeshCore Companion** :
+  - `CMD_SEND_TXT_MSG` - Envoi messages directs et channel
+  - `CMD_SYNC_CONTACTS` - Synchronisation des contacts
+  - `CMD_SET_CHANNEL` - Changement de canal
+- ✅ **Événements MeshCore** :
+  - `PUSH_TEXT_MSG` - Réception de messages
+  - `PUSH_ADVERT` - Découverte de nœuds
+  - `PUSH_CONTACTS` - Liste des contacts
+- ✅ **Chiffrement MeshCore** :
+  - DMs : E2E avec clés secp256k1
+  - Channels privés : AES avec PSK (Pre-Shared Key)
+  - Channel public : Clair (channel 0)
+- ✅ Connexion BLE au gateway ESP32
+- ✅ Gestion des contacts MeshCore (pubkey, nom, rssi)
+- ✅ Auto-bridge LoRa ↔ Nostr
+- ✅ Détection de types de contenu (text, cashu, image, audio, JSON)
+
+**Stack technique** : Hermès → BleGatewayClient → MeshCore Protocol → BLE → ESP32 Firmware → SX1262 LoRa Radio (868/915 MHz)
 
 **Tests** : 25+ tests d'intégration ✅
 

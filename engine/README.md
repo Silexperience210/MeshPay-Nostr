@@ -82,6 +82,92 @@ hermes.emit(EventBuilder.dm().to(pubkey).content('Hello!').build());
 
 ---
 
+## 📡 Protocole MeshCore (LoRa)
+
+### ⚡ Utilisation native du protocole MeshCore
+
+Hermès Engine utilise **nativement** le protocole **MeshCore** pour la communication LoRa. Le `LoRaAdapter` s'interface directement avec le firmware MeshCore via le protocole **MeshCore Companion**.
+
+### 🔌 Stack technique MeshCore
+
+```
+Application (React Native)
+    ↓
+LoRaAdapter (Hermès Engine)
+    ↓
+BleGatewayClient (utils/ble-gateway.ts)
+    ↓
+MeshCore Protocol (utils/meshcore-protocol.ts)
+    ↓
+react-native-ble-manager
+    ↓
+ESP32 MeshCore Firmware (via BLE)
+    ↓
+SX1262 LoRa Radio (868/915 MHz)
+```
+
+### 📦 Commandes MeshCore supportées
+
+| Commande | Description | Handler |
+|----------|-------------|---------|
+| `CMD_SEND_TXT_MSG` | Envoi message texte | `sendDirectMessage()` / `sendChannelMessage()` |
+| `CMD_SYNC_CONTACTS` | Synchronisation contacts | `syncContacts()` |
+| `CMD_SET_CHANNEL` | Changement canal | `setChannel()` |
+| `PUSH_TEXT_MSG` | Réception message | `onIncomingMessage()` |
+| `PUSH_ADVERT` | Découverte nœud | `onContactDiscovered()` |
+| `PUSH_CONTACTS` | Liste contacts | `onContacts()` |
+
+### 🔐 Chiffrement MeshCore
+
+- **Messages directs** : Chiffrement E2E avec clés publiques secp256k1
+- **Channels privés** : Chiffrement AES avec PSK (Pre-Shared Key)
+- **Channel public** : Pas de chiffrement (channel 0)
+
+### 🌉 Bridge MeshCore ↔ Nostr
+
+Le bridge est **automatique** quand activé :
+
+```typescript
+// Dans LoRaAdapter.ts
+private bridgeToNostr(loraEvent: MessageEvent): void {
+  const bridgeEvent: BridgeEvent = {
+    type: EventType.BRIDGE_LORA_TO_NOSTR,
+    payload: {
+      originalTransport: Transport.LORA,
+      targetTransport: Transport.NOSTR,
+      rawPayload: JSON.stringify(loraEvent.payload),
+    },
+    // ...
+  };
+  
+  // Émet vers NostrAdapter
+  this.messageHandler?.(bridgeEvent);
+}
+```
+
+### 📋 Types de contenu détectés
+
+| Type | Préfixe/PATTERN | Action |
+|------|----------------|--------|
+| Texte | (default) | Affichage direct |
+| Cashu | `cashu...` | Validation + UI spéciale |
+| Image | `data:image...` | Rendu image |
+| Audio | `data:audio...` | Lecteur audio |
+| JSON | `{...}` | Parsing structuré |
+
+### 🔧 Configuration MeshCore
+
+```typescript
+// Exemple de configuration LoRaAdapter
+const loraAdapter = new LoRaAdapter(hermes, bleClient, {
+  autoConnect: true,           // Auto-connect au dernier device
+  autoBridgeToNostr: true,     // Bridge automatique vers Nostr
+  lastDeviceId: 'XX:XX:XX...', // MAC address du gateway BLE
+});
+```
+
+---
+
 ## 📦 Installation
 
 Hermès Engine est déjà intégré dans le projet MeshPay. Aucune installation supplémentaire n'est nécessaire.
