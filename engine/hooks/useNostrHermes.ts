@@ -36,7 +36,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { hermes } from '../HermesEngine';
 import { EventType, Transport, HermesEvent, EventHandler } from '../types';
-import { useWalletStore } from '@/stores/walletStore';
+import { useWalletStore } from '../../stores/walletStore';
 
 // Relays par défaut (synchronisés avec NostrAdapter)
 const DEFAULT_RELAYS = [

@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { gatewayManager, type GatewayStatus } from '../gateway/GatewayManager';
+import { Transport } from '../types';
 
 export interface UseGatewayReturn {
   /** Statut du gateway */
@@ -53,8 +54,8 @@ export function useGateway(): UseGatewayReturn {
     from: 'lora' | 'nostr', 
     to: 'lora' | 'nostr'
   ) => {
-    const fromTransport = from === 'lora' ? 'lora' as const : 'nostr' as const;
-    const toTransport = to === 'lora' ? 'lora' as const : 'nostr' as const;
+    const fromTransport = from === 'lora' ? Transport.LORA : Transport.NOSTR;
+    const toTransport = to === 'lora' ? Transport.LORA : Transport.NOSTR;
     
     await gatewayManager.bridgeMessage(payload, fromTransport, toTransport);
     

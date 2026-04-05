@@ -10,16 +10,13 @@
  * @author MeshPay Team
  */
 
-// @ts-ignore - subpath exports use .js extension
-import { gcm } from '@noble/ciphers/aes.js';
-// @ts-ignore - subpath exports use .js extension
-import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
-import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
-// @ts-ignore - subpath exports use .js extension
-import { hmac } from '@noble/hashes/hmac.js';
+// Imports @noble sans extension .js pour compatibilité Metro
+import { gcm } from '@noble/ciphers/aes';
+import { sha256 as nobleSha256 } from '@noble/hashes/sha2';
+import { pbkdf2Async } from '@noble/hashes/pbkdf2';
+import { hmac } from '@noble/hashes/hmac';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import * as Crypto from 'expo-crypto';
+import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils';
 
 // ============================================================================
 // Constantes de sécurité
@@ -199,15 +196,8 @@ export function randomBytes(size: number): Uint8Array {
     throw new Error('randomBytes: size exceeds maximum (65536)');
   }
   
-  // Environnement Node.js (tests) vs React Native
-  if (typeof process !== 'undefined' && process.versions?.node) {
-    // Node.js environment - use crypto module
-    const nodeCrypto = require('crypto');
-    return new Uint8Array(nodeCrypto.randomBytes(size));
-  }
-  
-  // React Native environment - use expo-crypto
-  return Crypto.getRandomValues(new Uint8Array(size));
+  // Utilise @noble/hashes/utils qui fonctionne partout (Node, RN, Web)
+  return nobleRandomBytes(size);
 }
 
 /**

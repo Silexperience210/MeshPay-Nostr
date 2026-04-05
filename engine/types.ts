@@ -68,6 +68,10 @@ export interface HermesEvent {
     protocolVersion?: string;
     /** ID original du transport sous-jacent (event.id Nostr, etc) */
     originalId?: string;
+    /** Timestamp du bridge (pour événements gateway) */
+    bridgeTimestamp?: number;
+    /** Indique si c'est un message de canal (gateway LoRa↔Nostr) */
+    isChannelMessage?: boolean;
   };
 }
 
