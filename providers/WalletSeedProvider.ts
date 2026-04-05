@@ -4,12 +4,6 @@
  * Ce fichier conserve la même interface publique qu'avant
  * (WalletSeedContext, useWalletSeed, WalletSeedState) mais délègue
  * toute la logique au walletStore Zustand.
- *
- * Cela permet à tous les composants existants (tabs, providers) de continuer
- * à importer { useWalletSeed } sans modification.
- *
- * Les fonctions crypto standalone (exportWalletEncrypted, importWalletDecrypted)
- * sont ré-exportées depuis walletStore pour rétro-compatibilité.
  */
 
 import createContextHook from '@nkzw/create-context-hook';
@@ -20,7 +14,7 @@ import type { DerivedWalletInfo } from '@/utils/bitcoin';
 
 export { exportWalletEncrypted, importWalletDecrypted };
 
-// ─── Interface publique (inchangée) ──────────────────────────────────────────
+// ─── Interface publique ──────────────────────────────────────────────────────
 
 export interface WalletSeedState {
   mnemonic: string | null;
@@ -37,8 +31,8 @@ export interface WalletSeedState {
   importWallet: (mnemonic: string) => Promise<void>;
   deleteWallet: () => Promise<void>;
   getFormattedAddress: () => string;
-  /** Exporte le mnemonic chiffré avec un mot de passe (PBKDF2 + AES-GCM). Retourne JSON string. */
-  exportWallet: (password: string) => string;
+  /** Exporte le mnemonic chiffré avec un mot de passe (PBKDF2 + AES-GCM). Retourne Promise<JSON string>. */
+  exportWallet: (password: string) => Promise<string>;
   /** Importe un backup chiffré. Lance une erreur si mot de passe incorrect. */
   importEncryptedWallet: (backupJson: string, password: string) => Promise<void>;
 }
@@ -69,7 +63,10 @@ export const [WalletSeedContext, useWalletSeed] = createContextHook((): WalletSe
       await store.deleteWallet(); 
     },
     getFormattedAddress: store.getFormattedAddress,
-    exportWallet: store.exportWallet,
+    exportWallet: async (password: string) => {
+      if (!store.mnemonic) throw new Error('Aucun wallet à exporter');
+      return await exportWalletEncrypted(store.mnemonic, password);
+    },
     importEncryptedWallet: async (backupJson: string, password: string) => {
       await store.importEncryptedWallet(backupJson, password);
     },

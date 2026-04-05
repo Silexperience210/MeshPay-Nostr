@@ -23,8 +23,8 @@ export interface NfcBackupModalProps {
   visible: boolean;
   mode: 'write' | 'read';
   onClose: () => void;
-  exportWallet: (password: string) => string;
-  importEncryptedWallet: (json: string, pwd: string) => void;
+  exportWallet: (password: string) => Promise<string>;
+  importEncryptedWallet: (json: string, pwd: string) => Promise<void>;
 }
 
 type Step = 'bestPractices' | 'password' | 'scanning' | 'decrypting';
@@ -102,8 +102,8 @@ export default function NfcBackupModal({
 
   const doWrite = async () => {
     try {
-      // PBKDF2 synchrone (~10s) — l'UI affiche déjà "Chiffrement en cours"
-      const backupJson = exportWallet(password);
+      // PBKDF2 (~10s) — l'UI affiche déjà "Chiffrement en cours"
+      const backupJson = await exportWallet(password);
       // Chiffrement terminé → attente de la carte NFC
       setStep('scanning');
       await NfcManager.requestTechnology(NfcTech.Ndef);
@@ -136,7 +136,7 @@ export default function NfcBackupModal({
       await new Promise(resolve => setTimeout(resolve, 80)); // laisse React rendre
 
       try {
-        importEncryptedWallet(text, password);
+        await importEncryptedWallet(text, password);
       } catch (importErr: any) {
         setStep('password');
         setError(importErr?.message ?? 'Mot de passe incorrect ou backup invalide.');

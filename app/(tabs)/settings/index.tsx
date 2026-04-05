@@ -198,7 +198,7 @@ function SeedManagementCard() {
     }
   }, [importError]);
 
-  const handleGenerate = useCallback((strength: 12 | 24 = 12) => {
+  const handleGenerate = useCallback(async (strength: 12 | 24 = 12) => {
     if (isInitialized) {
       Alert.alert(
         'Replace Wallet?',
@@ -208,35 +208,51 @@ function SeedManagementCard() {
           {
             text: 'Replace',
             style: 'destructive',
-            onPress: () => {
+            onPress: async () => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              generateNewWallet(strength);
+              try {
+                await generateNewWallet(strength);
+              } catch (e) {
+                // Erreur déjà gérée dans le store via generateError
+              }
             },
           },
         ]
       );
     } else {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      generateNewWallet(strength);
+      try {
+        await generateNewWallet(strength);
+      } catch (e) {
+        // Erreur déjà gérée dans le store via generateError
+      }
     }
   }, [isInitialized, generateNewWallet]);
 
-  const handleImport = useCallback(() => {
+  const handleImport = useCallback(async () => {
     if (!importText.trim()) {
       Alert.alert('Error', 'Please enter your seed phrase');
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    importWallet(importText);
-    setShowImport(false);
-    setImportText('');
+    try {
+      await importWallet(importText);
+      setShowImport(false);
+      setImportText('');
+    } catch (e) {
+      // Erreur déjà gérée dans le store via importError
+    }
   }, [importText, importWallet]);
 
-  const handleSeedQRScanned = useCallback((mnemonic: string) => {
+  const handleSeedQRScanned = useCallback(async (mnemonic: string) => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    importWallet(mnemonic);
-    setShowSeedQRScanner(false);
-    Alert.alert('Succès', 'Seed importée depuis SeedQR');
+    try {
+      await importWallet(mnemonic);
+      setShowSeedQRScanner(false);
+      Alert.alert('Succès', 'Seed importée depuis SeedQR');
+    } catch (e) {
+      // Erreur déjà gérée dans le store
+    }
   }, [importWallet]);
 
   const handleDelete = useCallback(() => {
@@ -272,7 +288,7 @@ function SeedManagementCard() {
     setShowSeed(prev => !prev);
   }, []);
 
-  const handleExportEncrypted = useCallback(() => {
+  const handleExportEncrypted = useCallback(async () => {
     if (exportPwd.length < 8) {
       Alert.alert('Erreur', 'Le mot de passe doit faire au moins 8 caractères.');
       return;
@@ -282,7 +298,7 @@ function SeedManagementCard() {
       return;
     }
     try {
-      const json = exportWallet(exportPwd);
+      const json = await exportWallet(exportPwd);
       Clipboard.setStringAsync(json).catch(() => {});
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Backup copié !', 'Le backup chiffré a été copié dans le presse-papier. Collez-le dans un endroit sûr (notes, gestionnaire de mots de passe…).');
@@ -295,7 +311,7 @@ function SeedManagementCard() {
     }
   }, [exportPwd, exportPwdConfirm, exportWallet]);
 
-  const handleImportEncrypted = useCallback(() => {
+  const handleImportEncrypted = useCallback(async () => {
     if (!importBackupJson.trim()) {
       Alert.alert('Erreur', 'Collez le JSON de backup chiffré.');
       return;
@@ -305,7 +321,7 @@ function SeedManagementCard() {
       return;
     }
     try {
-      importEncryptedWallet(importBackupJson.trim(), importBackupPwd);
+      await importEncryptedWallet(importBackupJson.trim(), importBackupPwd);
       setShowImportEncrypted(false);
       setImportBackupJson('');
       setImportBackupPwd('');

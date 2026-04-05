@@ -24,7 +24,7 @@ export interface DerivedWalletInfo {
 export function generateMnemonic(strength: 12 | 24 = 12): string {
   console.log('[Bitcoin] generateMnemonic called with strength:', strength);
   
-  // Vérifier que crypto.getRandomValues est disponible
+  // Vérifier et configurer crypto si nécessaire
   const hasGlobalCrypto = typeof global !== 'undefined' && 
                           typeof (global as any).crypto === 'object' &&
                           typeof (global as any).crypto.getRandomValues === 'function';
@@ -35,11 +35,14 @@ export function generateMnemonic(strength: 12 | 24 = 12): string {
   console.log('[Bitcoin] crypto check - global:', hasGlobalCrypto, 'globalThis:', hasGlobalThisCrypto);
   
   if (!hasGlobalCrypto && !hasGlobalThisCrypto) {
-    console.error('[Bitcoin] crypto.getRandomValues not available!');
-    throw new Error('crypto.getRandomValues must be defined. Polyfill not loaded correctly.');
+    console.error('[Bitcoin] CRITICAL: crypto.getRandomValues not available!');
+    throw new Error(
+      'crypto.getRandomValues must be defined. ' +
+      'Make sure polyfills.ts is imported before any store.'
+    );
   }
   
-  // Si globalThis.crypto n'est pas défini mais global.crypto oui, copier
+  // @noble/hashes utilise globalThis.crypto - s'assurer qu'il est défini
   if (!hasGlobalThisCrypto && hasGlobalCrypto) {
     console.log('[Bitcoin] Copying global.crypto to globalThis.crypto');
     (globalThis as any).crypto = (global as any).crypto;
@@ -53,8 +56,8 @@ export function generateMnemonic(strength: 12 | 24 = 12): string {
     console.log('[Bitcoin] Generated new mnemonic with', strength, 'words');
     return mnemonic;
   } catch (err: any) {
-    console.error('[Bitcoin] Failed to generate mnemonic:', err);
-    throw new Error(`Failed to generate mnemonic: ${err.message}`);
+    console.error('[Bitcoin] Failed to generate mnemonic:', err?.message || err);
+    throw new Error(`Failed to generate mnemonic: ${err?.message || String(err)}`);
   }
 }
 

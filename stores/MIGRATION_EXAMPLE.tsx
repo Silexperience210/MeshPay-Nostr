@@ -66,8 +66,6 @@ import { View, Text, Button } from 'react-native';
 import { 
   useWalletStore, 
   useSettingsStore,
-  useWalletActions,
-  useSettingsActions,
   useSettingsSelectors,
 } from '@/stores';
 
@@ -85,10 +83,14 @@ function WalletScreenNew() {
   const connectionMode = useSettingsStore((state) => state.connectionMode);
   const language = useSettingsStore((state) => state.language);
 
-  // ✅ Actions séparées - ne causent jamais de re-render
-  const { generateWallet, importWallet, deleteWallet } = useWalletActions();
-  const { setConnectionMode, updateSettings } = useSettingsActions();
-  const { getMempoolUrl, isInternetMode } = useSettingsSelectors();
+  // ✅ Actions - accès direct au store (ne cause pas de re-render hors du composant)
+  const generateWallet = useWalletStore((state) => state.generateWallet);
+  const importWallet = useWalletStore((state) => state.importWallet);
+  const deleteWallet = useWalletStore((state) => state.deleteWallet);
+  const setConnectionMode = useSettingsStore((state) => state.setConnectionMode);
+  const updateSettings = useSettingsStore((state) => state.updateSettings);
+  const getMempoolUrl = useSettingsStore((state) => state.getMempoolUrl);
+  const isInternetMode = useSettingsStore((state) => state.isInternetMode());
 
   // ✅ Computed values - utiliser des mémo si nécessaire
   const formattedAddress = React.useMemo(() => {
@@ -119,7 +121,7 @@ function WalletScreenNew() {
     <View>
       <Text>Address: {formattedAddress}</Text>
       <Text>Mode: {connectionMode}</Text>
-      <Text>Internet: {isInternetMode() ? 'Yes' : 'No'}</Text>
+      <Text>Internet: {isInternetMode ? 'Yes' : 'No'}</Text>
       <Button 
         onPress={handleGenerate} 
         title={isGenerating ? "Generating..." : "Generate Wallet"}
@@ -146,11 +148,14 @@ function useWallet() {
   const isGenerating = useWalletStore((state) => state.isGenerating);
 
   // Actions
-  const actions = useWalletActions();
+  const getFormattedAddress = useWalletStore((state) => state.getFormattedAddress);
+  const generateWallet = useWalletStore((state) => state.generateWallet);
+  const importWallet = useWalletStore((state) => state.importWallet);
+  const deleteWallet = useWalletStore((state) => state.deleteWallet);
 
   // Computed
   const formattedAddress = React.useMemo(() => {
-    return actions.getFormattedAddress();
+    return getFormattedAddress();
   }, [walletInfo]);
 
   return {
@@ -160,7 +165,9 @@ function useWallet() {
     isLoading,
     isGenerating,
     formattedAddress,
-    ...actions,
+    generateWallet,
+    importWallet,
+    deleteWallet,
   };
 }
 
@@ -201,18 +208,18 @@ function WalletScreenWithCustomHook() {
 │   .isInitialized                      │   useWalletStore(s => s.isInitialized)│
 │   .isLoading                          │   useWalletStore(s => s.isLoading)    │
 │   .isGenerating                       │   useWalletStore(s => s.isGenerating) │
-│   .generateNewWallet(strength)        │   useWalletActions().generateWallet() │
-│   .importWallet(mnemonic)             │   useWalletActions().importWallet()   │
-│   .deleteWallet()                     │   useWalletActions().deleteWallet()   │
-│   .exportWallet(password)             │   useWalletActions().exportWallet()   │
-│   .getFormattedAddress()              │   useWalletActions().getFormattedAddr()│
+│   .generateNewWallet(strength)        │   useWalletStore(s => s.generateWallet)│
+│   .importWallet(mnemonic)             │   useWalletStore(s => s.importWallet) │
+│   .deleteWallet()                     │   useWalletStore(s => s.deleteWallet) │
+│   .exportWallet(password)             │   exportWalletEncrypted()             │
+│   .getFormattedAddress()              │   useWalletStore(s => s.getFormattedAddr)│
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ useAppSettings()                      │ useSettingsStore()                    │
 │   .settings.connectionMode            │   useSettingsStore(s => s.connectionMode)│
 │   .settings.language                  │   useSettingsStore(s => s.language)   │
 │   .settings.nostrRelays               │   useSettingsStore(s => s.nostrRelays)│
-│   .updateSettings(partial)            │   useSettingsActions().updateSettings()│
-│   .setConnectionMode(mode)            │   useSettingsActions().setConnectionMode()│
+│   .updateSettings(partial)            │   useSettingsStore(s => s.updateSettings)│
+│   .setConnectionMode(mode)            │   useSettingsStore(s => s.setConnectionMode)│
 │   .getMempoolUrl()                    │   useSettingsSelectors().getMempoolUrl()│
 │   .getCashuMintUrl()                  │   useSettingsSelectors().getCashuMintUrl()│
 │   .getActiveRelayUrls()               │   useSettingsSelectors().getActiveRelayUrls()│
@@ -239,7 +246,7 @@ Pour chaque composant:
 [ ] 1. Remplacer les imports providers par les imports stores
 [ ] 2. Remplacer useWalletSeed() par useWalletStore(selector)
 [ ] 3. Remplacer useAppSettings() par useSettingsStore(selector)  
-[ ] 4. Extraire les actions avec useWalletActions() / useSettingsActions()
+[ ] 4. Extraire les actions avec useWalletStore(s => s.actionName)
 [ ] 5. Remplacer .generateNewWallet par .generateWallet
 [ ] 6. Vérifier que les sélecteurs sont granulaires (pas d'objet entier)
 [ ] 7. Tester le composant isolément

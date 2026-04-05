@@ -10,9 +10,7 @@ export {
   useWalletLoading,
   useWalletMnemonic,
   useWalletInfo,
-  useReceiveAddresses,
-  useChangeAddresses,
-  useWalletActions,
+  useWalletAddresses,
   exportWalletEncrypted,
   importWalletDecrypted,
 } from './walletStore';
