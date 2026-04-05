@@ -23,6 +23,7 @@ import {
   ActivityIndicator,
   Clipboard,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import {
   Wallet,
@@ -181,7 +182,9 @@ export default function IdentitySetupScreen() {
   /**
    * Termine l'onboarding et redirige vers l'app.
    */
-  const handleComplete = useCallback(() => {
+  const handleComplete = useCallback(async () => {
+    // Marquer l'onboarding comme terminé pour ne plus afficher le WelcomeModal
+    await AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true');
     router.replace('/(tabs)');
   }, []);
 
