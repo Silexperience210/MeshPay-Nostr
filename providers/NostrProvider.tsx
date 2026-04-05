@@ -1,4 +1,7 @@
 /**
+ * @deprecated Utilisez useNostrHermes() de '@/engine/hooks' à la place.
+ * Ce provider sera supprimé dans la v4.0.
+ * 
  * NostrProvider — Contexte React pour le transport Nostr
  *
  * - Auto-connexion quand le wallet est initialisé (clés dérivées NIP-06)
@@ -6,6 +9,9 @@
  *   subscribeChannel, publishTxRelay
  * - Déconnexion propre quand le wallet est supprimé
  * - MQTT reste fonctionnel en parallèle pendant la migration
+ * 
+ * Migration: Remplacez `import { useNostr } from '@/providers/NostrProvider'`
+ * par `import { useNostrHermes } from '@/engine/hooks'`
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';

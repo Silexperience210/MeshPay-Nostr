@@ -1,4 +1,10 @@
 /**
+ * @deprecated Utilisez MessageService de '@/engine/services' à la place.
+ * Ce module sera supprimé dans la v4.0.
+ * 
+ * Migration: Remplacez `import { messagingBus } from '@/utils/messaging-bus'`
+ * par `import { messageService, hermes } from '@/engine'`
+ * 
  * MessagingBus — Couche d'abstraction transport Nostr
  *
  * Principe de fonctionnement :
@@ -15,6 +21,10 @@
  * Phase 2.3: Intégration Hermès Engine (double écriture)
  *  • Émission d'événements Hermès pour tous les messages (envoyés/reçus)
  *  • Maintien de la compatibilité legacy avec les handlers existants
+ * 
+ * Phase 4: Déprécation
+ *  • Ce module est maintenant déprécié en faveur de MessageService
+ *  • Double écriture maintenue pour compatibilité pendant la transition
  */
 
 import { nostrClient as defaultNostrClient, Kind, type NostrClient } from '@/utils/nostr-client';

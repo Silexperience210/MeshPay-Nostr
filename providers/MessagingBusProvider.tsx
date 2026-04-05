@@ -1,4 +1,7 @@
 /**
+ * @deprecated Utilisez useMessages() ou messageService de '@/engine' à la place.
+ * Ce provider sera supprimé dans la v4.0.
+ * 
  * MessagingBusProvider — Contexte React pour le bus de messagerie unifié
  *
  * Transport Nostr-only (Phase 8 — MQTT supprimé) :
@@ -6,6 +9,9 @@
  *   - Nostr absent   → erreur explicite
  *
  * LoRa bridge : BleProvider peut republier un payload LoRa sur Nostr.
+ * 
+ * Migration: Remplacez `import { useMessagingBus } from '@/providers/MessagingBusProvider'`
+ * par `import { useMessages } from '@/engine'` ou `import { messageService } from '@/engine'`
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';

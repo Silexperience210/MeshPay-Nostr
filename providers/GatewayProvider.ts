@@ -1,3 +1,18 @@
+/**
+ * @deprecated Utilisez useGateway() de '@/engine/hooks' à la place.
+ * Ce provider sera supprimé dans la v4.0.
+ * 
+ * Migration: Remplacez `import { useGateway } from '@/providers/GatewayProvider'`
+ * par `import { useGateway } from '@/engine/hooks'`
+ * 
+ * Changements API:
+ *   - `gatewayState.isActive` → `status.isRunning`
+ *   - `gatewayState.mode` → `status.mode`
+ *   - `activateGateway()` → `startGateway()`
+ *   - `deactivateGateway()` → `stopGateway()`
+ *   - `gatewayState.stats` → `stats`
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import AsyncStorage from '@react-native-async-storage/async-storage';

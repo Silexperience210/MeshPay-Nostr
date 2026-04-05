@@ -224,6 +224,48 @@ Vos dons financent le développement open-source.
 
 ---
 
+## 🏛️ Architecture - Hermès Engine v2.0
+
+MeshPay-Nostr utilise désormais **Hermès Engine**, une architecture event-sourced qui remplace progressivement les React Contexts traditionnels.
+
+### Pourquoi Hermès ?
+
+| Avantages | Description |
+|-----------|-------------|
+| **Performance** | Plus de re-renders inutiles des Context Providers |
+| **Testabilité** | Event-sourced = tests déterministes |
+| **Débogage** | Time-travel debugging avec EventStore |
+| **Extensibilité** | Ajouter un transport = 1 adapter |
+
+### Migration en cours
+
+- **v3.3.0** (actuel): Providers legacy marqués `@deprecated`
+- **v3.4.0**: Warnings dans la console en dev
+- **v4.0.0**: Suppression des providers legacy
+
+### Utilisation rapide
+
+```tsx
+import { useNostrHermes, useMessages, useGateway } from '@/engine/hooks';
+
+function MyComponent() {
+  // Nostr
+  const { isConnected, publicKey, publishDM } = useNostrHermes();
+  
+  // Messages
+  const { conversations, sendDM } = useMessages();
+  
+  // Gateway
+  const { status, startGateway, stats } = useGateway();
+  
+  // ...
+}
+```
+
+📖 **[Guide de migration complet](./MIGRATION_GUIDE.md)**
+
+---
+
 ## 📜 Licence
 
 MIT License — Voir [LICENSE](./LICENSE)
