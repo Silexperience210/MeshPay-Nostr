@@ -98,7 +98,7 @@ export default function IdentitySetupScreen() {
     clearError();
   }, [clearError]);
 
-  const copyMnemonic = useCallback(() => {
+  const copyMnemonic = useCallback(async () => {
     if (mnemonic) {
       await Clipboard.setStringAsync(mnemonic);
       setMnemonicCopied(true);
