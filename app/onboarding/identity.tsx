@@ -21,8 +21,8 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-  Clipboard,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import {
@@ -44,7 +44,6 @@ import { StatusBar } from 'expo-status-bar';
 import { useUnifiedIdentity } from '@/engine/hooks';
 import { validateMnemonic } from '@/utils/bitcoin';
 import Colors from '@/constants/colors';
-import { useTranslation } from '@/utils/i18n';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,6 +67,9 @@ export default function IdentitySetupScreen() {
     cardBackground: Colors.surface,
     inputBackground: Colors.surfaceLight,
   };
+  
+  // Détecter le mode sombre (simplifié)
+  const isDark = colors.background === '#000000' || colors.background === '#121212' || Colors.background === '#0a0a0a';
 
   // ─── Hook identity ─────────────────────────────────────────────────────────
   const {
@@ -98,7 +100,7 @@ export default function IdentitySetupScreen() {
 
   const copyMnemonic = useCallback(() => {
     if (mnemonic) {
-      Clipboard.setString(mnemonic);
+      await Clipboard.setStringAsync(mnemonic);
       setMnemonicCopied(true);
       setTimeout(() => setMnemonicCopied(false), 2000);
     }
@@ -593,7 +595,7 @@ export default function IdentitySetupScreen() {
   // ─── Rendu principal ────────────────────────────────────────────────────────
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <StatusBar style="light" />
       
       {/* Indicateur de progression */}
       {step !== 'mode' && step !== 'success' && (
