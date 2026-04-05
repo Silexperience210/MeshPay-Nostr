@@ -16,7 +16,8 @@
     "preset": "jest-expo/node",
     "testEnvironment": "node",
     "testMatch": [
-      "**/utils/__tests__/**/*.test.ts"
+      "**/utils/__tests__/**/*.test.ts",
+      "**/engine/__tests__/**/*.test.ts"
     ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|bitcoinjs-lib|@scure|@noble|secp256k1|tiny-secp256k1|typeforce|varuint-bitcoin|pushdata-bitcoin|bs58check|base-x|create-hash|hash-base|buffer|nostr-tools)"
