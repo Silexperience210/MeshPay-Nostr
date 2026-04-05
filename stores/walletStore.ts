@@ -10,6 +10,9 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Hermès Engine - émission d'événements
+import { hermes, EventType, Transport } from '@/engine';
+
 // Types et fonctions Bitcoin qui ne dépendent pas de @noble/hashes
 import type { DerivedWalletInfo } from '@/utils/bitcoin';
 
@@ -246,6 +249,25 @@ export const useWalletStore = create<WalletState>()(
             generateError: null,
           });
           
+          // Émettre événement Hermès WALLET_INITIALIZED
+          try {
+            await hermes.createEvent(
+              EventType.WALLET_INITIALIZED,
+              {
+                hasSeed: true,
+                timestamp: Date.now(),
+                source: 'generated',
+              },
+              {
+                from: 'wallet_store',
+                transport: Transport.INTERNAL,
+              }
+            );
+            console.log('[WalletStore] Hermès event WALLET_INITIALIZED emitted');
+          } catch (hermesError) {
+            console.error('[WalletStore] Failed to emit Hermès event:', hermesError);
+          }
+          
           console.log('[WalletStore] === generateWallet SUCCESS ===');
         } catch (error: any) {
           console.error('[WalletStore] === generateWallet ERROR ===', error?.message || error);
@@ -291,6 +313,25 @@ export const useWalletStore = create<WalletState>()(
             importError: null,
           });
           
+          // Émettre événement Hermès WALLET_INITIALIZED
+          try {
+            await hermes.createEvent(
+              EventType.WALLET_INITIALIZED,
+              {
+                hasSeed: true,
+                timestamp: Date.now(),
+                source: 'imported',
+              },
+              {
+                from: 'wallet_store',
+                transport: Transport.INTERNAL,
+              }
+            );
+            console.log('[WalletStore] Hermès event WALLET_INITIALIZED emitted');
+          } catch (hermesError) {
+            console.error('[WalletStore] Failed to emit Hermès event:', hermesError);
+          }
+          
           console.log('[WalletStore] Wallet imported successfully');
         } catch (error: any) {
           console.error('[WalletStore] Import error:', error);
@@ -316,6 +357,23 @@ export const useWalletStore = create<WalletState>()(
             changeAddresses: [],
             isInitialized: false,
           });
+          
+          // Émettre événement Hermès WALLET_DELETED
+          try {
+            await hermes.createEvent(
+              EventType.WALLET_DELETED,
+              {
+                timestamp: Date.now(),
+              },
+              {
+                from: 'wallet_store',
+                transport: Transport.INTERNAL,
+              }
+            );
+            console.log('[WalletStore] Hermès event WALLET_DELETED emitted');
+          } catch (hermesError) {
+            console.error('[WalletStore] Failed to emit Hermès event:', hermesError);
+          }
           
           console.log('[WalletStore] Wallet deleted');
         } catch (error) {

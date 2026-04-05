@@ -4,11 +4,11 @@ import './polyfills';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ActivityIndicator, View, Text, TouchableOpacity, Alert } from "react-native";
+import { ActivityIndicator, View, Text } from "react-native";
 import Colors from "@/constants/colors";
 
 // ─── Stores Zustand (nouveau) ────────────────────────────────────────────────
@@ -31,6 +31,9 @@ import { MessagingBusContext } from "@/providers/MessagingBusProvider";
 import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
 import { ShopProvider } from "@/providers/ShopProvider";
+
+// ─── Hermès Engine (Phase 2.1) ─────────────────────────────────────────────────
+import { hermes, EventType, type HermesEvent } from "@/engine";
 
 import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener } from "@/utils/notifications";
 import { router } from "expo-router";
@@ -73,10 +76,111 @@ function useStoreHydration() {
   };
 }
 
+/**
+ * Hook de bridge Hermès <-> Legacy Providers
+ * Synchronise les événements Hermès avec l'état des providers existants
+ * 
+ * Architecture Phase 2.1: Double écriture - Hermès coexiste avec les providers legacy
+ */
+function useHermesBridge() {
+  const walletStore = useWalletStore();
+  const settingsStore = useSettingsStore();
+  const isInitialized = useRef(false);
+
+  useEffect(() => {
+    // Éviter les initialisations multiples en dev (React StrictMode)
+    if (isInitialized.current) return;
+    isInitialized.current = true;
+
+    // Initialiser Hermès Engine
+    hermes.start().catch((error) => {
+      console.error('[Hermès] Failed to start engine:', error);
+    });
+
+    if (__DEV__) {
+      console.log('[Hermès] Engine started');
+    }
+
+    // S'abonner aux événements wallet
+    const unsubscribeWallet = hermes.on(EventType.WALLET_INITIALIZED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] Wallet initialized via Hermès:', event.payload);
+      }
+      // Synchroniser avec le store legacy si nécessaire
+      // Note: Éviter les boucles infinies - ne pas ré-émettre d'événements Hermès ici
+    });
+
+    // S'abonner aux événements de connexion
+    const unsubscribeConn = hermes.on(EventType.TRANSPORT_CONNECTED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] Transport connected:', event.payload);
+      }
+    });
+
+    // S'abonner aux événements de transport (BLE/USB/Nostr)
+    const unsubscribeBle = hermes.on(EventType.BLE_DEVICE_CONNECTED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] BLE device connected:', event.payload);
+      }
+    });
+
+    const unsubscribeUsb = hermes.on(EventType.USB_DEVICE_CONNECTED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] USB device connected:', event.payload);
+      }
+    });
+
+    // S'abonner aux événements de transactions
+    const unsubscribeTx = hermes.on(EventType.PAYMENT_INITIATED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] Payment initiated:', event.payload);
+      }
+    });
+
+    const unsubscribeTxSuccess = hermes.on(EventType.PAYMENT_COMPLETED, (event: HermesEvent) => {
+      if (__DEV__) {
+        console.log('[Bridge] Payment completed:', event.payload);
+      }
+    });
+
+    return () => {
+      unsubscribeWallet();
+      unsubscribeConn();
+      unsubscribeBle();
+      unsubscribeUsb();
+      unsubscribeTx();
+      unsubscribeTxSuccess();
+      
+      hermes.stop().catch((error) => {
+        console.error('[Hermès] Error stopping engine:', error);
+      });
+      
+      isInitialized.current = false;
+    };
+  }, []);
+
+  // Gestion des erreurs Hermès globales
+  useEffect(() => {
+    const unsubscribeError = hermes.onError((error: Error, context?: string) => {
+      console.error('[Hermès Error]', context || 'Unknown context', error);
+      // Optionnel: envoyer à un service de tracking d'erreurs (Sentry, etc.)
+      // if (Sentry) Sentry.captureException(error, { extra: { context } });
+    });
+
+    return () => {
+      unsubscribeError();
+    };
+  }, []);
+}
+
 function AppContent() {
   const { isHydrated } = useStoreHydration();
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Bridge Hermès <-> Legacy (Phase 2.1)
+  // Hermès démarre APRÈS les stores Zustand pour avoir accès à l'état
+  useHermesBridge();
 
   useEffect(() => {
     async function checkOnboarding() {
@@ -148,12 +252,13 @@ function AppContent() {
 }
 
 /**
- * Layout principal avec stores Zustand
+ * Layout principal avec stores Zustand et Hermès Engine
  * 
  * Architecture:
  * - WalletStore: Remplace WalletSeedProvider (SecureStore)
  * - SettingsStore: Remplace AppSettingsProvider (AsyncStorage)
  * - UIStore: Nouveau store pour la gestion UI
+ * - Hermès Engine: Event sourcing pour la communication inter-modules (Phase 2.1)
  * 
  * Providers compat (thin wrappers Zustand → anciens hooks):
  * - WalletSeedContext  → useWalletSeed()   lit useWalletStore

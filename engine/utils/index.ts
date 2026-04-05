@@ -4,6 +4,15 @@
 
 export { EventBuilder, eb } from './EventBuilder';
 export {
+  CryptoWrapper,
+  NobleCryptoWrapper,
+  cryptoWrapper,
+  getCryptoWrapper,
+  randomBytes,
+  timingSafeEqual,
+  isValidKey,
+} from './CryptoWrapper';
+export {
   // Validateur
   EventValidator,
   // Schémas Zod

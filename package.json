@@ -15,6 +15,7 @@
   "jest": {
     "preset": "jest-expo/node",
     "testEnvironment": "node",
+    "setupFilesAfterEnv": ["<rootDir>/jest.setup.js"],
     "testMatch": [
       "**/utils/__tests__/**/*.test.ts",
       "**/engine/__tests__/**/*.test.ts"

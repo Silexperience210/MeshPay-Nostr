@@ -20,7 +20,8 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
 // @ts-ignore - subpath exports use .js extension
 import { randomBytes } from '@noble/hashes/utils.js';
-import { bytesToHex } from '@/utils/bitcoin';
+// @ts-ignore - subpath exports use .js extension
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { deriveUnifiedIdentity, UnifiedIdentity, BitcoinIdentity, NostrIdentity, MeshCoreIdentity } from './Derivation';
 import { HermesEngine, hermes } from '../HermesEngine';
 import { EventType } from '../types';
