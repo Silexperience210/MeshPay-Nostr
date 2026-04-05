@@ -23,6 +23,8 @@ export const Colors = {
   cyanDim: 'rgba(34, 211, 238, 0.15)',
   yellow: '#FBBF24',
   yellowDim: 'rgba(251, 191, 36, 0.15)',
+  orange: '#F97316',
+  orangeDim: 'rgba(249, 115, 22, 0.15)',
   white: '#FFFFFF',
   black: '#000000',
   tint: '#F7931A', // Alias pour accent

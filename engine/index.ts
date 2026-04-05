@@ -21,3 +21,6 @@ export * from './hooks';
 
 // ─── HermesEngine (singleton principal) ──────────────────────────────────────
 export { HermesEngine, hermes, ProtocolAdapter } from './HermesEngine';
+
+// ─── Identity (gestion d'identité unifiée) ───────────────────────────────────
+export * from './identity';

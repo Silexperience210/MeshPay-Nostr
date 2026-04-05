@@ -26,6 +26,7 @@ export { useMessages, type UseMessagesReturn, type Conversation, type Message, t
 export { useConnection, type UseConnectionReturn, type ConnectionStatus, type TransportState } from './useConnection';
 export { useWalletHermes, type UseWalletHermesReturn } from './useWalletHermes';
 export { useBridge, type UseBridgeReturn, type BridgeStats } from './useBridge';
+export { useUnifiedIdentity, type UseUnifiedIdentityReturn, type UseUnifiedIdentityState, type UseUnifiedIdentityActions } from './useUnifiedIdentity';
 
 // ─── Re-exports utiles depuis les modules engine ───────────────────────────────
 
