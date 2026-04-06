@@ -31,6 +31,7 @@ export {
   type EncryptedBackup,
   type CreateIdentityOptions,
   type CreateIdentityResult,
+  type PublicIdentity,
   // Erreurs
   IdentityError,
   DecryptionError,

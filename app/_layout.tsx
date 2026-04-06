@@ -12,11 +12,10 @@ import { ActivityIndicator, View, Text } from "react-native";
 import Colors from "@/constants/colors";
 
 // ─── Stores Zustand (nouveau) ────────────────────────────────────────────────
-// Ces stores remplacent les anciens providers context
 import { useWalletStore } from "@/stores/walletStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
-// ─── Providers compat Zustand (wrappent les hooks useWalletSeed/useAppSettings) ──
+// ─── Providers compat Zustand ─────────────────────────────────────────────────
 import { WalletSeedContext } from "@/providers/WalletSeedProvider";
 import { AppSettingsContext } from "@/providers/AppSettingsProvider";
 
@@ -32,8 +31,9 @@ import { TxRelayContext } from "@/providers/TxRelayProvider";
 import { RadarProvider } from "@/providers/RadarProvider";
 import { ShopProvider } from "@/providers/ShopProvider";
 
-// ─── Hermès Engine (Phase 2.1) ─────────────────────────────────────────────────
-import { hermes, EventType, type HermesEvent } from "@/engine";
+// ─── Hermès Engine ────────────────────────────────────────────────────────────
+// Hermès démarre uniquement après création d'identité (via UnifiedIdentityManager)
+// pour éviter le double démarrage et les conflits
 
 import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener } from "@/utils/notifications";
 import { router } from "expo-router";
@@ -63,7 +63,6 @@ function RootLayoutNav() {
 
 /**
  * Hook de synchronisation des stores
- * S'assure que les stores Zustand sont réhydratés avant d'afficher l'app
  */
 function useStoreHydration() {
   const walletHydrated = useWalletStore((state) => state._hasHydrated);
@@ -76,35 +75,10 @@ function useStoreHydration() {
   };
 }
 
-/**
- * Hook de bridge Hermès <-> Legacy Providers
- * SIMPLIFIÉ - Plus d'écoute d'événements pour éviter les boucles
- */
-function useHermesBridge() {
-  const isInitialized = useRef(false);
-
-  useEffect(() => {
-    if (isInitialized.current) return;
-    isInitialized.current = true;
-
-    // Démarrer Hermès (seulement ça, pas d'écoute d'événements ici)
-    hermes.start().catch(console.error);
-
-    return () => {
-      hermes.stop().catch(() => {});
-      isInitialized.current = false;
-    };
-  }, []);
-}
-
 function AppContent() {
   const { isHydrated } = useStoreHydration();
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-
-  // Bridge Hermès <-> Legacy (Phase 2.1)
-  // Hermès démarre APRÈS les stores Zustand pour avoir accès à l'état
-  useHermesBridge();
 
   useEffect(() => {
     async function checkOnboarding() {
@@ -115,8 +89,7 @@ function AppContent() {
         if (!isDone) {
           setShowOnboarding(true);
         }
-      } catch (e) {
-        console.warn('Error checking onboarding status:', e);
+      } catch {
         setOnboardingDone(false);
         setShowOnboarding(true);
       }
@@ -131,14 +104,12 @@ function AppContent() {
   }, [isHydrated, onboardingDone]);
 
   useEffect(() => {
-    // Demander la permission notifications + configurer les canaux Android
     requestNotificationPermission()
       .then(() => configureNotificationChannels())
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    // Deep link : tap sur une notification boutique → naviguer vers Shop > Commandes
     const unsub = addNotificationResponseListener((type, data) => {
       if (type === 'new_order' || type === 'order_status' || type === 'payment_info') {
         router.push('/(tabs)/shop/orders');
@@ -176,23 +147,15 @@ function AppContent() {
 }
 
 /**
- * Layout principal avec stores Zustand et Hermès Engine
+ * Layout principal avec stores Zustand
  * 
- * Architecture:
- * - WalletStore: Remplace WalletSeedProvider (SecureStore)
- * - SettingsStore: Remplace AppSettingsProvider (AsyncStorage)
- * - UIStore: Nouveau store pour la gestion UI
- * - Hermès Engine: Event sourcing pour la communication inter-modules (Phase 2.1)
- * 
- * Providers compat (thin wrappers Zustand → anciens hooks):
- * - WalletSeedContext  → useWalletSeed()   lit useWalletStore
- * - AppSettingsContext → useAppSettings()  lit useSettingsStore
+ * Hermès Engine est démarré automatiquement par UnifiedIdentityManager
+ * lors de la création/restauration d'une identité, pas au boot.
  */
 export default function RootLayout() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        {/* Providers compat : useWalletSeed() et useAppSettings() → Zustand stores */}
         <WalletSeedContext>
         <AppSettingsContext>
         <BitcoinContext>

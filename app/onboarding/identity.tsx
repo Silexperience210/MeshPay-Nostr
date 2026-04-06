@@ -1,17 +1,15 @@
 /**
- * IdentitySetupScreen - Configuration de l'identité unifiée
+ * Identity Setup Screen - Optimized Version
  * 
- * Écran d'onboarding qui:
- * 1. Permet de créer un nouveau wallet ou restaurer depuis un backup/mnemonic
- * 2. Affiche le mnemonic pour sauvegarde (avec confirmation de copie)
- * 3. Demande un mot de passe pour le chiffrement
- * 4. Affiche un récapitulatif des 3 identités créées (Bitcoin, Nostr, MeshCore)
- * 
- * Cet écran est utilisé lors de la première utilisation ou lors de la migration
- * depuis l'ancien système.
+ * Fixes applied:
+ * - Removed all console.log statements causing freeze
+ * - Memoized styles and colors
+ * - Stabilized callback references
+ * - Fixed ScrollView performance
+ * - Fixed navigation to explicit route
  */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,961 +17,248 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  Alert,
+  KeyboardAvoidingView,
+  Platform,
   ActivityIndicator,
+  Alert,
+  Clipboard,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
+import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router } from 'expo-router';
-import {
-  Wallet,
-  Key,
-  Radio,
-  ChevronRight,
-  ChevronLeft,
-  Copy,
-  Check,
-  Shield,
-  AlertTriangle,
-  Eye,
-  EyeOff,
-  FileText,
-  Lock,
-} from 'lucide-react-native';
 import { StatusBar } from 'expo-status-bar';
-import { useUnifiedIdentity } from '@/engine/hooks';
-import { validateMnemonic } from '@/utils/bitcoin';
-import Colors from '@/constants/colors';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors } from '../../constants/colors';
+import { useUnifiedIdentity } from '../../engine/hooks/useUnifiedIdentity';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ============================
+// CONSTANTS (hors composant)
+// ============================
 
-type SetupStep = 'mode' | 'create' | 'restore' | 'backup' | 'password' | 'confirm' | 'success';
+const ONBOARDING_KEY = 'BITMESH_ONBOARDING_DONE';
 
-interface IdentitySummary {
-  bitcoin: { firstAddress: string };
-  nostr: { npub: string };
-  meshcore: { nodeId: string };
-}
+const THEME_COLORS = {
+  background: Colors.background,
+  text: Colors.text,
+  placeholder: Colors.textMuted,
+  cardBackground: Colors.surface,
+  border: Colors.border,
+  accent: Colors.accent,
+  success: Colors.green,
+  warning: Colors.orange,
+  danger: Colors.red,
+  inputBackground: Colors.surfaceLight,
+};
 
-// ─── Composants ───────────────────────────────────────────────────────────────
+const IS_DARK = THEME_COLORS.background === '#000000' || THEME_COLORS.background === '#1a1a1a';
 
-export default function IdentitySetupScreen() {
-  // Colors are defined as a single theme in this app
-  const colors = {
-    background: Colors.background,
-    text: Colors.text,
-    textMuted: Colors.textMuted,
-    border: Colors.border,
-    cardBackground: Colors.surface,
-    inputBackground: Colors.surfaceLight,
-  };
-  
-  // Détecter le mode sombre (simplifié)
-  const isDark = colors.background === '#000000' || colors.background === '#121212' || Colors.background === '#0a0a0a';
+const MNEMONIC_STRENGTH_OPTIONS = [
+  { label: '12 mots (128 bits)', value: 128, description: 'Standard - Recommandé' },
+  { label: '15 mots (160 bits)', value: 160, description: 'Sécurité renforcée' },
+  { label: '24 mots (256 bits)', value: 256, description: 'Paranoïa niveau maximum' },
+];
 
-  // ─── Hook identity ─────────────────────────────────────────────────────────
-  const {
-    createWallet,
-    restoreWallet,
-    isLoading,
-    error,
-    clearError,
-  } = useUnifiedIdentity();
+// ============================
+// TYPES
+// ============================
 
-  // ─── État local ────────────────────────────────────────────────────────────
-  const [step, setStep] = useState<SetupStep>('mode');
-  const [mnemonic, setMnemonic] = useState<string>('');
-  const [password, setPassword] = useState<string>('');
-  const [confirmPassword, setConfirmPassword] = useState<string>('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [mnemonicStrength, setMnemonicStrength] = useState<12 | 24>(12);
-  const [backupConfirmed, setBackupConfirmed] = useState(false);
-  const [mnemonicCopied, setMnemonicCopied] = useState(false);
-  const [identitySummary, setIdentitySummary] = useState<IdentitySummary | null>(null);
-  const [restoreInput, setRestoreInput] = useState('');
+type SetupStep = 'mode' | 'create' | 'restore' | 'password' | 'backup' | 'success';
 
-  // Log initial mount
-  console.log('[Identity] === SCREEN MOUNTED ===');
-  console.log('[Identity] Initial step: mode');
+// ============================
+// STYLES MÉMOÏSÉS
+// ============================
 
-  // ─── Helpers ───────────────────────────────────────────────────────────────
-  const goToStep = useCallback((newStep: SetupStep) => {
-    console.log(`[Identity] === STEP CHANGE: ${step} -> ${newStep} ===`);
-    setStep(newStep);
-    clearError();
-  }, [clearError, step]);
-
-  const copyMnemonic = useCallback(async () => {
-    console.log('[Identity] copyMnemonic called');
-    if (mnemonic) {
-      await Clipboard.setStringAsync(mnemonic);
-      setMnemonicCopied(true);
-      setTimeout(() => setMnemonicCopied(false), 2000);
-      console.log('[Identity] Mnemonic copied to clipboard');
-    }
-  }, [mnemonic]);
-
-  // ─── Handlers ───────────────────────────────────────────────────────────────
-
-  /**
-   * Crée un nouveau wallet.
-   */
-  const isCreatingRef = useRef(false);
-  
-  const handleCreateWallet = useCallback(async () => {
-    // Garde anti-clic multiple
-    if (isCreatingRef.current) {
-      console.log('[Identity] Creation already in progress, ignoring click');
-      return;
-    }
-    isCreatingRef.current = true;
-    
-    console.log('[Identity] === handleCreateWallet START ===');
-    console.log('[Identity] mnemonicStrength:', mnemonicStrength);
-    console.log('[Identity] password length:', password.length);
-    try {
-      console.log('[Identity] Calling createWallet...');
-      const generatedMnemonic = await createWallet(mnemonicStrength, password);
-      console.log('[Identity] createWallet returned successfully');
-      console.log('[Identity] mnemonic prefix:', generatedMnemonic.substring(0, 20) + '...');
-      setMnemonic(generatedMnemonic);
-      console.log('[Identity] setMnemonic called');
-      console.log('[Identity] About to setStep to backup...');
-      setStep('backup');
-      console.log('[Identity] setStep(backup) called');
-      console.log('[Identity] === handleCreateWallet END ===');
-    } catch (err) {
-      console.error('[Identity] === handleCreateWallet ERROR ===');
-      console.error('[Identity] Failed to create wallet:', err);
-      Alert.alert('Error', 'Failed to create wallet: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      isCreatingRef.current = false;
-    }
-  }, [createWallet, mnemonicStrength, password]);
-
-  /**
-   * Restaure un wallet depuis un mnemonic.
-   */
-  const handleRestoreWallet = useCallback(async () => {
-    console.log('[Identity] === handleRestoreWallet START ===');
-    const trimmedInput = restoreInput.trim().toLowerCase();
-    
-    if (!validateMnemonic(trimmedInput)) {
-      console.log('[Identity] Invalid mnemonic provided');
-      Alert.alert('Invalid Mnemonic', 'Please enter a valid BIP39 mnemonic phrase.');
-      return;
-    }
-
-    try {
-      console.log('[Identity] Calling restoreWallet...');
-      await restoreWallet(trimmedInput, password);
-      console.log('[Identity] restoreWallet returned successfully');
-      setMnemonic(trimmedInput);
-      // Aller directement à la confirmation
-      setIdentitySummary({
-        bitcoin: { firstAddress: '' }, // Sera récupéré après unlock
-        nostr: { npub: '' },
-        meshcore: { nodeId: '' },
-      });
-      console.log('[Identity] Setting step to success');
-      setStep('success');
-      console.log('[Identity] === handleRestoreWallet END ===');
-    } catch (err) {
-      console.error('[Identity] === handleRestoreWallet ERROR ===');
-      console.error('[Identity] Failed to restore wallet:', err);
-    }
-  }, [restoreWallet, restoreInput, password]);
-
-  /**
-   * Valide le mot de passe et passe à l'étape suivante.
-   */
-  const handlePasswordSubmit = useCallback(() => {
-    console.log('[Identity] === handlePasswordSubmit START ===');
-    console.log('[Identity] Current step:', step);
-    console.log('[Identity] Has mnemonic:', !!mnemonic);
-    console.log('[Identity] Password length:', password.length);
-    console.log('[Identity] Passwords match:', password === confirmPassword);
-
-    if (password.length < 8) {
-      console.log('[Identity] Password too short');
-      Alert.alert('Weak Password', 'Please use at least 8 characters for your password.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      console.log('[Identity] Passwords do not match');
-      Alert.alert('Password Mismatch', 'Passwords do not match.');
-      return;
-    }
-
-    if (step === 'password' && mnemonic) {
-      // Restauration: aller à la confirmation
-      console.log('[Identity] Restauration mode - calling handleRestoreWallet');
-      handleRestoreWallet();
-    } else if (step === 'password') {
-      // Création: générer le wallet
-      console.log('[Identity] Creation mode - calling handleCreateWallet');
-      handleCreateWallet();
-    }
-    console.log('[Identity] === handlePasswordSubmit END ===');
-  }, [password, confirmPassword, step, mnemonic, handleCreateWallet, handleRestoreWallet]);
-
-  /**
-   * Confirme que l'utilisateur a sauvegardé son mnemonic.
-   */
-  const handleBackupConfirmed = useCallback(() => {
-    console.log('[Identity] === handleBackupConfirmed START ===');
-    console.log('[Identity] backupConfirmed:', backupConfirmed);
-    if (!backupConfirmed) {
-      console.log('[Identity] Backup not confirmed, showing alert');
-      Alert.alert('Backup Required', 'Please confirm you have written down your recovery phrase.');
-      return;
-    }
-    console.log('[Identity] Setting step to success');
-    setStep('success');
-    console.log('[Identity] === handleBackupConfirmed END ===');
-  }, [backupConfirmed]);
-
-  /**
-   * Termine l'onboarding et redirige vers l'app.
-   */
-  const handleComplete = useCallback(async () => {
-    console.log('[Identity] === handleComplete START ===');
-    try {
-      console.log('[Identity] Writing BITMESH_ONBOARDING_DONE to AsyncStorage...');
-      await AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true');
-      console.log('[Identity] AsyncStorage write successful');
-      console.log('[Identity] About to call router.replace(/(tabs))...');
-      router.replace('/(tabs)');
-      console.log('[Identity] router.replace called');
-    } catch (err) {
-      console.error('[Identity] === handleComplete ERROR ===');
-      console.error('[Identity] Error during completion:', err);
-      // Fallback: essayer de naviguer quand même
-      console.log('[Identity] Trying fallback router.push...');
-      router.push('/(tabs)');
-    }
-    console.log('[Identity] === handleComplete END ===');
-  }, []);
-
-  // ─── Rendu des étapes ───────────────────────────────────────────────────────
-
-  /**
-   * Étape 1: Choix du mode (créer ou restaurer).
-   */
-  const renderModeStep = () => {
-    console.log('[Identity] renderModeStep called');
-    return (
-      <View style={styles.stepContainer}>
-        <View style={styles.iconContainer}>
-          <Wallet size={64} color={Colors.accent} />
-        </View>
-        <Text style={[styles.title, { color: colors.text }]}>
-          Set Up Your Identity
-        </Text>
-        <Text style={[styles.subtitle, { color: colors.textMuted }]}
-        numberOfLines={2} adjustsFontSizeToFit>
-          Create a new wallet or restore from an existing backup. {'\n'}
-          This will generate your Bitcoin, Nostr, and MeshCore identities.
-        </Text>
-
-        <View style={styles.buttonGroup}>
-          <TouchableOpacity
-            style={[styles.primaryButton, { backgroundColor: Colors.accent }]}
-            onPress={() => {
-              console.log('[Identity] Create New Wallet button pressed');
-              goToStep('create');
-            }}
-            activeOpacity={0.8}
-          >
-            <Key size={20} color="#fff" />
-            <Text style={styles.primaryButtonText}>Create New Wallet</Text>
-            <ChevronRight size={20} color="#fff" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.secondaryButton, { borderColor: colors.border }]}
-            onPress={() => {
-              console.log('[Identity] Restore from Backup button pressed');
-              goToStep('restore');
-            }}
-            activeOpacity={0.8}
-          >
-            <FileText size={20} color={colors.text} />
-            <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
-              Restore from Backup
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
-
-  /**
-   * Étape 2a: Configuration création (choix 12/24 mots).
-   */
-  const renderCreateStep = () => {
-    console.log('[Identity] renderCreateStep called');
-    return (
-      <View style={styles.stepContainer}>
-        <Text style={[styles.title, { color: colors.text }]}>
-          Choose Security Level
-        </Text>
-        <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-          Select the number of words for your recovery phrase.
-        </Text>
-
-        <View style={styles.optionContainer}>
-          <TouchableOpacity
-            style={[
-              styles.optionCard,
-              mnemonicStrength === 12 && styles.optionCardSelected,
-              { borderColor: mnemonicStrength === 12 ? Colors.accent : colors.border },
-            ]}
-            onPress={() => {
-              console.log('[Identity] 12 words selected');
-              setMnemonicStrength(12);
-            }}
-          >
-            <Shield size={32} color={mnemonicStrength === 12 ? Colors.accent : colors.textMuted} />
-            <Text style={[styles.optionTitle, { color: colors.text }]}>12 Words</Text>
-            <Text style={[styles.optionDesc, { color: colors.textMuted }]}>
-              Standard security{'\n'}Recommended for most users
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.optionCard,
-              mnemonicStrength === 24 && styles.optionCardSelected,
-              { borderColor: mnemonicStrength === 24 ? Colors.accent : colors.border },
-            ]}
-            onPress={() => {
-              console.log('[Identity] 24 words selected');
-              setMnemonicStrength(24);
-            }}
-          >
-            <Shield size={32} color={mnemonicStrength === 24 ? Colors.accent : colors.textMuted} />
-            <Text style={[styles.optionTitle, { color: colors.text }]}>24 Words</Text>
-            <Text style={[styles.optionDesc, { color: colors.textMuted }]}>
-              Maximum security{'\n'}For advanced users
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 32 }]}
-          onPress={() => {
-            console.log('[Identity] Continue button pressed from create step');
-            goToStep('password');
-          }}
-        >
-          <Text style={styles.primaryButtonText}>Continue</Text>
-          <ChevronRight size={20} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            console.log('[Identity] Back button pressed from create step');
-            goToStep('mode');
-          }}
-        >
-          <ChevronLeft size={20} color={colors.textMuted} />
-          <Text style={[styles.backButtonText, { color: colors.textMuted }]}>Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  };
-
-  /**
-   * Étape 2b: Restauration depuis mnemonic.
-   */
-  const renderRestoreStep = () => {
-    console.log('[Identity] renderRestoreStep called');
-    return (
-      <View style={styles.stepContainer}>
-        <Text style={[styles.title, { color: colors.text }]}>
-          Restore Wallet
-        </Text>
-        <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-          Enter your 12 or 24-word recovery phrase.
-        </Text>
-
-        <TextInput
-          style={[
-            styles.mnemonicInput,
-            {
-              backgroundColor: colors.inputBackground,
-              borderColor: colors.border,
-              color: colors.text,
-            },
-          ]}
-          placeholder="Enter your recovery phrase..."
-          placeholderTextColor={colors.textMuted}
-          value={restoreInput}
-          onChangeText={(text) => {
-            console.log('[Identity] Restore input changed, length:', text.length);
-            setRestoreInput(text);
-          }}
-          multiline
-          numberOfLines={4}
-          textAlignVertical="top"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-
-        <TouchableOpacity
-          style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 24 }]}
-          onPress={() => {
-            console.log('[Identity] Continue button pressed from restore step');
-            goToStep('password');
-          }}
-          disabled={restoreInput.trim().split(/\s+/).length < 12}
-        >
-          <Text style={styles.primaryButtonText}>Continue</Text>
-          <ChevronRight size={20} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            console.log('[Identity] Back button pressed from restore step');
-            goToStep('mode');
-          }}
-        >
-          <ChevronLeft size={20} color={colors.textMuted} />
-          <Text style={[styles.backButtonText, { color: colors.textMuted }]}>Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  };
-
-  /**
-   * Étape 3: Mot de passe.
-   */
-  const renderPasswordStep = () => {
-    console.log('[Identity] renderPasswordStep called');
-    return (
-      <View style={styles.stepContainer}>
-        <View style={styles.iconContainer}>
-          <Lock size={48} color={Colors.accent} />
-        </View>
-        <Text style={[styles.title, { color: colors.text }]}>
-          Set Password
-        </Text>
-        <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-          This password will encrypt your private keys. {'\n'}
-          Make sure to remember it!
-        </Text>
-
-        <View style={styles.inputContainer}>
-          <TextInput
-            style={[
-              styles.passwordInput,
-              {
-                backgroundColor: colors.inputBackground,
-                borderColor: colors.border,
-                color: colors.text,
-              },
-            ]}
-            placeholder="Enter password"
-            placeholderTextColor={colors.textMuted}
-            value={password}
-            onChangeText={(text) => {
-              console.log('[Identity] Password input changed, length:', text.length);
-              setPassword(text);
-            }}
-            secureTextEntry={!showPassword}
-            autoCapitalize="none"
-          />
-          <TouchableOpacity
-            style={styles.eyeButton}
-            onPress={() => {
-              console.log('[Identity] Toggle password visibility');
-              setShowPassword(!showPassword);
-            }}
-          >
-            {showPassword ? (
-              <EyeOff size={20} color={colors.textMuted} />
-            ) : (
-              <Eye size={20} color={colors.textMuted} />
-            )}
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.inputContainer}>
-          <TextInput
-            style={[
-              styles.passwordInput,
-              {
-                backgroundColor: colors.inputBackground,
-                borderColor: colors.border,
-                color: colors.text,
-              },
-            ]}
-            placeholder="Confirm password"
-            placeholderTextColor={colors.textMuted}
-            value={confirmPassword}
-            onChangeText={(text) => {
-              console.log('[Identity] Confirm password input changed, length:', text.length);
-              setConfirmPassword(text);
-            }}
-            secureTextEntry={!showPassword}
-            autoCapitalize="none"
-          />
-        </View>
-
-        {password.length > 0 && password.length < 8 && (
-          <Text style={styles.warningText}>
-            Password must be at least 8 characters
-          </Text>
-        )}
-
-        <TouchableOpacity
-          style={[
-            styles.primaryButton,
-            {
-              backgroundColor: Colors.accent,
-              marginTop: 24,
-              opacity: password.length >= 8 && password === confirmPassword ? 1 : 0.5,
-            },
-          ]}
-          onPress={() => {
-            console.log('[Identity] Create Wallet button pressed');
-            handlePasswordSubmit();
-          }}
-          disabled={password.length < 8 || password !== confirmPassword || isLoading}
-        >
-          {isLoading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Text style={styles.primaryButtonText}>Create Wallet</Text>
-              <ChevronRight size={20} color="#fff" />
-            </>
-          )}
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            console.log('[Identity] Back button pressed from password step');
-            goToStep(mnemonic ? 'restore' : 'create');
-          }}
-        >
-          <ChevronLeft size={20} color={colors.textMuted} />
-          <Text style={[styles.backButtonText, { color: colors.textMuted }]}>Back</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  };
-
-  /**
-   * Étape 4: Sauvegarde du mnemonic.
-   */
-  const renderBackupStep = () => {
-    console.log('[Identity] === renderBackupStep CALLED ===');
-    console.log('[Identity] mnemonic length:', mnemonic.length);
-    return (
-      <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.stepContainer}>
-          <View style={styles.warningIconContainer}>
-            <AlertTriangle size={48} color={Colors.orange} />
-          </View>
-          <Text style={[styles.title, { color: colors.text }]}>
-            Write Down Your Recovery Phrase
-          </Text>
-          <Text style={[styles.subtitle, { color: Colors.orange, fontWeight: '600' }]}>
-            This is the ONLY way to recover your wallet!
-          </Text>
-
-          <View style={[styles.mnemonicCard, { backgroundColor: colors.cardBackground }]}>
-            <Text style={[styles.mnemonicText, { color: colors.text }]}>
-              {mnemonic}
-            </Text>
-            <TouchableOpacity
-              style={styles.copyButton}
-              onPress={copyMnemonic}
-            >
-              {mnemonicCopied ? (
-                <Check size={20} color={Colors.green} />
-              ) : (
-                <Copy size={20} color={colors.textMuted} />
-              )}
-            </TouchableOpacity>
-          </View>
-
-          <View style={[styles.warningBox, { backgroundColor: Colors.orange + '20' }]}>
-            <AlertTriangle size={20} color={Colors.orange} />
-            <Text style={[styles.warningBoxText, { color: Colors.orange }]}>
-              Never share your recovery phrase with anyone. Store it in a safe place offline.
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.confirmCheckbox}
-            onPress={() => {
-              console.log('[Identity] Backup checkbox toggled, new value:', !backupConfirmed);
-              setBackupConfirmed(!backupConfirmed);
-            }}
-          >
-            <View style={[
-              styles.checkbox,
-              {
-                borderColor: backupConfirmed ? Colors.accent : colors.border,
-                backgroundColor: backupConfirmed ? Colors.accent : 'transparent',
-              },
-            ]}>
-              {backupConfirmed && <Check size={16} color="#fff" />}
-            </View>
-            <Text style={[styles.checkboxLabel, { color: colors.text }]}>
-              I have written down my recovery phrase
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.primaryButton,
-              {
-                backgroundColor: Colors.accent,
-                marginTop: 24,
-                opacity: backupConfirmed ? 1 : 0.5,
-              },
-            ]}
-            onPress={() => {
-              console.log('[Identity] Continue button pressed from backup step');
-              handleBackupConfirmed();
-            }}
-            disabled={!backupConfirmed}
-          >
-            <Text style={styles.primaryButtonText}>Continue</Text>
-            <ChevronRight size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    );
-  };
-
-  /**
-   * Étape 5: Succès et récapitulatif.
-   */
-  const renderSuccessStep = () => {
-    console.log('[Identity] === renderSuccessStep CALLED ===');
-    return (
-      <View style={styles.stepContainer}>
-        <View style={[styles.successIconContainer, { backgroundColor: Colors.green + '20' }]}>
-          <Check size={64} color={Colors.green} />
-        </View>
-        <Text style={[styles.title, { color: colors.text }]}>
-          Wallet Created!
-        </Text>
-        <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-          Your unified identity is ready.
-        </Text>
-
-        <View style={[styles.identitySummary, { backgroundColor: colors.cardBackground }]}>
-          <View style={styles.identityItem}>
-            <Wallet size={24} color={Colors.accent} />
-            <View style={styles.identityItemContent}>
-              <Text style={[styles.identityItemLabel, { color: colors.textMuted }]}>
-                Bitcoin
-              </Text>
-              <Text style={[styles.identityItemValue, { color: colors.text }]} numberOfLines={1}>
-                {identitySummary?.bitcoin.firstAddress || 'Ready'}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.identityDivider} />
-
-          <View style={styles.identityItem}>
-            <Key size={24} color={Colors.purple} />
-            <View style={styles.identityItemContent}>
-              <Text style={[styles.identityItemLabel, { color: colors.textMuted }]}>
-                Nostr
-              </Text>
-              <Text style={[styles.identityItemValue, { color: colors.text }]} numberOfLines={1}>
-                npub1...
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.identityDivider} />
-
-          <View style={styles.identityItem}>
-            <Radio size={24} color={Colors.orange} />
-            <View style={styles.identityItemContent}>
-              <Text style={[styles.identityItemLabel, { color: colors.textMuted }]}>
-                MeshCore
-              </Text>
-              <Text style={[styles.identityItemValue, { color: colors.text }]} numberOfLines={1}>
-                {identitySummary?.meshcore.nodeId || 'Ready'}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 32 }]}
-          onPress={() => {
-            console.log('[Identity] Get Started button pressed');
-            handleComplete();
-          }}
-        >
-          <Text style={styles.primaryButtonText}>Get Started</Text>
-          <ChevronRight size={20} color="#fff" />
-        </TouchableOpacity>
-      </View>
-    );
-  };
-
-  // ─── Rendu principal ────────────────────────────────────────────────────────
-  console.log('[Identity] === RENDER - Current step:', step, '===');
-  return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar style="light" />
-      
-      {/* Indicateur de progression */}
-      {step !== 'mode' && step !== 'success' && (
-        <View style={styles.progressContainer}>
-          <View style={styles.progressBar}>
-            <View 
-              style={[
-                styles.progressFill, 
-                { 
-                  width: step === 'create' || step === 'restore' ? '33%' : 
-                         step === 'password' ? '66%' : 
-                         step === 'backup' ? '80%' : '100%' 
-                }
-              ]} 
-            />
-          </View>
-        </View>
-      )}
-
-      {/* Contenu de l'étape */}
-      {step === 'mode' && renderModeStep()}
-      {step === 'create' && renderCreateStep()}
-      {step === 'restore' && renderRestoreStep()}
-      {step === 'password' && renderPasswordStep()}
-      {step === 'backup' && renderBackupStep()}
-      {step === 'success' && renderSuccessStep()}
-
-      {/* Affichage des erreurs */}
-      {error && (
-        <View style={[styles.errorContainer, { backgroundColor: Colors.red + '20' }]}>
-          <Text style={[styles.errorText, { color: Colors.red }]}>{error}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
-const styles = StyleSheet.create({
+const STATIC_STYLES = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  progressContainer: {
-    paddingTop: 60,
-    paddingHorizontal: 24,
-    paddingBottom: 16,
-  },
-  progressBar: {
-    height: 4,
-    backgroundColor: '#E5E5E5',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: Colors.accent,
-    borderRadius: 2,
+    backgroundColor: THEME_COLORS.background,
   },
   scrollContainer: {
     flex: 1,
   },
-  stepContainer: {
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
+  },
+  content: {
     flex: 1,
-    padding: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 60,
   },
-  iconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: Colors.accent + '15',
+  header: {
+    marginBottom: 40,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 32,
   },
-  warningIconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: Colors.orange + '15',
-    alignItems: 'center',
+  icon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: THEME_COLORS.accent + '20',
     justifyContent: 'center',
-    marginBottom: 32,
-  },
-  successIconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 32,
+    marginBottom: 20,
   },
   title: {
     fontSize: 28,
     fontWeight: '700',
+    color: THEME_COLORS.text,
     textAlign: 'center',
     marginBottom: 12,
   },
   subtitle: {
     fontSize: 16,
+    color: THEME_COLORS.placeholder,
     textAlign: 'center',
-    marginBottom: 32,
     lineHeight: 22,
+    paddingHorizontal: 20,
   },
   buttonGroup: {
-    width: '100%',
     gap: 16,
-    marginTop: 16,
   },
   primaryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
+    backgroundColor: THEME_COLORS.accent,
+    paddingVertical: 18,
     paddingHorizontal: 24,
     borderRadius: 12,
-    gap: 8,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  primaryButtonDisabled: {
+    backgroundColor: THEME_COLORS.placeholder,
   },
   primaryButtonText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+    marginLeft: 8,
   },
   secondaryButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: THEME_COLORS.border,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: {
+    color: THEME_COLORS.text,
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  backButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  backButtonText: {
+    color: THEME_COLORS.placeholder,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  input: {
+    backgroundColor: THEME_COLORS.inputBackground,
+    borderWidth: 1,
+    borderColor: THEME_COLORS.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: THEME_COLORS.text,
+    marginBottom: 16,
+  },
+  inputError: {
+    borderColor: THEME_COLORS.danger,
+  },
+  strengthSelector: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+  },
+  strengthOption: {
+    flex: 1,
+    backgroundColor: THEME_COLORS.cardBackground,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  strengthOptionSelected: {
+    borderColor: THEME_COLORS.accent,
+  },
+  strengthOptionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: THEME_COLORS.text,
+    marginBottom: 4,
+  },
+  strengthOptionDescription: {
+    fontSize: 12,
+    color: THEME_COLORS.placeholder,
+  },
+  mnemonicCard: {
+    backgroundColor: THEME_COLORS.cardBackground,
+    borderRadius: 16,
+    padding: 24,
+    marginTop: 24,
+  },
+  mnemonicGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  mnemonicWord: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: THEME_COLORS.inputBackground,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mnemonicWordNumber: {
+    fontSize: 10,
+    color: THEME_COLORS.placeholder,
+    marginRight: 6,
+    width: 20,
+  },
+  mnemonicWordText: {
+    fontSize: 14,
+    color: THEME_COLORS.text,
+    fontWeight: '500',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  copyButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    borderWidth: 1,
-    gap: 8,
+    paddingTop: 16,
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: THEME_COLORS.border,
   },
-  secondaryButtonText: {
-    fontSize: 16,
+  copyButtonText: {
+    marginLeft: 8,
+    color: THEME_COLORS.accent,
     fontWeight: '600',
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 24,
-    padding: 8,
-  },
-  backButtonText: {
     fontSize: 14,
-    marginLeft: 4,
-  },
-  optionContainer: {
-    flexDirection: 'row',
-    gap: 16,
-    width: '100%',
-  },
-  optionCard: {
-    flex: 1,
-    padding: 20,
-    borderRadius: 12,
-    borderWidth: 2,
-    alignItems: 'center',
-    gap: 8,
-  },
-  optionCardSelected: {
-    backgroundColor: Colors.accent + '10',
-  },
-  optionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginTop: 8,
-  },
-  optionDesc: {
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  mnemonicInput: {
-    width: '100%',
-    height: 120,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  inputContainer: {
-    width: '100%',
-    position: 'relative',
-    marginBottom: 16,
-  },
-  passwordInput: {
-    width: '100%',
-    height: 56,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingRight: 50,
-    fontSize: 16,
-  },
-  eyeButton: {
-    position: 'absolute',
-    right: 16,
-    top: 18,
-  },
-  warningText: {
-    color: Colors.orange,
-    fontSize: 12,
-    marginTop: -8,
-    marginBottom: 16,
-  },
-  mnemonicCard: {
-    width: '100%',
-    padding: 20,
-    borderRadius: 12,
-    marginBottom: 16,
-    position: 'relative',
-  },
-  mnemonicText: {
-    fontSize: 18,
-    lineHeight: 28,
-    fontWeight: '500',
-    letterSpacing: 0.5,
-  },
-  copyButton: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    padding: 8,
   },
   warningBox: {
     flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
+    backgroundColor: THEME_COLORS.warning + '15',
     borderRadius: 12,
+    padding: 16,
+    marginTop: 24,
     gap: 12,
-    width: '100%',
   },
-  warningBoxText: {
+  warningText: {
     flex: 1,
     fontSize: 14,
+    color: THEME_COLORS.warning,
     lineHeight: 20,
   },
-  confirmCheckbox: {
+  checkboxContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 24,
@@ -984,51 +269,636 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 6,
     borderWidth: 2,
-    alignItems: 'center',
+    borderColor: THEME_COLORS.border,
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxChecked: {
+    backgroundColor: THEME_COLORS.accent,
+    borderColor: THEME_COLORS.accent,
   },
   checkboxLabel: {
-    fontSize: 14,
     flex: 1,
+    fontSize: 14,
+    color: THEME_COLORS.text,
+  },
+  successContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+  },
+  successIcon: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: THEME_COLORS.success + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  successTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: THEME_COLORS.text,
+    marginBottom: 12,
+  },
+  successSubtitle: {
+    fontSize: 16,
+    color: THEME_COLORS.placeholder,
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 40,
   },
   identitySummary: {
     width: '100%',
+    backgroundColor: THEME_COLORS.cardBackground,
     borderRadius: 16,
     padding: 20,
-    marginTop: 24,
+    marginTop: 32,
+  },
+  identitySummaryTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: THEME_COLORS.text,
+    marginBottom: 16,
   },
   identityItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    paddingVertical: 12,
+    marginBottom: 12,
   },
-  identityItemContent: {
-    flex: 1,
+  identityIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: THEME_COLORS.accent + '20',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
   identityItemLabel: {
     fontSize: 12,
-    marginBottom: 2,
+    color: THEME_COLORS.placeholder,
   },
   identityItemValue: {
     fontSize: 14,
     fontWeight: '500',
-  },
-  identityDivider: {
-    height: 1,
-    backgroundColor: '#E5E5E5',
-    marginVertical: 4,
-  },
-  errorContainer: {
-    position: 'absolute',
-    bottom: 24,
-    left: 24,
-    right: 24,
-    padding: 16,
-    borderRadius: 12,
+    color: THEME_COLORS.text,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   errorText: {
-    fontSize: 14,
-    textAlign: 'center',
+    color: THEME_COLORS.danger,
+    fontSize: 13,
+    marginTop: -12,
+    marginBottom: 16,
+  },
+  progressContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: THEME_COLORS.border,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: THEME_COLORS.accent,
   },
 });
+
+// ============================
+// MAIN COMPONENT
+// ============================
+
+export default function IdentitySetupScreen() {
+  const router = useRouter();
+  const { createWallet, restoreWallet, isLoading, error, clearError } = useUnifiedIdentity();
+
+  // State
+  const [step, setStep] = useState<SetupStep>('mode');
+  const [mnemonic, setMnemonic] = useState('');
+  const [mnemonicStrength, setMnemonicStrength] = useState(128);
+  const [restoreInput, setRestoreInput] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [backupConfirmed, setBackupConfirmed] = useState(false);
+  const [mnemonicCopied, setMnemonicCopied] = useState(false);
+  const [identitySummary, setIdentitySummary] = useState<{ bitcoinAddress?: string; nostrPubkey?: string; meshcoreNodeId?: string } | null>(null);
+
+  // Refs pour anti-double-click
+  const isCreatingRef = useRef(false);
+  const isRestoringRef = useRef(false);
+  const isNavigatingRef = useRef(false);
+
+  // ============================
+  // HANDLERS (stabilisés avec useCallback)
+  // ============================
+
+  const goToStep = useCallback((newStep: SetupStep) => {
+    setStep(newStep);
+    clearError();
+  }, [clearError]);
+
+  const goBack = useCallback(() => {
+    switch (step) {
+      case 'create':
+      case 'restore':
+        goToStep('mode');
+        break;
+      case 'password':
+        goToStep('create');
+        break;
+      case 'backup':
+        goToStep('password');
+        break;
+      default:
+        break;
+    }
+  }, [step, goToStep]);
+
+  const copyMnemonic = useCallback(async () => {
+    if (!mnemonic) return;
+    await Clipboard.setString(mnemonic);
+    setMnemonicCopied(true);
+    setTimeout(() => setMnemonicCopied(false), 2000);
+  }, [mnemonic]);
+
+  const handleCreateWallet = useCallback(async () => {
+    if (isCreatingRef.current) return;
+    isCreatingRef.current = true;
+    
+    try {
+      // Convert strength (bits) to word count: 128->12, 160->15, 256->24
+      const wordCount = mnemonicStrength === 128 ? 12 : mnemonicStrength === 160 ? 15 : 24;
+      const generatedMnemonic = await createWallet(wordCount as 12 | 24, password);
+      setMnemonic(generatedMnemonic);
+      goToStep('backup');
+    } finally {
+      isCreatingRef.current = false;
+    }
+  }, [createWallet, mnemonicStrength, password, goToStep]);
+
+  const handleRestoreWallet = useCallback(async () => {
+    if (isRestoringRef.current) return;
+    isRestoringRef.current = true;
+
+    const cleanMnemonic = restoreInput.trim().toLowerCase();
+    const words = cleanMnemonic.split(/\s+/);
+    
+    if (words.length !== 12 && words.length !== 15 && words.length !== 24) {
+      Alert.alert('Phrase invalide', 'La phrase de récupération doit contenir 12, 15 ou 24 mots.');
+      isRestoringRef.current = false;
+      return;
+    }
+
+    try {
+      await restoreWallet(cleanMnemonic, password);
+      // L'identité est maintenant créée, récupérer le résumé depuis le store
+      goToStep('success');
+    } finally {
+      isRestoringRef.current = false;
+    }
+  }, [restoreInput, password, restoreWallet, goToStep]);
+
+  const handlePasswordSubmit = useCallback(async () => {
+    setPasswordError('');
+
+    if (password.length < 8) {
+      setPasswordError('Le mot de passe doit contenir au moins 8 caractères');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setPasswordError('Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    if (step === 'create') {
+      await handleCreateWallet();
+    } else if (step === 'restore') {
+      await handleRestoreWallet();
+    }
+  }, [password, confirmPassword, step, handleCreateWallet, handleRestoreWallet]);
+
+  const handleBackupConfirmed = useCallback(() => {
+    if (!backupConfirmed) return;
+    goToStep('success');
+  }, [backupConfirmed, goToStep]);
+
+  const handleComplete = useCallback(async () => {
+    if (isNavigatingRef.current) return;
+    isNavigatingRef.current = true;
+
+    try {
+      await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
+      
+      // Navigation avec délai pour éviter les conflits
+      setTimeout(() => {
+        router.push('/(tabs)/(messages)');
+      }, 50);
+    } catch {
+      router.push('/(tabs)/(messages)');
+    }
+  }, [router]);
+
+  // ============================
+  // MEMOIZED VALUES
+  // ============================
+
+  const progressWidth = useMemo(() => {
+    switch (step) {
+      case 'create':
+      case 'restore':
+        return '33%';
+      case 'password':
+        return '66%';
+      case 'backup':
+        return '80%';
+      case 'success':
+        return '100%';
+      default:
+        return '0%';
+    }
+  }, [step]);
+
+  const canSubmitPassword = password.length >= 8 && password === confirmPassword;
+
+  // ============================
+  // RENDER FUNCTIONS (composants internes pour éviter recréation)
+  // ============================
+
+  const renderModeStep = () => (
+    <>
+      <View style={STATIC_STYLES.header}>
+        <View style={STATIC_STYLES.icon}>
+          <Ionicons name="wallet-outline" size={40} color={THEME_COLORS.accent} />
+        </View>
+        <Text style={STATIC_STYLES.title}>Créer votre identité</Text>
+        <Text style={STATIC_STYLES.subtitle}>
+          Générez une clé unique pour Bitcoin, Nostr et MeshCore,{'\n'}
+          ou restaurez une identité existante.
+        </Text>
+      </View>
+
+      <View style={STATIC_STYLES.buttonGroup}>
+        <TouchableOpacity
+          style={STATIC_STYLES.primaryButton}
+          onPress={() => goToStep('create')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="add-circle-outline" size={20} color="#FFF" />
+          <Text style={STATIC_STYLES.primaryButtonText}>Créer un nouveau portefeuille</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={STATIC_STYLES.secondaryButton}
+          onPress={() => goToStep('restore')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="refresh-outline" size={20} color={THEME_COLORS.text} />
+          <Text style={STATIC_STYLES.secondaryButtonText}>Restaurer un portefeuille</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderCreateStep = () => (
+    <>
+      <View style={STATIC_STYLES.header}>
+        <View style={[STATIC_STYLES.icon, { backgroundColor: THEME_COLORS.accent + '20' }]}>
+          <Ionicons name="key-outline" size={40} color={THEME_COLORS.accent} />
+        </View>
+        <Text style={STATIC_STYLES.title}>Force de la clé</Text>
+        <Text style={STATIC_STYLES.subtitle}>
+          Choisissez le nombre de mots pour votre phrase de récupération.
+        </Text>
+      </View>
+
+      <View style={STATIC_STYLES.strengthSelector}>
+        {MNEMONIC_STRENGTH_OPTIONS.map((option) => (
+          <TouchableOpacity
+            key={option.value}
+            style={[
+              STATIC_STYLES.strengthOption,
+              mnemonicStrength === option.value && STATIC_STYLES.strengthOptionSelected,
+            ]}
+            onPress={() => setMnemonicStrength(option.value)}
+            activeOpacity={0.8}
+          >
+            <Text style={STATIC_STYLES.strengthOptionLabel}>{option.label}</Text>
+            <Text style={STATIC_STYLES.strengthOptionDescription}>{option.description}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={[STATIC_STYLES.buttonGroup, { marginTop: 40 }]}>
+        <TouchableOpacity
+          style={STATIC_STYLES.primaryButton}
+          onPress={() => goToStep('password')}
+          activeOpacity={0.8}
+        >
+          <Text style={STATIC_STYLES.primaryButtonText}>Continuer</Text>
+          <Ionicons name="arrow-forward" size={20} color="#FFF" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={STATIC_STYLES.backButton} onPress={goBack}>
+          <Text style={STATIC_STYLES.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderRestoreStep = () => (
+    <>
+      <View style={STATIC_STYLES.header}>
+        <View style={[STATIC_STYLES.icon, { backgroundColor: THEME_COLORS.accent + '20' }]}>
+          <Ionicons name="refresh-outline" size={40} color={THEME_COLORS.accent} />
+        </View>
+        <Text style={STATIC_STYLES.title}>Restaurer</Text>
+        <Text style={STATIC_STYLES.subtitle}>
+          Entrez votre phrase de récupération de 12, 15 ou 24 mots.
+        </Text>
+      </View>
+
+      <TextInput
+        style={[STATIC_STYLES.input, { height: 120, textAlignVertical: 'top' }]}
+        placeholder="votre phrase de récupération..."
+        placeholderTextColor={THEME_COLORS.placeholder}
+        value={restoreInput}
+        onChangeText={setRestoreInput}
+        multiline
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+
+      <View style={STATIC_STYLES.buttonGroup}>
+        <TouchableOpacity
+          style={[STATIC_STYLES.primaryButton, !restoreInput.trim() && STATIC_STYLES.primaryButtonDisabled]}
+          onPress={() => goToStep('password')}
+          disabled={!restoreInput.trim()}
+          activeOpacity={0.8}
+        >
+          <Text style={STATIC_STYLES.primaryButtonText}>Continuer</Text>
+          <Ionicons name="arrow-forward" size={20} color="#FFF" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={STATIC_STYLES.backButton} onPress={goBack}>
+          <Text style={STATIC_STYLES.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderPasswordStep = () => (
+    <>
+      <View style={STATIC_STYLES.header}>
+        <View style={[STATIC_STYLES.icon, { backgroundColor: THEME_COLORS.accent + '20' }]}>
+          <Ionicons name="lock-closed-outline" size={40} color={THEME_COLORS.accent} />
+        </View>
+        <Text style={STATIC_STYLES.title}>Mot de passe</Text>
+        <Text style={STATIC_STYLES.subtitle}>
+          Ce mot de passe chiffrera votre identité sur cet appareil.
+        </Text>
+      </View>
+
+      <TextInput
+        style={[STATIC_STYLES.input, passwordError && STATIC_STYLES.inputError]}
+        placeholder="Mot de passe (min. 8 caractères)"
+        placeholderTextColor={THEME_COLORS.placeholder}
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        autoCapitalize="none"
+      />
+
+      <TextInput
+        style={[STATIC_STYLES.input, passwordError && STATIC_STYLES.inputError]}
+        placeholder="Confirmer le mot de passe"
+        placeholderTextColor={THEME_COLORS.placeholder}
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
+        secureTextEntry
+        autoCapitalize="none"
+      />
+
+      {passwordError ? <Text style={STATIC_STYLES.errorText}>{passwordError}</Text> : null}
+
+      <View style={STATIC_STYLES.buttonGroup}>
+        <TouchableOpacity
+          style={[STATIC_STYLES.primaryButton, !canSubmitPassword && STATIC_STYLES.primaryButtonDisabled]}
+          onPress={handlePasswordSubmit}
+          disabled={!canSubmitPassword || isLoading}
+          activeOpacity={0.8}
+        >
+          {isLoading ? (
+            <ActivityIndicator color="#FFF" />
+          ) : (
+            <>
+              <Text style={STATIC_STYLES.primaryButtonText}>Créer l'identité</Text>
+              <Ionicons name="shield-checkmark-outline" size={20} color="#FFF" />
+            </>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={STATIC_STYLES.backButton} onPress={goBack}>
+          <Text style={STATIC_STYLES.backButtonText}>Retour</Text>
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  const renderBackupStep = () => (
+    <ScrollView
+      style={STATIC_STYLES.scrollContainer}
+      contentContainerStyle={STATIC_STYLES.scrollContent}
+      showsVerticalScrollIndicator={false}
+      removeClippedSubviews={true}
+    >
+      <View style={STATIC_STYLES.header}>
+        <View style={[STATIC_STYLES.icon, { backgroundColor: THEME_COLORS.warning + '20' }]}>
+          <Ionicons name="warning-outline" size={40} color={THEME_COLORS.warning} />
+        </View>
+        <Text style={STATIC_STYLES.title}>Sauvegarde</Text>
+        <Text style={STATIC_STYLES.subtitle}>
+          Écrivez ces mots sur papier.{'\n'}Ils sont la SEULE façon de récupérer votre portefeuille.
+        </Text>
+      </View>
+
+      <View style={STATIC_STYLES.mnemonicCard}>
+        <View style={STATIC_STYLES.mnemonicGrid}>
+          {mnemonic.split(' ').map((word, index) => (
+            <View key={index} style={STATIC_STYLES.mnemonicWord}>
+              <Text style={STATIC_STYLES.mnemonicWordNumber}>{index + 1}.</Text>
+              <Text style={STATIC_STYLES.mnemonicWordText}>{word}</Text>
+            </View>
+          ))}
+        </View>
+
+        <TouchableOpacity style={STATIC_STYLES.copyButton} onPress={copyMnemonic}>
+          <Ionicons name={mnemonicCopied ? 'checkmark-circle' : 'copy-outline'} size={18} color={THEME_COLORS.accent} />
+          <Text style={STATIC_STYLES.copyButtonText}>
+            {mnemonicCopied ? 'Copié !' : 'Copier'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={STATIC_STYLES.warningBox}>
+        <Ionicons name="warning" size={24} color={THEME_COLORS.warning} />
+        <Text style={STATIC_STYLES.warningText}>
+          Ne faites jamais de capture d'écran.{'\n'}
+          Ne partagez jamais ces mots.{'\n'}
+          BitMesh ne peut PAS les récupérer.
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={STATIC_STYLES.checkboxContainer}
+        onPress={() => setBackupConfirmed(!backupConfirmed)}
+        activeOpacity={0.8}
+      >
+        <View style={[STATIC_STYLES.checkbox, backupConfirmed && STATIC_STYLES.checkboxChecked]}>
+          {backupConfirmed && <Ionicons name="checkmark" size={16} color="#FFF" />}
+        </View>
+        <Text style={STATIC_STYLES.checkboxLabel}>
+          J'ai écrit ma phrase de récupération sur papier
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[STATIC_STYLES.primaryButton, { marginTop: 32 }, !backupConfirmed && STATIC_STYLES.primaryButtonDisabled]}
+        onPress={handleBackupConfirmed}
+        disabled={!backupConfirmed}
+        activeOpacity={0.8}
+      >
+        <Text style={STATIC_STYLES.primaryButtonText}>Continuer</Text>
+        <Ionicons name="arrow-forward" size={20} color="#FFF" />
+      </TouchableOpacity>
+    </ScrollView>
+  );
+
+  const renderSuccessStep = () => (
+    <>
+      <View style={STATIC_STYLES.successContainer}>
+        <View style={STATIC_STYLES.successIcon}>
+          <Ionicons name="checkmark" size={50} color={THEME_COLORS.success} />
+        </View>
+
+        <Text style={STATIC_STYLES.successTitle}>Identité créée !</Text>
+        <Text style={STATIC_STYLES.successSubtitle}>
+          Votre identité unifiée est prête.{'\n'}
+          Vous pouvez maintenant commencer à utiliser BitMesh.
+        </Text>
+
+        {identitySummary && (
+          <View style={STATIC_STYLES.identitySummary}>
+            <Text style={STATIC_STYLES.identitySummaryTitle}>Résumé de l'identité</Text>
+
+            <View style={STATIC_STYLES.identityItem}>
+              <View style={STATIC_STYLES.identityIcon}>
+                <Ionicons name="logo-bitcoin" size={18} color={THEME_COLORS.accent} />
+              </View>
+              <View>
+                <Text style={STATIC_STYLES.identityItemLabel}>Bitcoin</Text>
+                <Text style={STATIC_STYLES.identityItemValue}>
+                  {identitySummary.bitcoinAddress?.slice(0, 20)}...
+                </Text>
+              </View>
+            </View>
+
+            <View style={STATIC_STYLES.identityItem}>
+              <View style={STATIC_STYLES.identityIcon}>
+                <Ionicons name="chatbubble-outline" size={18} color={THEME_COLORS.accent} />
+              </View>
+              <View>
+                <Text style={STATIC_STYLES.identityItemLabel}>Nostr</Text>
+                <Text style={STATIC_STYLES.identityItemValue}>
+                  {identitySummary.nostrPubkey}
+                </Text>
+              </View>
+            </View>
+
+            <View style={STATIC_STYLES.identityItem}>
+              <View style={STATIC_STYLES.identityIcon}>
+                <Ionicons name="radio-outline" size={18} color={THEME_COLORS.accent} />
+              </View>
+              <View>
+                <Text style={STATIC_STYLES.identityItemLabel}>MeshCore</Text>
+                <Text style={STATIC_STYLES.identityItemValue}>
+                  {identitySummary.meshcoreNodeId}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[STATIC_STYLES.primaryButton, { marginTop: 40, width: '100%' }]}
+          onPress={handleComplete}
+          activeOpacity={0.8}
+        >
+          <Text style={STATIC_STYLES.primaryButtonText}>Commencer</Text>
+          <Ionicons name="arrow-forward" size={20} color="#FFF" />
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+
+  // ============================
+  // MAIN RENDER
+  // ============================
+
+  const renderContent = () => {
+    switch (step) {
+      case 'mode':
+        return renderModeStep();
+      case 'create':
+        return renderCreateStep();
+      case 'restore':
+        return renderRestoreStep();
+      case 'password':
+        return renderPasswordStep();
+      case 'backup':
+        return renderBackupStep();
+      case 'success':
+        return renderSuccessStep();
+      default:
+        return null;
+    }
+  };
+
+  const isScrollViewStep = step === 'backup';
+
+  return (
+    <View style={STATIC_STYLES.container}>
+      <StatusBar style="light" />
+
+      {step !== 'mode' && step !== 'success' && (
+        <View style={STATIC_STYLES.progressContainer}>
+          <View style={[STATIC_STYLES.progressBar, { width: progressWidth }]} />
+        </View>
+      )}
+
+      {isScrollViewStep ? (
+        renderContent()
+      ) : (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={STATIC_STYLES.container}
+        >
+          <ScrollView
+            style={STATIC_STYLES.scrollContainer}
+            contentContainerStyle={STATIC_STYLES.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={STATIC_STYLES.content}>
+              {renderContent()}
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      )}
+    </View>
+  );
+}
