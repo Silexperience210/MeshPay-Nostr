@@ -194,13 +194,13 @@ describe('EventValidator', () => {
       ];
 
       for (const type of types) {
-        const event = createValidMessageEvent({ type });
+        const event = createValidMessageEvent({ type } as any);
         expect(() => EventValidator.validateMessage(event)).not.toThrow();
       }
     });
 
     it('should throw for non-message type', () => {
-      const event = createValidMessageEvent({ type: EventType.TRANSPORT_CONNECTED });
+      const event = createValidMessageEvent({ type: EventType.TRANSPORT_CONNECTED } as any);
 
       expect(() => EventValidator.validateMessage(event)).toThrow();
     });
@@ -251,13 +251,13 @@ describe('EventValidator', () => {
       ];
 
       for (const type of types) {
-        const event = createValidConnectionEvent({ type });
+        const event = createValidConnectionEvent({ type } as any);
         expect(() => EventValidator.validateConnection(event)).not.toThrow();
       }
     });
 
     it('should throw for non-connection type', () => {
-      const event = createValidConnectionEvent({ type: EventType.DM_SENT });
+      const event = createValidConnectionEvent({ type: EventType.DM_SENT } as any);
 
       expect(() => EventValidator.validateConnection(event)).toThrow();
     });
@@ -297,7 +297,7 @@ describe('EventValidator', () => {
       const types = [EventType.WALLET_INITIALIZED, EventType.WALLET_DELETED];
 
       for (const type of types) {
-        const event = createValidWalletEvent({ type });
+        const event = createValidWalletEvent({ type } as any);
         expect(() => EventValidator.validateWallet(event)).not.toThrow();
       }
     });
@@ -317,7 +317,7 @@ describe('EventValidator', () => {
     });
 
     it('should throw for non-wallet type', () => {
-      const event = createValidWalletEvent({ type: EventType.DM_SENT });
+      const event = createValidWalletEvent({ type: EventType.DM_SENT } as any);
 
       expect(() => EventValidator.validateWallet(event)).toThrow();
     });
@@ -337,7 +337,7 @@ describe('EventValidator', () => {
       const types = [EventType.BRIDGE_LORA_TO_NOSTR, EventType.BRIDGE_NOSTR_TO_LORA];
 
       for (const type of types) {
-        const event = createValidBridgeEvent({ type });
+        const event = createValidBridgeEvent({ type } as any);
         expect(() => EventValidator.validateBridge(event)).not.toThrow();
       }
     });
@@ -350,7 +350,7 @@ describe('EventValidator', () => {
     });
 
     it('should throw for non-bridge type', () => {
-      const event = createValidBridgeEvent({ type: EventType.DM_SENT });
+      const event = createValidBridgeEvent({ type: EventType.DM_SENT } as any);
 
       expect(() => EventValidator.validateBridge(event)).toThrow();
     });

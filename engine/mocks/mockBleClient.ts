@@ -90,22 +90,16 @@ export const createMockBleClient = (): MockBleClient => {
       mockClient._deviceId = deviceId;
       mockClient._isConnected = true;
       mockClient._deviceInfo = {
-        nodeId: 'MOCK-NODE-001',
-        publicKey: new Uint8Array(32),
-        publicKeyHex: 'mock-pubkey-hex-32-bytes-long-string',
         name: 'Mock MeshCore Device',
-        version: '1.0.0',
-        features: 0xFFFF,
-        radioFreq: 869.525,
-        radioBw: 125,
+        publicKey: '0000000000000000000000000000000000000000000000000000000000000000',
+        txPower: 20,
+        maxTxPower: 22,
+        radioFreqHz: 869525000,
+        radioBwHz: 125000,
         radioSf: 12,
         radioCr: 5,
-        battVoltage: 4.2,
-        freeHeap: 100000,
-        nContacts: 0,
-        lastRxSnr: 0,
-        lastRssi: -70,
-        defaultPubKey: new Uint8Array(32),
+        advLat: 0,
+        advLon: 0,
       };
       // Configurer le canal 0 par défaut
       mockClient._channelConfigs.set(0, {

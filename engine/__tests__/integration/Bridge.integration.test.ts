@@ -141,7 +141,7 @@ describe('LoRa↔Nostr Bridge', () => {
       // Configurer l'engine pour écouter les bridges et les router vers LoRa
       engine.on(EventType.BRIDGE_NOSTR_TO_LORA, async (event) => {
         // Router vers LoRa si c'est notre nœud
-        if (event.payload.targetTransport === Transport.LORA) {
+        if ((event.payload as any).targetTransport === Transport.LORA) {
           const dmEvent: MessageEvent = {
             id: `bridged-${event.id}`,
             type: EventType.DM_SENT,
@@ -150,7 +150,7 @@ describe('LoRa↔Nostr Bridge', () => {
             from: 'local',
             to: 'nostrrecipientpubkeyhex' + 'c'.repeat(20),
             payload: {
-              content: event.payload.rawPayload,
+              content: (event.payload as any).rawPayload,
               contentType: 'text',
             },
             meta: {},

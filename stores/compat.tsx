@@ -34,7 +34,7 @@ interface WalletCompatContextValue {
   importWallet: (mnemonic: string) => void;
   deleteWallet: () => void;
   getFormattedAddress: () => string;
-  exportWallet: (password: string) => string;
+  exportWallet: (password: string) => Promise<string>;
   importEncryptedWallet: (backupJson: string, password: string) => void;
 }
 

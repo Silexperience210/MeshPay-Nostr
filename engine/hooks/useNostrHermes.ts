@@ -118,8 +118,8 @@ export function useNostrHermes(): UseNostrHermesReturn {
   // ─── Synchronisation avec le wallet ─────────────────────────────────────────
   
   useEffect(() => {
-    if (walletInfo?.nostrPubkey) {
-      setPublicKey(walletInfo.nostrPubkey);
+    if (walletInfo?.xpub) {
+      setPublicKey(walletInfo.xpub);
     } else {
       setPublicKey(null);
     }
@@ -207,8 +207,8 @@ export function useNostrHermes(): UseNostrHermesReturn {
       }
       
       // Récupérer la clé publique du wallet
-      if (walletInfo?.nostrPubkey && isMountedRef.current) {
-        setPublicKey(walletInfo.nostrPubkey);
+      if (walletInfo?.xpub && isMountedRef.current) {
+        setPublicKey(walletInfo.xpub);
       }
     } catch (error) {
       console.error('[useNostrHermes] Connection error:', error);

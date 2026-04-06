@@ -157,7 +157,7 @@ export const SystemEventSchema = z.object({
   timestamp: z.number().int().positive('Timestamp doit être positif'),
   from: z.string().min(1, 'Expéditeur requis'),
   to: z.string().min(1, 'Destinataire requis'),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
   meta: EventMetaSchema.default({}),
 });
 

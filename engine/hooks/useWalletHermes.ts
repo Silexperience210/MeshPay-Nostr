@@ -136,8 +136,8 @@ export function useWalletHermes(): UseWalletHermesReturn {
       const event = EventBuilder.system()
         .type(EventType.WALLET_INITIALIZED)
         .raw({
-          nodeId: walletInfo.nodeId,
-          npub: walletInfo.nostrPubkey,
+          nodeId: (walletInfo as any).nodeId ?? null,
+          npub: (walletInfo as any).nostrPubkey ?? null,
         })
         .build();
       
@@ -153,7 +153,7 @@ export function useWalletHermes(): UseWalletHermesReturn {
     return 'No wallet';
   }, [walletInfo]);
   
-  const nodeId = walletInfo?.nodeId || null;
+  const nodeId = (walletInfo as any)?.nodeId || null;
   
   // ─── Return ─────────────────────────────────────────────────────────────────
   

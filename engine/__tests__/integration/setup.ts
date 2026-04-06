@@ -2,12 +2,7 @@
  * Setup file for integration tests
  */
 
-// Declare global __DEV__ variable used in the codebase
-declare global {
-  const __DEV__: boolean;
-}
-
-// Set __DEV__ for tests
+// Set __DEV__ for tests (already declared in react-native globals.d.ts)
 (global as any).__DEV__ = true;
 
 // Silence console during tests unless debug mode

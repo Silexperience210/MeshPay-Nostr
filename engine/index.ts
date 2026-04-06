@@ -11,9 +11,12 @@ export * from './types';
 // Engine core
 export { HermesEngine, hermes, ProtocolAdapter } from './HermesEngine';
 
-// Hooks essentiels uniquement
+// Hooks
 export { useHermes } from './hooks/useHermes';
 export { useUnifiedIdentity } from './hooks/useUnifiedIdentity';
+export { useNostrHermes } from './hooks/useNostrHermes';
+export { useMessages } from './hooks/useMessages';
+export { useGateway } from './hooks/useGateway';
 
 // Identity
 export { 

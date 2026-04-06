@@ -219,7 +219,7 @@ describe('EventBuilder', () => {
         .meta('customKey', 'customValue')
         .build();
 
-      expect(event.meta.customKey).toBe('customValue');
+      expect((event.meta as any).customKey).toBe('customValue');
     });
 
     it('should set multiple meta values', () => {
@@ -229,9 +229,9 @@ describe('EventBuilder', () => {
         .meta('key3', { nested: true })
         .build();
 
-      expect(event.meta.key1).toBe('value1');
-      expect(event.meta.key2).toBe(42);
-      expect(event.meta.key3).toEqual({ nested: true });
+      expect((event.meta as any).key1).toBe('value1');
+      expect((event.meta as any).key2).toBe(42);
+      expect((event.meta as any).key3).toEqual({ nested: true });
     });
 
     it('should set originalId with originalId()', () => {
@@ -291,7 +291,7 @@ describe('EventBuilder', () => {
       expect(event.meta.originalId).toBe('original-123');
       expect(event.meta.rttMs).toBe(100);
       expect(event.meta.hops).toBe(2);
-      expect(event.meta.custom).toBe('value');
+      expect((event.meta as any).custom).toBe('value');
     });
 
     it('should build complex DM event with all properties', () => {
@@ -534,7 +534,7 @@ describe('EventBuilder', () => {
 
       expect(event.from).toBe('custom');
       expect(event.to).toBe('specific');
-      expect(event.meta.key).toBe('value');
+      expect((event.meta as any).key).toBe('value');
     });
   });
 

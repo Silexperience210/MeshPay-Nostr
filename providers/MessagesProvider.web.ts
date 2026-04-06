@@ -128,9 +128,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     try {
       const derived = deriveMeshIdentity(mnemonic);
       const id: MeshIdentity = {
-        nodeId: derived.nodeId,
-        pubkeyHex: derived.pubkeyHex,
-        privkeyHex: derived.privkeyHex,
+        ...derived,
         displayName: derived.displayName ?? 'Mon Node',
       };
       console.log('[Messages-Web] Identity derived:', id.nodeId);

@@ -29,7 +29,7 @@ export interface DirectMessage {
   content: string;
   timestamp: number;
   transport: 'nostr' | 'lora';
-  encryption?: 'nip04' | 'nip44';
+  encryption?: 'nip04' | 'nip44' | 'meshcore_aes';
 }
 
 export interface ChannelMessage {
@@ -94,7 +94,6 @@ export class MessageServiceImpl implements MessageService {
         toPubkey,
       },
       meta: {
-        encryption: 'nip44',
         originalId: eventId,
       },
     };
@@ -182,9 +181,9 @@ export class MessageServiceImpl implements MessageService {
 
     return events
       .filter(
-        e => e.type === EventType.DM_SENT || e.type === EventType.DM_RECEIVED
+        (e: HermesEvent) => e.type === EventType.DM_SENT || e.type === EventType.DM_RECEIVED
       )
-      .map(e => {
+      .map((e: HermesEvent) => {
         const payload = e.payload as MessageEvent['payload'];
         return {
           id: e.id,
@@ -196,18 +195,18 @@ export class MessageServiceImpl implements MessageService {
           encryption: payload?.encryption,
         };
       })
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .sort((a: DirectMessage, b: DirectMessage) => a.timestamp - b.timestamp);
   }
 
   async getChannelHistory(channelId: string, limit = 50): Promise<ChannelMessage[]> {
     const events = await eventStore.getByType(EventType.CHANNEL_MSG_RECEIVED, limit);
 
     return events
-      .filter(e => {
+      .filter((e: HermesEvent) => {
         const payload = e.payload as MessageEvent['payload'];
         return payload?.channelName === channelId;
       })
-      .map(e => {
+      .map((e: HermesEvent) => {
         const payload = e.payload as MessageEvent['payload'];
         return {
           id: e.id,
@@ -218,7 +217,7 @@ export class MessageServiceImpl implements MessageService {
           transport: e.transport as 'nostr' | 'lora',
         };
       })
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .sort((a: ChannelMessage, b: ChannelMessage) => a.timestamp - b.timestamp);
   }
 
   // ── Bridge ─────────────────────────────────────────────────────────────────

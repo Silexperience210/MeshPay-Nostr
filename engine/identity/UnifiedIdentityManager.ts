@@ -30,6 +30,16 @@ export interface CreateIdentityResult {
   };
 }
 
+export interface EncryptedBackup {
+  version: number;
+  data: string;
+}
+
+export interface CreateIdentityOptions {
+  mnemonic: string;
+  password: string;
+}
+
 export interface PublicIdentity {
   bitcoin: BitcoinIdentity;
   nostr: { pubkey: string; npub: string };
@@ -215,6 +225,32 @@ export class UnifiedIdentityManager {
     await SecureStore.deleteItemAsync(STORAGE_KEY);
     this.identity = null;
     this.isUnlocked = false;
+  }
+
+  async exportBackup(password: string): Promise<string> {
+    if (!this.isUnlocked || !this.identity) {
+      throw new IdentityError('Identité verrouillée', 'IDENTITY_LOCKED');
+    }
+    const data = JSON.stringify({
+      bitcoin: this.identity.bitcoin,
+      nostr: this.identity.nostr,
+      meshcore: this.identity.meshcore,
+      metadata: this.identity.metadata,
+    });
+    return await this.encryptKey(data, password);
+  }
+
+  async importBackup(backupJson: string, password: string): Promise<void> {
+    const decrypted = await this.decryptKey(backupJson, password);
+    const data = JSON.parse(decrypted) as StoredIdentity;
+    const encrypted = await this.encryptKey(JSON.stringify(data), password);
+    await SecureStore.setItemAsync(STORAGE_KEY, encrypted);
+    await this.unlock(password);
+  }
+
+  async migrateFromLegacy(walletMnemonic: string, _nostrPrivkey: string, password: string): Promise<void> {
+    // Migration: create identity from wallet mnemonic (nostr key is re-derived)
+    await this.createIdentity(walletMnemonic, password);
   }
 
   private async encryptKey(key: string, password: string): Promise<string> {

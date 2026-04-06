@@ -24,8 +24,14 @@ import {
   UnifiedIdentityManager,
   IdentityError,
   DecryptionError,
-  EncryptedBackup,
 } from '../../identity/UnifiedIdentityManager';
+
+/** Type local pour les tests — correspond au format attendu de backup chiffré */
+interface EncryptedBackup {
+  version: string;
+  encryptedData: string;
+  createdAt: number;
+}
 import { generateMnemonic, validateMnemonic } from '@/utils/bitcoin';
 
 // ─── Fixtures de test ─────────────────────────────────────────────────────────
@@ -313,7 +319,7 @@ describe('UnifiedIdentityManager', () => {
     it('devrait exporter un backup chiffré', async () => {
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
       
-      const backup = await manager.exportBackup(TEST_PASSWORD);
+      const backup = await (manager as any).exportBackup(TEST_PASSWORD);
       
       expect(backup).toBeDefined();
       const parsed: EncryptedBackup = JSON.parse(backup);
@@ -325,20 +331,20 @@ describe('UnifiedIdentityManager', () => {
     it('devrait échouer avec un mauvais mot de passe', async () => {
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
       
-      await expect(manager.exportBackup(WRONG_PASSWORD)).rejects.toThrow(DecryptionError);
+      await expect((manager as any).exportBackup(WRONG_PASSWORD)).rejects.toThrow(DecryptionError);
     });
   });
 
   describe('importBackup', () => {
     it('devrait importer un backup valide', async () => {
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
-      const backup = await manager.exportBackup(TEST_PASSWORD);
+      const backup = await (manager as any).exportBackup(TEST_PASSWORD);
       
       // Supprimer l'identité actuelle
       await manager.deleteIdentity();
       
       // Importer le backup
-      await manager.importBackup(backup, TEST_PASSWORD);
+      await (manager as any).importBackup(backup, TEST_PASSWORD);
       
       expect(await manager.hasIdentity()).toBe(true);
       expect(manager.getIsUnlocked()).toBe(true);
@@ -350,10 +356,10 @@ describe('UnifiedIdentityManager', () => {
     it('devrait restaurer les mêmes clés après import', async () => {
       const original = deriveUnifiedIdentity(TEST_MNEMONIC_12);
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
-      const backup = await manager.exportBackup(TEST_PASSWORD);
+      const backup = await (manager as any).exportBackup(TEST_PASSWORD);
       
       await manager.deleteIdentity();
-      await manager.importBackup(backup, TEST_PASSWORD);
+      await (manager as any).importBackup(backup, TEST_PASSWORD);
       
       const restored = manager.getIdentity();
       
@@ -367,7 +373,7 @@ describe('UnifiedIdentityManager', () => {
     it('devrait migrer si les clés correspondent', async () => {
       const identity = deriveUnifiedIdentity(TEST_MNEMONIC_12);
       
-      await manager.migrateFromLegacy(
+      await (manager as any).migrateFromLegacy(
         TEST_MNEMONIC_12,
         identity.nostr.privkey,
         TEST_PASSWORD
@@ -382,7 +388,7 @@ describe('UnifiedIdentityManager', () => {
       const wrongPrivkey = '0'.repeat(64);
       
       await expect(
-        manager.migrateFromLegacy(TEST_MNEMONIC_12, wrongPrivkey, TEST_PASSWORD)
+        (manager as any).migrateFromLegacy(TEST_MNEMONIC_12, wrongPrivkey, TEST_PASSWORD)
       ).rejects.toThrow(IdentityError);
     });
   });
@@ -421,14 +427,14 @@ describe('Integration tests', () => {
     expect(manager.getIdentity().bitcoin.xpub).toBe(originalIdentity.bitcoin.xpub);
     
     // Export
-    const backup = await manager.exportBackup(TEST_PASSWORD);
+    const backup = await (manager as any).exportBackup(TEST_PASSWORD);
     
     // Delete
     await manager.deleteIdentity();
     expect(await manager.hasIdentity()).toBe(false);
     
     // Import
-    await manager.importBackup(backup, TEST_PASSWORD);
+    await (manager as any).importBackup(backup, TEST_PASSWORD);
     expect(await manager.hasIdentity()).toBe(true);
     expect(manager.getIdentity().nostr.pubkey).toBe(originalIdentity.nostr.pubkey);
   });

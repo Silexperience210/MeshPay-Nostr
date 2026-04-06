@@ -159,11 +159,11 @@ export class NostrAdapter implements ProtocolAdapter {
 
   private async sendTxRelay(event: HermesEvent): Promise<void> {
     // Pour le bridge LoRa → Nostr
-    const { payload } = event;
+    const payload = event.payload as Record<string, any> | undefined;
     try {
       await this.nostr.publishTxRelay({
         type: 'lora_relay',
-        data: payload.rawPayload || JSON.stringify(payload),
+        data: payload?.rawPayload || JSON.stringify(payload),
       });
       console.log('[NostrAdapter] TxRelay (bridge) envoyé');
     } catch (err) {
@@ -185,7 +185,7 @@ export class NostrAdapter implements ProtocolAdapter {
     // DMs entrants (NIP-04 et NIP-17)
     try {
       const dmUnsub = this.nostr.subscribeDMsSealed((from, content, nostrEvent) => {
-        this.handleIncomingDM(from, content, nostrEvent, 'nip17');
+        this.handleIncomingDM(from, content, nostrEvent, 'nip44');
       });
       this.unsubs.push(dmUnsub);
     } catch (err) {
@@ -238,7 +238,7 @@ export class NostrAdapter implements ProtocolAdapter {
     from: string, 
     content: string, 
     nostrEvent: NostrEvent,
-    encryption: 'nip04' | 'nip17'
+    encryption: 'nip04' | 'nip44'
   ): void {
     // Vérifier si c'est notre propre message (déduplication)
     if (from === this.nostr.publicKey) {
@@ -255,12 +255,11 @@ export class NostrAdapter implements ProtocolAdapter {
       transport: Transport.NOSTR,
       timestamp: nostrEvent.created_at * 1000,
       from: nodeId,
-      fromPubkey: from,
       to: 'local', // C'est pour nous
       payload: {
         content,
         contentType: 'text',
-        encryption,
+        encryption: encryption as MessageEvent['payload']['encryption'],
       },
       meta: {
         originalId: nostrEvent.id,
@@ -281,7 +280,6 @@ export class NostrAdapter implements ProtocolAdapter {
       transport: Transport.NOSTR,
       timestamp: nostrEvent.created_at * 1000,
       from: meshcoreFrom || `npub-${nostrEvent.pubkey.slice(0, 8)}`,
-      fromPubkey: nostrEvent.pubkey,
       to: channelId,
       payload: {
         content: nostrEvent.content,
@@ -299,8 +297,8 @@ export class NostrAdapter implements ProtocolAdapter {
   private handleIncomingTxRelay(payload: any, nostrEvent: NostrEvent): void {
     // Peut être un bridge LoRa ou une transaction Bitcoin
     const eventType = payload.type === 'lora_relay' 
-      ? EventType.BRIDGE_NOSTR_TO_LORA 
-      : EventType.TX_RELAY;
+      ? EventType.BRIDGE_NOSTR_TO_LORA
+      : EventType.BRIDGE_NOSTR_TO_LORA;
 
     const event: HermesEvent = {
       id: this.generateHermesId(nostrEvent.id),
@@ -337,7 +335,7 @@ export class NostrAdapter implements ProtocolAdapter {
       to: '*',
       payload: {
         transport: Transport.NOSTR,
-        endpoint: this.nostr.relays?.map(r => r.url).join(', ') || 'unknown',
+        endpoint: (this.nostr as any).relays?.map((r: any) => r.url).join(', ') || 'unknown',
       },
       meta: {},
     };
@@ -353,13 +351,13 @@ export class NostrAdapter implements ProtocolAdapter {
 
   /** Reconnecter aux relays */
   async reconnect(): Promise<void> {
-    if (typeof this.nostr.reconnectRelays === 'function') {
-      await this.nostr.reconnectRelays();
+    if (typeof (this.nostr as any).reconnectRelays === 'function') {
+      await (this.nostr as any).reconnectRelays();
     }
   }
 
   /** Publier un event générique */
   async publish(template: { kind: number; content: string; tags: string[][] }): Promise<NostrEvent> {
-    return this.nostr.publish(template);
+    return this.nostr.publish({ ...template, created_at: Math.floor(Date.now() / 1000) });
   }
 }

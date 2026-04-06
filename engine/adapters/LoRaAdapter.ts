@@ -68,7 +68,7 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   get isConnected(): boolean {
-    return this._isConnected && this.bleClient.isConnected;
+    return this._isConnected && this.bleClient.isConnected();
   }
 
   // ─── Cycle de vie ─────────────────────────────────────────────────────────
@@ -193,7 +193,7 @@ export class LoRaAdapter implements ProtocolAdapter {
     const { payload } = event;
     
     try {
-      await this.bleClient.sendChannelMessage(payload.content);
+      await this.bleClient.sendChannelMessage(0, payload.content);
       console.log('[LoRaAdapter] Message channel envoyé via LoRa');
     } catch (err) {
       console.error('[LoRaAdapter] Échec envoi channel LoRa:', err);
@@ -209,7 +209,7 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private handleIncomingMessage(msg: MeshCoreIncomingMsg): void {
-    console.log('[LoRaAdapter] Message reçu:', msg.type, 'de', msg.senderPubkey?.slice(0, 16));
+    console.log('[LoRaAdapter] Message reçu:', msg.type, 'de', msg.senderPubkeyPrefix?.slice(0, 16));
 
     // Déterminer le type d'événement
     let eventType: EventType;
@@ -224,13 +224,14 @@ export class LoRaAdapter implements ProtocolAdapter {
       case 'channel':
         eventType = EventType.CHANNEL_MSG_RECEIVED;
         content = msg.text || '';
-        channelName = `channel-${msg.channel || 0}`;
+        channelName = `channel-${msg.channelIdx || 0}`;
         break;
-      case 'announce':
-        // Traitement spécial pour les announces
-        this.handleAnnounce(msg);
-        return;
       default:
+        // Traitement spécial pour les types inconnus (ex: announce)
+        if ((msg as any).type === 'announce') {
+          this.handleAnnounce(msg);
+          return;
+        }
         console.warn('[LoRaAdapter] Type de message inconnu:', msg.type);
         return;
     }
@@ -240,9 +241,8 @@ export class LoRaAdapter implements ProtocolAdapter {
       id: this.generateHermesId(msg),
       type: eventType,
       transport: Transport.LORA,
-      timestamp: msg.receivedAt || Date.now(),
-      from: msg.senderPubkey || 'unknown',
-      fromPubkey: msg.senderPubkey || 'unknown',
+      timestamp: msg.timestamp || Date.now(),
+      from: msg.senderPubkeyPrefix || 'unknown',
       to: msg.type === 'direct' ? 'local' : (channelName || 'broadcast'),
       payload: {
         content,
@@ -250,9 +250,8 @@ export class LoRaAdapter implements ProtocolAdapter {
         channelName,
       },
       meta: {
-        originalId: msg.msgId,
-        rttMs: msg.rttMs,
-        hops: msg.hops,
+        originalId: (msg as any).msgId,
+        hops: msg.pathLen,
       },
     };
 
@@ -271,11 +270,11 @@ export class LoRaAdapter implements ProtocolAdapter {
       type: EventType.SYSTEM_READY, // Ou un type spécifique
       transport: Transport.LORA,
       timestamp: Date.now(),
-      from: msg.senderPubkey || 'unknown',
+      from: msg.senderPubkeyPrefix || 'unknown',
       to: '*',
       payload: {
         type: 'announce',
-        nodeId: msg.senderPubkey,
+        nodeId: msg.senderPubkeyPrefix,
       },
       meta: {},
     };
@@ -323,7 +322,7 @@ export class LoRaAdapter implements ProtocolAdapter {
 
   private generateHermesId(msg: MeshCoreIncomingMsg): string {
     // Combiner plusieurs champs pour un ID unique stable
-    return `lora-${msg.senderPubkey?.slice(0, 16)}-${msg.msgId || Date.now()}`;
+    return `lora-${msg.senderPubkeyPrefix?.slice(0, 16)}-${(msg as any).msgId || Date.now()}`;
   }
 
   private emitConnectionEvent(connected: boolean): void {
@@ -352,11 +351,14 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   async syncContacts(): Promise<void> {
-    await this.bleClient.syncContacts();
+    // Use onContacts callback pattern — no direct sync method
+    this.bleClient.onContacts((contacts) => {
+      contacts.forEach(c => this.contacts.set(c.pubkeyPrefix, c));
+    });
   }
 
-  async setChannel(channelIdx: number): Promise<void> {
-    await this.bleClient.setChannel(channelIdx);
+  async setChannel(channelIdx: number, name: string, secret: Uint8Array): Promise<void> {
+    await this.bleClient.setChannel(channelIdx, name, secret);
   }
 
   getDeviceInfo() {

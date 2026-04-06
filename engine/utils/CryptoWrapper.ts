@@ -12,11 +12,15 @@
 
 // Imports @noble sans extension .js pour compatibilité Metro
 import { gcm } from '@noble/ciphers/aes';
-import { sha256 as nobleSha256 } from '@noble/hashes/sha2';
-import { pbkdf2Async } from '@noble/hashes/pbkdf2';
-import { hmac } from '@noble/hashes/hmac';
+// @ts-ignore
+import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
+// @ts-ignore
+import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
+// @ts-ignore
+import { hmac } from '@noble/hashes/hmac.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils';
+// @ts-ignore
+import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils.js';
 
 // ============================================================================
 // Constantes de sécurité

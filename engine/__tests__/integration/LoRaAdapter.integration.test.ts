@@ -412,16 +412,16 @@ describe('LoRaAdapter Integration', () => {
     });
     
     it('should set channel', async () => {
-      await adapter.setChannel(5);
-      
-      expect(mockBle.setChannel).toHaveBeenCalledWith(5);
+      await adapter.setChannel(5, 'test-channel', new Uint8Array(16));
+
+      expect(mockBle.setChannel).toHaveBeenCalledWith(5, 'test-channel', expect.any(Uint8Array));
     });
     
     it('should get device info', () => {
       const info = adapter.getDeviceInfo();
       
       expect(info).toBeDefined();
-      expect(info?.nodeId).toBe('MOCK-NODE-001');
+      expect((info as any)?.nodeId).toBe('MOCK-NODE-001');
     });
   });
 

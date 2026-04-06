@@ -749,7 +749,7 @@ describe('HermesEngine', () => {
           from: 'custom-sender',
           to: 'custom-recipient',
           transport: Transport.NOSTR,
-          meta: { customField: 'value' },
+          meta: { customField: 'value' } as any,
         }
       );
 
@@ -757,7 +757,7 @@ describe('HermesEngine', () => {
       const event = handler.mock.calls[0][0];
       expect(event.from).toBe('custom-sender');
       expect(event.to).toBe('custom-recipient');
-      expect(event.meta.customField).toBe('value');
+      expect((event.meta as any).customField).toBe('value');
     });
   });
 

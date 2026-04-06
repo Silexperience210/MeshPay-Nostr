@@ -17,7 +17,7 @@ import { ripemd160 } from '@noble/hashes/legacy.js';
 // @ts-ignore - subpath exports use .js extension
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
-import * as secp256k1 from '@noble/secp256k1';
+import { secp256k1 } from '@noble/curves/secp256k1';
 
 // ─── Chemins de dérivation ───────────────────────────────────────────────────
 
@@ -224,9 +224,9 @@ function encodeBech32(hrp: string, witnessVersion: number | undefined, data: Uin
   const bits5 = convertBits(data, 8, 5, true);
   
   // Ajouter le witness version si présent (pour Segwit)
-  const payload = witnessVersion !== undefined 
+  const payload = witnessVersion !== undefined
     ? new Uint8Array([witnessVersion, ...bits5])
-    : bits5;
+    : new Uint8Array(bits5);
 
   // Calculer le checksum
   const checksum = createChecksum(hrp, payload);
