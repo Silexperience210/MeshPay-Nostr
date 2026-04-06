@@ -41,7 +41,7 @@ yarn-error.*
 
 .env
 rork-eslint.config.js
-core
+/core
 node_modules
 .expo
 # Android signing credentials (sensible)
