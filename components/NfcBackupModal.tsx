@@ -102,16 +102,59 @@ export default function NfcBackupModal({
 
   const doWrite = async () => {
     try {
-      // PBKDF2 (~10s) — l'UI affiche déjà "Chiffrement en cours"
+      // PBKDF2 — l'UI affiche déjà "Chiffrement en cours"
       const backupJson = await exportWallet(password);
+      const bytes = Ndef.encodeMessage([Ndef.textRecord(backupJson)]);
+
+      if (!bytes) throw new Error('Échec encodage NDEF');
+
       // Chiffrement terminé → attente de la carte NFC
       setStep('scanning');
-      await NfcManager.requestTechnology(NfcTech.Ndef);
-      const bytes = Ndef.encodeMessage([Ndef.textRecord(backupJson)]);
-      await NfcManager.ndefHandler.writeNdefMessage(bytes);
-      await NfcManager.cancelTechnologyRequest();
-      Alert.alert('Succès', 'Backup chiffré écrit sur la carte NFC !');
-      onClose();
+
+      // Try NDEF first (pre-formatted tags)
+      let written = false;
+      try {
+        await NfcManager.requestTechnology(NfcTech.Ndef);
+
+        // Check tag capacity before writing
+        const tag = await NfcManager.getTag();
+        const maxSize = (tag as any)?.maxSize ?? (tag as any)?.ndefMessage?.[0]?.maxSize ?? 0;
+        if (maxSize > 0 && bytes.length > maxSize) {
+          await NfcManager.cancelTechnologyRequest();
+          throw new Error(
+            `Tag trop petit : ${maxSize} octets dispo, ${bytes.length} requis. Utilisez un tag NTAG216 (888 octets).`
+          );
+        }
+
+        await NfcManager.ndefHandler.writeNdefMessage(bytes);
+        await NfcManager.cancelTechnologyRequest();
+        written = true;
+      } catch (ndefErr: any) {
+        await NfcManager.cancelTechnologyRequest().catch(() => {});
+
+        // If tag is unformatted, try NdefFormatable (Android only)
+        if (!written && ndefErr?.message?.toLowerCase?.()?.includes('unsupported')) {
+          try {
+            await NfcManager.requestTechnology(NfcTech.NdefFormatable);
+            // formatNdef formats the tag and writes in one step
+            await (NfcManager as any).ndefFormatableHandlerAndroid.formatNdef(bytes);
+            await NfcManager.cancelTechnologyRequest();
+            written = true;
+          } catch (formatErr: any) {
+            await NfcManager.cancelTechnologyRequest().catch(() => {});
+            throw new Error(
+              'Tag NFC non compatible. Essayez un tag NTAG213/215/216 vierge ou pré-formaté NDEF.'
+            );
+          }
+        } else if (!written) {
+          throw ndefErr;
+        }
+      }
+
+      if (written) {
+        Alert.alert('Succès', 'Backup chiffré écrit sur la carte NFC !');
+        onClose();
+      }
     } catch (err: any) {
       await NfcManager.cancelTechnologyRequest().catch(() => {});
       setStep('password');
@@ -272,7 +315,7 @@ export default function NfcBackupModal({
         {mode === 'write' ? 'Chiffrement en cours...' : 'Déchiffrement en cours...'}
       </Text>
       <Text style={{ color: Colors.textMuted, fontSize: 13, textAlign: 'center' }}>
-        PBKDF2 · 100 000 itérations{'\n'}Cela prend quelques secondes, c'est normal.
+        PBKDF2 · AES-256{'\n'}Cela prend quelques secondes, c'est normal.
       </Text>
     </View>
   );
