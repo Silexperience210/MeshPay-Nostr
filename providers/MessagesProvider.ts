@@ -924,129 +924,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [nostrConnected]);
 
-  // ── Abonnement DMs Nostr entrants (NIP-17 Gift Wrap + NIP-04 fallback) ──────
-  const nostrDMUnsubRef = useRef<(() => void)[]>([]);
-  const nostrDMHandlerRef = useRef<((from: string, content: string, event: any) => void) | null>(null);
-
-  // Handler pour DMs entrants (NIP-17 + NIP-04) — utilise un ref pour éviter les stale closures
-  const handleIncomingNostrDM = useCallback((
-    from: string, content: string, event: { id: string; pubkey: string; created_at: number },
-  ) => {
-    if (!identity) return;
-
-    // Deduplication
-    if (meshRouterRef.current) {
-      if (meshRouterRef.current.hasSeen(event.id)) return;
-      meshRouterRef.current.markSeen(event.id);
-    } else {
-      if (recentMsgIds.current.has(event.id)) return;
-      addToDedup(event.id);
-    }
-
-    // Résoudre la conversation : chercher par peerPubkey (x-only 64 hex)
-    const senderPubkey = from.length === 66 ? from.slice(2) : from;
-    let resolvedConvId = `nostr:${senderPubkey.slice(0, 12)}`;
-    const existingConv = conversationsRef.current.find(c => {
-      if (!c.peerPubkey) return false;
-      const convPk = c.peerPubkey.length === 66 ? c.peerPubkey.slice(2) : c.peerPubkey;
-      return convPk === senderPubkey;
-    });
-    if (existingConv) {
-      resolvedConvId = existingConv.id;
-    }
-
-    const ts = event.created_at * 1000;
-    const msgId = `nostr-dm-${event.id}`;
-
-    // Créer la conversation si elle n'existe pas
-    if (!existingConv) {
-      const newConv: StoredConversation = {
-        id: resolvedConvId,
-        name: `nostr:${senderPubkey.slice(0, 8)}`,
-        isForum: false,
-        peerPubkey: senderPubkey,
-        lastMessage: content.slice(0, 50),
-        lastMessageTime: ts,
-        unreadCount: 1,
-        online: true,
-      };
-      saveConversation(newConv).catch(() => {});
-      setConversations(prev => {
-        if (prev.find(c => c.id === resolvedConvId)) return prev;
-        return [newConv, ...prev];
-      });
-    }
-
-    const msg: StoredMessage = {
-      id: msgId,
-      conversationId: resolvedConvId,
-      fromNodeId: senderPubkey.slice(0, 12),
-      fromPubkey: senderPubkey,
-      text: content,
-      type: 'text',
-      timestamp: ts,
-      isMine: false,
-      status: 'delivered',
-      transport: 'nostr',
-    };
-
-    saveMessage(msg).catch(() => {});
-    updateConversationLastMessage(resolvedConvId, content.slice(0, 50), ts, true).catch(() => {});
-
-    setMessagesByConv(prev => ({
-      ...prev,
-      [resolvedConvId]: [...(prev[resolvedConvId] ?? []), msg],
-    }));
-
-    if (existingConv) {
-      setConversations(prev => prev.map(c =>
-        c.id === resolvedConvId
-          ? { ...c, lastMessage: content.slice(0, 50), lastMessageTime: ts, unreadCount: c.unreadCount + 1 }
-          : c
-      ));
-    }
-
-    console.log(`[Nostr→DM] Message reçu de ${senderPubkey.slice(0, 12)} → conv "${resolvedConvId}"`);
-  }, [identity]);
-
-  useEffect(() => {
-    nostrDMHandlerRef.current = handleIncomingNostrDM;
-  }, [handleIncomingNostrDM]);
-
-  useEffect(() => {
-    // Cleanup previous subs
-    for (const unsub of nostrDMUnsubRef.current) unsub();
-    nostrDMUnsubRef.current = [];
-
-    if (!nostrConnected || !nostrClient.isConnected) return;
-
-    try {
-      // NIP-17 Gift Wrap (kind:1059) — sealed sender DMs
-      const unsubSealed = nostrClient.subscribeDMsSealed((from, content, event) => {
-        nostrDMHandlerRef.current?.(from, content, event);
-      });
-      nostrDMUnsubRef.current.push(unsubSealed);
-      console.log('[Messages] Nostr DMs NIP-17 (sealed) abonnés');
-    } catch (err) {
-      console.warn('[Messages] Erreur abonnement NIP-17 DMs:', err);
-    }
-
-    try {
-      // NIP-04 fallback (kind:4) — legacy DMs
-      const unsubLegacy = nostrClient.subscribeDMs((from, content, event) => {
-        nostrDMHandlerRef.current?.(from, content, event);
-      });
-      nostrDMUnsubRef.current.push(unsubLegacy);
-      console.log('[Messages] Nostr DMs NIP-04 (legacy) abonnés');
-    } catch (err) {
-      console.warn('[Messages] Erreur abonnement NIP-04 DMs:', err);
-    }
-
-    return () => {
-      for (const unsub of nostrDMUnsubRef.current) unsub();
-      nostrDMUnsubRef.current = [];
-    };
-  }, [nostrConnected]);
+  // ── Nostr DMs : Les DMs Nostr entrants (NIP-17 + NIP-04) sont gérés par
+  // MessagingBus (utils/messaging-bus.ts) qui souscrit via subscribeDMs() et
+  // subscribeDMsSealed(). Les messages arrivent dans MessagesProvider via le
+  // messagingBus.subscribe() handler à la ligne ~1695 (Bridge Nostr → conversations).
+  //
+  // Si les DMs ne fonctionnent pas, vérifier que:
+  //   1. NostrProvider.publicKey est non-null (identité Nostr dérivée)
+  //   2. messagingBus.setLocalIdentity() a été appelé (MessagingBusProvider)
+  //   3. messagingBus._startNostrListeners() a démarré (handlers.size > 0)
 
   // Radar géré par RadarProvider
 

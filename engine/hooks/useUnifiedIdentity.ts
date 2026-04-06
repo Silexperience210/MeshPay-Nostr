@@ -16,6 +16,7 @@ import {
   IdentityError,
 } from '../identity';
 import { generateMnemonic } from '@/utils/bitcoin';
+import { useWalletStore } from '@/stores/walletStore';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,10 @@ export function useUnifiedIdentity(): UseUnifiedIdentityReturn {
 
       const result = await manager.createIdentity(mnemonic, password);
 
+      // Sync mnemonic to walletStore so NostrProvider + MessagesProvider can derive
+      // their identities (they depend on walletStore.mnemonic, not UnifiedIdentityManager)
+      await useWalletStore.getState()._setWalletData(mnemonic);
+
       setState({
         hasIdentity: true,
         isUnlocked: true,
@@ -242,6 +247,9 @@ export function useUnifiedIdentity(): UseUnifiedIdentityReturn {
     try {
       const manager = getManager();
       await manager.createIdentity(mnemonic, password);
+
+      // Sync mnemonic to walletStore (same as createWallet)
+      await useWalletStore.getState()._setWalletData(mnemonic);
 
       setState({
         hasIdentity: true,
