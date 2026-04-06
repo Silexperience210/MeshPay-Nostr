@@ -185,9 +185,16 @@ export default function IdentitySetupScreen() {
    * Termine l'onboarding et redirige vers l'app.
    */
   const handleComplete = useCallback(async () => {
-    // Marquer l'onboarding comme terminé pour ne plus afficher le WelcomeModal
-    await AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true');
-    router.replace('/(tabs)');
+    try {
+      console.log('[Identity] Completing onboarding...');
+      await AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true');
+      console.log('[Identity] Onboarding marked as done, navigating...');
+      router.replace('/(tabs)');
+    } catch (err) {
+      console.error('[Identity] Error during completion:', err);
+      // Fallback: essayer de naviguer quand même
+      router.push('/(tabs)');
+    }
   }, []);
 
   // ─── Rendu des étapes ───────────────────────────────────────────────────────

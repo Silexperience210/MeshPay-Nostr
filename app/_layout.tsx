@@ -78,97 +78,26 @@ function useStoreHydration() {
 
 /**
  * Hook de bridge Hermès <-> Legacy Providers
- * Synchronise les événements Hermès avec l'état des providers existants
- * 
- * Architecture Phase 2.1: Double écriture - Hermès coexiste avec les providers legacy
  */
 function useHermesBridge() {
-  const walletStore = useWalletStore();
-  const settingsStore = useSettingsStore();
   const isInitialized = useRef(false);
 
   useEffect(() => {
-    // Éviter les initialisations multiples en dev (React StrictMode)
     if (isInitialized.current) return;
     isInitialized.current = true;
 
-    // Initialiser Hermès Engine
-    hermes.start().catch((error) => {
-      console.error('[Hermès] Failed to start engine:', error);
-    });
+    // Démarrer Hermès
+    hermes.start().catch(console.error);
 
-    if (__DEV__) {
-      console.log('[Hermès] Engine started');
-    }
-
-    // S'abonner aux événements wallet
-    const unsubscribeWallet = hermes.on(EventType.WALLET_INITIALIZED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] Wallet initialized via Hermès:', event.payload);
-      }
-      // Synchroniser avec le store legacy si nécessaire
-      // Note: Éviter les boucles infinies - ne pas ré-émettre d'événements Hermès ici
-    });
-
-    // S'abonner aux événements de connexion
-    const unsubscribeConn = hermes.on(EventType.TRANSPORT_CONNECTED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] Transport connected:', event.payload);
-      }
-    });
-
-    // S'abonner aux événements de transport (BLE/USB/Nostr)
-    const unsubscribeBle = hermes.on(EventType.BLE_DEVICE_CONNECTED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] BLE device connected:', event.payload);
-      }
-    });
-
-    const unsubscribeUsb = hermes.on(EventType.USB_DEVICE_CONNECTED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] USB device connected:', event.payload);
-      }
-    });
-
-    // S'abonner aux événements de transactions
-    const unsubscribeTx = hermes.on(EventType.PAYMENT_INITIATED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] Payment initiated:', event.payload);
-      }
-    });
-
-    const unsubscribeTxSuccess = hermes.on(EventType.PAYMENT_COMPLETED, (event: HermesEvent) => {
-      if (__DEV__) {
-        console.log('[Bridge] Payment completed:', event.payload);
-      }
+    // Auto-close onboarding quand wallet créé
+    const unsub = hermes.on(EventType.WALLET_INITIALIZED, () => {
+      AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true').catch(() => {});
     });
 
     return () => {
-      unsubscribeWallet();
-      unsubscribeConn();
-      unsubscribeBle();
-      unsubscribeUsb();
-      unsubscribeTx();
-      unsubscribeTxSuccess();
-      
-      hermes.stop().catch((error) => {
-        console.error('[Hermès] Error stopping engine:', error);
-      });
-      
+      unsub();
+      hermes.stop().catch(() => {});
       isInitialized.current = false;
-    };
-  }, []);
-
-  // Gestion des erreurs Hermès globales
-  useEffect(() => {
-    const unsubscribeError = hermes.onError((error: Error, context?: string) => {
-      console.error('[Hermès Error]', context || 'Unknown context', error);
-      // Optionnel: envoyer à un service de tracking d'erreurs (Sentry, etc.)
-      // if (Sentry) Sentry.captureException(error, { extra: { context } });
-    });
-
-    return () => {
-      unsubscribeError();
     };
   }, []);
 }
