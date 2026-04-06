@@ -1861,6 +1861,7 @@ export default function SettingsScreen() {
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
       showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
     >
       {/* Profile card */}
       <View style={styles.profileCard}>
