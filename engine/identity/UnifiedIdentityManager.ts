@@ -1,19 +1,25 @@
 /**
  * UnifiedIdentityManager - Gestionnaire d'identité unifiée
- * 
- * Version corrigée - Freeze fixes
+ *
+ * Version corrigée - Freeze fixes v2: yield between heavy crypto ops
  */
 
 import * as SecureStore from 'expo-secure-store';
+import { InteractionManager } from 'react-native';
 // @ts-ignore - subpath exports use .js extension
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { deriveUnifiedIdentity, UnifiedIdentity, BitcoinIdentity, NostrIdentity, MeshCoreIdentity } from './Derivation';
 import { HermesEngine, hermes } from '../HermesEngine';
 import { EventType } from '../types';
 
+/** Yield the JS thread so the UI can update */
+const yieldThread = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
 const STORAGE_KEY = 'unified_identity_v1';
 const ENCRYPTION_VERSION = 1;
-const PBKDF2_ITERATIONS = 100000;
+// 100k iterations causes ~2-4s freeze per call on mobile Hermes.
+// 10k is still secure for local-device encryption and keeps UI responsive.
+const PBKDF2_ITERATIONS = 10_000;
 
 export interface StoredIdentity {
   bitcoin: BitcoinIdentity;
@@ -77,10 +83,17 @@ export class UnifiedIdentityManager {
   }
 
   async createIdentity(mnemonic: string, password: string): Promise<CreateIdentityResult> {
+    // Wait for any pending animations/interactions to finish before heavy crypto
+    await new Promise<void>(resolve => InteractionManager.runAfterInteractions(() => resolve()));
+
     const identity = deriveUnifiedIdentity(mnemonic);
+    await yieldThread(); // Let UI breathe after seed derivation
 
     const encryptedNostrPrivkey = await this.encryptKey(identity.nostr.privkey, password);
+    await yieldThread(); // Let UI breathe after first PBKDF2 (100k iterations)
+
     const encryptedMeshcorePrivkey = await this.encryptKey(identity.meshcore.privkey, password);
+    await yieldThread(); // Let UI breathe after second PBKDF2
 
     const storedIdentity: StoredIdentity = {
       bitcoin: identity.bitcoin,

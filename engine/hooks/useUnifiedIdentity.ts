@@ -6,6 +6,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { InteractionManager } from 'react-native';
 import {
   UnifiedIdentityManager,
   getIdentityManager,
@@ -197,8 +198,15 @@ export function useUnifiedIdentity(): UseUnifiedIdentityReturn {
     setError(null);
 
     try {
+      // Defer heavy crypto until animations/transitions settle
+      await new Promise<void>(resolve => InteractionManager.runAfterInteractions(() => resolve()));
+
       const manager = getManager();
       const mnemonic = generateMnemonic(strength);
+
+      // Yield so the UI can show the loading spinner before heavy work
+      await new Promise<void>(resolve => setTimeout(resolve, 50));
+
       const result = await manager.createIdentity(mnemonic, password);
 
       setState({

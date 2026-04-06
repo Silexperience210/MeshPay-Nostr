@@ -56,7 +56,7 @@ async function exportWalletEncryptedInternal(mnemonic: string, password: string)
   const salt = randomBytes(32);
   const iv = randomBytes(12);
 
-  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 100_000, dkLen: 32 });
+  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 10_000, dkLen: 32 });
   const plaintext = new TextEncoder().encode(mnemonic);
   const ciphertext = gcm(key, iv).encrypt(plaintext);
 
@@ -88,7 +88,7 @@ async function importWalletDecryptedInternal(backupJson: string, password: strin
   const iv = hexToBytes(backup.iv);
   const ciphertext = hexToBytes(backup.ct);
 
-  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 100_000, dkLen: 32 });
+  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 10_000, dkLen: 32 });
 
   try {
     const plaintext = gcm(key, iv).decrypt(ciphertext);
@@ -236,8 +236,10 @@ export const useWalletStore = create<WalletState>()(
           console.log('[WalletStore] Saved to SecureStore');
           
           const walletInfo = btc.deriveWalletInfo(newMnemonic);
-          const receiveAddresses = btc.deriveReceiveAddresses(newMnemonic, 20);
-          const changeAddresses = btc.deriveChangeAddresses(newMnemonic, 20);
+          // Derive only 5 addresses initially to avoid freeze (rest can be derived lazily)
+          const receiveAddresses = btc.deriveReceiveAddresses(newMnemonic, 5);
+          await new Promise<void>(r => setTimeout(r, 0)); // yield thread
+          const changeAddresses = btc.deriveChangeAddresses(newMnemonic, 5);
           
           set({
             mnemonic: newMnemonic,
@@ -284,8 +286,9 @@ export const useWalletStore = create<WalletState>()(
           await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
           
           const walletInfo = btc.deriveWalletInfo(trimmed);
-          const receiveAddresses = btc.deriveReceiveAddresses(trimmed, 20);
-          const changeAddresses = btc.deriveChangeAddresses(trimmed, 20);
+          const receiveAddresses = btc.deriveReceiveAddresses(trimmed, 5);
+          await new Promise<void>(r => setTimeout(r, 0)); // yield thread
+          const changeAddresses = btc.deriveChangeAddresses(trimmed, 5);
           
           set({
             mnemonic: trimmed,
@@ -378,11 +381,15 @@ export const useWalletStore = create<WalletState>()(
           const btc = await loadBitcoinModule();
           if (!btc) return;
           const walletInfo = btc.deriveWalletInfo(mnemonic);
+          await new Promise<void>(r => setTimeout(r, 0)); // yield thread
+          const receiveAddresses = btc.deriveReceiveAddresses(mnemonic, 5);
+          await new Promise<void>(r => setTimeout(r, 0)); // yield thread
+          const changeAddresses = btc.deriveChangeAddresses(mnemonic, 5);
           set({
             mnemonic,
             walletInfo,
-            receiveAddresses: btc.deriveReceiveAddresses(mnemonic, 20),
-            changeAddresses: btc.deriveChangeAddresses(mnemonic, 20),
+            receiveAddresses,
+            changeAddresses,
             isInitialized: true,
           });
         } catch (err) {
