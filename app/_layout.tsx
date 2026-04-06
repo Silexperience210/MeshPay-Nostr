@@ -78,6 +78,7 @@ function useStoreHydration() {
 
 /**
  * Hook de bridge Hermès <-> Legacy Providers
+ * SIMPLIFIÉ - Plus d'écoute d'événements pour éviter les boucles
  */
 function useHermesBridge() {
   const isInitialized = useRef(false);
@@ -86,16 +87,10 @@ function useHermesBridge() {
     if (isInitialized.current) return;
     isInitialized.current = true;
 
-    // Démarrer Hermès
+    // Démarrer Hermès (seulement ça, pas d'écoute d'événements ici)
     hermes.start().catch(console.error);
 
-    // Auto-close onboarding quand wallet créé
-    const unsub = hermes.on(EventType.WALLET_INITIALIZED, () => {
-      AsyncStorage.setItem('BITMESH_ONBOARDING_DONE', 'true').catch(() => {});
-    });
-
     return () => {
-      unsub();
       hermes.stop().catch(() => {});
       isInitialized.current = false;
     };

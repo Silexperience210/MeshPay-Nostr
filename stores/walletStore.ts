@@ -249,26 +249,10 @@ export const useWalletStore = create<WalletState>()(
             generateError: null,
           });
           
-          // Émettre événement Hermès WALLET_INITIALIZED
-          try {
-            await hermes.createEvent(
-              EventType.WALLET_INITIALIZED,
-              {
-                hasSeed: true,
-                timestamp: Date.now(),
-                source: 'generated',
-              },
-              {
-                from: 'wallet_store',
-                transport: Transport.INTERNAL,
-              }
-            );
-            console.log('[WalletStore] Hermès event WALLET_INITIALIZED emitted');
-          } catch (hermesError) {
-            console.error('[WalletStore] Failed to emit Hermès event:', hermesError);
-          }
-          
           console.log('[WalletStore] === generateWallet SUCCESS ===');
+          
+          // NOTE: L'événement Hermès WALLET_INITIALIZED est émis par UnifiedIdentityManager
+          // pour éviter la double émission. Voir engine/identity/UnifiedIdentityManager.ts
         } catch (error: any) {
           console.error('[WalletStore] === generateWallet ERROR ===', error?.message || error);
           set({ 
@@ -313,26 +297,9 @@ export const useWalletStore = create<WalletState>()(
             importError: null,
           });
           
-          // Émettre événement Hermès WALLET_INITIALIZED
-          try {
-            await hermes.createEvent(
-              EventType.WALLET_INITIALIZED,
-              {
-                hasSeed: true,
-                timestamp: Date.now(),
-                source: 'imported',
-              },
-              {
-                from: 'wallet_store',
-                transport: Transport.INTERNAL,
-              }
-            );
-            console.log('[WalletStore] Hermès event WALLET_INITIALIZED emitted');
-          } catch (hermesError) {
-            console.error('[WalletStore] Failed to emit Hermès event:', hermesError);
-          }
-          
           console.log('[WalletStore] Wallet imported successfully');
+          
+          // NOTE: L'événement Hermès WALLET_INITIALIZED est émis par UnifiedIdentityManager
         } catch (error: any) {
           console.error('[WalletStore] Import error:', error);
           set({ 

@@ -75,20 +75,17 @@ export function useWalletHermes(): UseWalletHermesReturn {
   const { receiveAddresses, changeAddresses } = useWalletAddresses();
   
   // ─── Effet: Émettre événements Hermès ───────────────────────────────────────
-  useEffect(() => {
-    if (isInitialized && walletInfo) {
-      // Émettre WALLET_INITIALIZED
-      const event = EventBuilder.system()
-        .type(EventType.WALLET_INITIALIZED)
-        .raw({
-          nodeId: walletInfo.nodeId,
-          npub: walletInfo.nostrPubkey,
-        })
-        .build();
-      
-      hermes.emit(event, Transport.INTERNAL).catch(console.error);
-    }
-  }, [isInitialized, walletInfo]);
+  // NOTE: Désactivé pour éviter la triple émission. L'événement est déjà émis par:
+  // 1. UnifiedIdentityManager.createIdentity() (source principale)
+  // useEffect(() => {
+  //   if (isInitialized && walletInfo) {
+  //     const event = EventBuilder.system()
+  //       .type(EventType.WALLET_INITIALIZED)
+  //       .raw({ nodeId: walletInfo.nodeId, npub: walletInfo.nostrPubkey })
+  //       .build();
+  //     hermes.emit(event, Transport.INTERNAL).catch(console.error);
+  //   }
+  // }, [isInitialized, walletInfo]);
   
   // ─── Actions wrapper ────────────────────────────────────────────────────────
   
