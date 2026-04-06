@@ -116,12 +116,17 @@ export class UnifiedIdentityManager {
    * @returns L'identité créée (sans les clés privées déchiffrées)
    */
   async createIdentity(mnemonic: string, password: string): Promise<CreateIdentityResult> {
+    console.log('[UnifiedIdentityManager] Starting identity creation...');
     // Dériver toutes les identités
+    console.log('[UnifiedIdentityManager] Deriving identity...');
     const identity = deriveUnifiedIdentity(mnemonic);
+    console.log('[UnifiedIdentityManager] Identity derived:', identity.meshcore.nodeId);
 
     // Chiffrer les clés privées
+    console.log('[UnifiedIdentityManager] Encrypting keys...');
     const encryptedNostrPrivkey = await this.encryptKey(identity.nostr.privkey, password);
     const encryptedMeshcorePrivkey = await this.encryptKey(identity.meshcore.privkey, password);
+    console.log('[UnifiedIdentityManager] Keys encrypted');
 
     // Créer l'identité stockable (avec clés chiffrées)
     const storedIdentity: StoredIdentity = {
@@ -146,19 +151,34 @@ export class UnifiedIdentityManager {
     this.identity = identity;
     this.isUnlocked = true;
 
-    // Émettre un événement
-    await this.hermesEngine.emit({
-      type: EventType.WALLET_INITIALIZED,
-      transport: 'internal' as any,
-      from: identity.meshcore.nodeId,
-      to: '*',
-      payload: {
-        bitcoinAddress: identity.bitcoin.firstAddress,
-        nostrPubkey: identity.nostr.pubkey,
-        meshcoreNodeId: identity.meshcore.nodeId,
-      },
-      meta: {},
-    });
+    // Émettre un événement (ne pas bloquer si engine pas démarré)
+    console.log('[UnifiedIdentityManager] Emitting WALLET_INITIALIZED event...');
+    try {
+      // Démarrer l'engine si nécessaire
+      if (!this.hermesEngine.stats.isRunning) {
+        console.log('[UnifiedIdentityManager] Starting Hermes engine...');
+        await this.hermesEngine.start();
+      }
+      
+      await this.hermesEngine.emit({
+        id: `wallet-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        type: EventType.WALLET_INITIALIZED,
+        transport: 'internal' as any,
+        timestamp: Date.now(),
+        from: identity.meshcore.nodeId,
+        to: '*',
+        payload: {
+          bitcoinAddress: identity.bitcoin.firstAddress,
+          nostrPubkey: identity.nostr.pubkey,
+          meshcoreNodeId: identity.meshcore.nodeId,
+        },
+        meta: {},
+      });
+      console.log('[UnifiedIdentityManager] Event emitted successfully');
+    } catch (emitError) {
+      console.warn('[UnifiedIdentityManager] Failed to emit event (engine may not be ready):', emitError);
+      // Ne pas bloquer la création du wallet si l'émission échoue
+    }
 
     // Retourner le résultat (sans les clés privées déchiffrées)
     return {

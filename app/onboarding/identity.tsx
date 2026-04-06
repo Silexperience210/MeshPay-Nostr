@@ -112,13 +112,17 @@ export default function IdentitySetupScreen() {
    * Crée un nouveau wallet.
    */
   const handleCreateWallet = useCallback(async () => {
+    console.log('[Identity] Starting wallet creation...');
     try {
+      console.log('[Identity] Calling createWallet...');
       const generatedMnemonic = await createWallet(mnemonicStrength, password);
+      console.log('[Identity] Wallet created successfully, mnemonic:', generatedMnemonic.substring(0, 20) + '...');
       setMnemonic(generatedMnemonic);
+      console.log('[Identity] Moving to backup step...');
       setStep('backup');
     } catch (err) {
-      // L'erreur est gérée par le hook
-      console.error('Failed to create wallet:', err);
+      console.error('[Identity] Failed to create wallet:', err);
+      Alert.alert('Error', 'Failed to create wallet: ' + (err instanceof Error ? err.message : String(err)));
     }
   }, [createWallet, mnemonicStrength, password]);
 
