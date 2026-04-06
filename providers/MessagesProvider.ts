@@ -25,7 +25,7 @@ import {
   generateMsgId,
 } from '@/utils/messages-store';
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
-import { deriveMeshIdentity, type MeshIdentity } from '@/utils/identity';
+import { deriveMeshIdentity, type MeshIdentityFull as MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
 import { getBleGatewayClient, type MeshCoreContact } from '@/utils/ble-gateway';

@@ -274,7 +274,7 @@ export default function IdentitySetupScreen() {
       </View>
 
       <TouchableOpacity
-        style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 32 }}
+        style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 32 }]}
         onPress={() => goToStep('password')}
       >
         <Text style={styles.primaryButtonText}>Continue</Text>
@@ -324,7 +324,7 @@ export default function IdentitySetupScreen() {
       />
 
       <TouchableOpacity
-        style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 24 }}
+        style={[styles.primaryButton, { backgroundColor: Colors.accent, marginTop: 24 }]}
         onPress={() => goToStep('password')}
         disabled={restoreInput.trim().split(/\s+/).length < 12}
       >

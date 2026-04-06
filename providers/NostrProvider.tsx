@@ -169,15 +169,17 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
       return;
     }
 
+    if (!keypair) {
+      // Keypair derivation failed — don't attempt connection, avoid render loop
+      console.warn('[NostrProvider] Keypair null, skip connexion');
+      return;
+    }
+
     let cancelled = false;
 
     const init = async () => {
       try {
         if (mountedRef.current) setIsConnecting(true);
-
-        if (!keypair) {
-          throw new Error('[NostrProvider] Keypair non disponible');
-        }
         nostrClient.setKeypair(keypair);
 
         // Observer les changements d'état des relays

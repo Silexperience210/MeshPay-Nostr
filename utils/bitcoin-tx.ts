@@ -95,8 +95,8 @@ export function validateFeeRate(feeRate: number): void {
   if (typeof feeRate !== 'number' || !Number.isFinite(feeRate)) {
     throw new Error('Fee rate invalide: doit être un nombre');
   }
-  if (feeRate <= 0) {
-    throw new Error('Fee rate invalide: doit être positif');
+  if (feeRate < 1) {
+    throw new Error('Fee rate invalide: doit être >= 1 sat/vB');
   }
   if (feeRate > MAX_FEE_RATE) {
     throw new Error(

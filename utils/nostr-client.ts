@@ -206,6 +206,7 @@ export class NostrClient {
   private _reconnectDelay = 2000; // commence à 2s, double jusqu'à 30s
   private _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private _intentionalDisconnect = false;
+  private _isReconnecting = false;
   // Active subscriptions for auto-resubscription after reconnect
   private _activeSubscriptions: Array<{
     filters: Filter[];
@@ -331,6 +332,7 @@ export class NostrClient {
     this._reconnectTimer = setTimeout(async () => {
       this._reconnectTimer = null;
       if (this._intentionalDisconnect || this.isConnected) return;
+      this._isReconnecting = true;
       try {
         // Fermer proprement l'ancien pool pour éviter les fuites de connexion
         this.pool.close(this.relayUrls);
@@ -348,6 +350,8 @@ export class NostrClient {
         this._resubscribeAll();
       } catch {
         console.warn('[Nostr] Reconnexion échouée, retry dans', this._reconnectDelay / 1000, 's');
+      } finally {
+        this._isReconnecting = false;
       }
     }, delay);
   }
@@ -453,7 +457,7 @@ export class NostrClient {
 
     const event = finalizeEvent(template, this.keypair.secretKey);
 
-    if (!this.isConnected) {
+    if (!this.isConnected || this._isReconnecting) {
       if (this.offlineQueue.length >= OFFLINE_QUEUE_MAX) {
         throw new Error('[Nostr] Queue offline pleine (max 100 événements)');
       }

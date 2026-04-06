@@ -2104,7 +2104,7 @@ export default function SettingsScreen() {
           <View style={styles.contactModalSheet}>
             <View style={styles.contactModalHeader}>
               <Text style={styles.contactModalTitle}>Ajouter un contact</Text>
-              <TouchableOpacity onPress={() => setShowAddContact(false)}>
+              <TouchableOpacity onPress={() => { setShowAddContact(false); setAddNodeId(''); setAddName(''); }}>
                 <X size={22} color={Colors.textMuted} />
               </TouchableOpacity>
             </View>

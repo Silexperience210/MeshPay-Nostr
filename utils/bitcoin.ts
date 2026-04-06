@@ -22,7 +22,9 @@ export interface DerivedWalletInfo {
 }
 
 export function generateMnemonic(strength: 12 | 24 = 12): string {
-  console.log('[Bitcoin] generateMnemonic called with strength:', strength);
+  if (strength !== 12 && strength !== 24) {
+    throw new Error(`[Bitcoin] Invalid mnemonic strength: ${strength}. Must be 12 or 24.`);
+  }
   
   // Vérifier et configurer crypto si nécessaire
   const hasGlobalCrypto = typeof global !== 'undefined' && 

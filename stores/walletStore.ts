@@ -186,11 +186,11 @@ export interface WalletState {
   generateWallet: (strength?: 12 | 24) => Promise<void>;
   importWallet: (mnemonic: string) => Promise<void>;
   deleteWallet: () => Promise<void>;
-  exportWallet: (password: string) => string;
+  exportWallet: (password: string) => Promise<string>;
   importEncryptedWallet: (backupJson: string, password: string) => Promise<void>;
   getFormattedAddress: () => string;
   setHasHydrated: (hasHydrated: boolean) => void;
-  _setWalletData: (mnemonic: string) => void;
+  _setWalletData: (mnemonic: string) => Promise<void>;
   _clearWalletData: () => void;
   _setLoading: (loading: boolean) => void;
   _setGenerating: (generating: boolean) => void;
@@ -349,12 +349,10 @@ export const useWalletStore = create<WalletState>()(
         }
       },
 
-      exportWallet: (password: string): string => {
+      exportWallet: async (password: string): Promise<string> => {
         const { mnemonic } = get();
         if (!mnemonic) throw new Error('Aucun wallet à exporter');
-        // Note: exportWalletEncryptedInternal est async, donc on ne peut pas l'utiliser ici
-        // Il faut utiliser exportWalletEncrypted directement depuis le provider
-        throw new Error('Use exportWalletEncrypted from walletStore module instead');
+        return await exportWalletEncryptedInternal(mnemonic, password);
       },
 
       importEncryptedWallet: async (backupJson: string, password: string) => {
@@ -375,8 +373,9 @@ export const useWalletStore = create<WalletState>()(
         set({ _hasHydrated: hasHydrated, isLoading: false });
       },
 
-      _setWalletData: (mnemonic: string) => {
-        loadBitcoinModule().then(btc => {
+      _setWalletData: async (mnemonic: string) => {
+        try {
+          const btc = await loadBitcoinModule();
           if (!btc) return;
           const walletInfo = btc.deriveWalletInfo(mnemonic);
           set({
@@ -386,7 +385,9 @@ export const useWalletStore = create<WalletState>()(
             changeAddresses: btc.deriveChangeAddresses(mnemonic, 20),
             isInitialized: true,
           });
-        });
+        } catch (err) {
+          console.error('[WalletStore] _setWalletData error:', err);
+        }
       },
 
       _clearWalletData: () => {
@@ -411,9 +412,15 @@ export const useWalletStore = create<WalletState>()(
       onRehydrateStorage: () => (state, error) => {
         console.log('[WalletStore] Rehydrated from storage', { hasState: !!state, error });
         if (state) {
-          state.setHasHydrated(true);
           if (state.mnemonic) {
-            state._setWalletData(state.mnemonic);
+            // Derive wallet data first, THEN mark hydrated so consumers see complete state
+            state._setWalletData(state.mnemonic).then(() => {
+              state.setHasHydrated(true);
+            }).catch(() => {
+              state.setHasHydrated(true);
+            });
+          } else {
+            state.setHasHydrated(true);
           }
         }
       },

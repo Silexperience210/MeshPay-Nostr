@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import { useWalletSeed } from '@/providers/WalletSeedProvider';
-import { deriveMeshIdentity } from '@/utils/identity';
+import { deriveMeshIdentity, type MeshIdentityFull } from '@/utils/identity';
 
 export type MessageType = 'text' | 'cashu' | 'btc_tx' | 'lora' | 'audio' | 'image' | 'gif';
 
@@ -53,12 +53,8 @@ export interface RadarPeer {
   lastSeen: number;
 }
 
-export interface MeshIdentity {
-  nodeId: string;
-  pubkeyHex: string;
-  privkeyHex: string;
-  displayName: string;
-}
+// Use MeshIdentityFull from identity.ts (has privkeyHex for encryption)
+type MeshIdentity = MeshIdentityFull;
 
 export interface MessagesState {
   identity: MeshIdentity | null;

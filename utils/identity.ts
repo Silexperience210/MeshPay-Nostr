@@ -1,7 +1,7 @@
 // Identité MeshCore dérivée du seed Bitcoin (BIP32 m/69'/0'/0'/0)
 import { HDKey } from '@scure/bip32';
 // @ts-ignore
-import { sha256 } from '@noble/hashes/sha2.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
 // @ts-ignore
 import { hmac } from '@noble/hashes/hmac.js';
 // @ts-ignore
@@ -50,11 +50,11 @@ export function deriveBip85Seed(masterSeed: Uint8Array, index: number): Uint8Arr
     throw new Error(`[BIP-85] Échec dérivation index=${index}`);
   }
 
-  // HMAC-SHA512(key="bip-entropy-from-k", data=child.privateKey)
+  // HMAC-SHA512(key="bip-entropy-from-k", data=child.privateKey) — per BIP-85 spec
   const hmacKey = new TextEncoder().encode('bip-entropy-from-k');
-  const entropy = hmac(sha256, hmacKey, child.privateKey);
+  const entropy = hmac(sha512, hmacKey, child.privateKey);
 
-  // 32 premiers bytes = seed enfant (SHA256 donne exactement 32 bytes)
+  // 32 premiers bytes = seed enfant (SHA512 donne 64 bytes, on prend les 32 premiers)
   return entropy.slice(0, 32);
 }
 
@@ -74,13 +74,17 @@ export interface MeshIdentity {
   nodeId: string;       // ex: "MESH-A7F2"
   displayName: string | null;  // Nom personnalisable affiché dans les chats
   pubkeyHex: string;    // clé publique compressée 33 bytes hex
-  privkeyHex: string;   // clé privée 32 bytes hex (ne jamais exposer en UI)
   pubkeyBytes: Uint8Array;
+}
+
+/** Internal-only identity with private key material. Never pass to UI components. */
+export interface MeshIdentityFull extends MeshIdentity {
+  privkeyHex: string;
   privkeyBytes: Uint8Array;
 }
 
 // Dériver l'identité MeshCore depuis la phrase mnémonic du wallet
-export function deriveMeshIdentity(mnemonic: string, passphrase?: string): MeshIdentity {
+export function deriveMeshIdentity(mnemonic: string, passphrase?: string): MeshIdentityFull {
   const seed = mnemonicToSeed(mnemonic, passphrase);
   const master = HDKey.fromMasterSeed(seed);
   const child = master.derive(MESHCORE_PATH);

@@ -204,6 +204,30 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   const [discoveredForums, setDiscoveredForums] = useState<DiscoveredForum[]>([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
 
+  // Reset all state when modal opens
+  useEffect(() => {
+    if (visible) {
+      setTab('dm');
+      setNodeId('');
+      setName('');
+      setChannel('');
+      setForumType('public');
+      setPrivateAction('create');
+      setPrivateName('');
+      setPrivateDesc('');
+      setGeneratedPsk(null);
+      setJoinPsk('');
+      setShowPsk(false);
+      setPskCopied(false);
+      setNewForumName('');
+      setNewForumDesc('');
+      setShowCreateForm(false);
+      setLoading(false);
+      setDiscoveredForums([]);
+      setDiscoverLoading(false);
+    }
+  }, [visible]);
+
   const handleGeneratePsk = () => {
     const psk = generateForumKey();
     setGeneratedPsk(psk);
