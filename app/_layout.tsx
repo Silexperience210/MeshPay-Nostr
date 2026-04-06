@@ -2,13 +2,13 @@
 import './polyfills';
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, usePathname } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ActivityIndicator, View, Text } from "react-native";
+import { ActivityIndicator, View, Text, AppState, AppStateStatus } from "react-native";
 import Colors from "@/constants/colors";
 
 // ─── Stores Zustand (nouveau) ────────────────────────────────────────────────
@@ -79,23 +79,73 @@ function AppContent() {
   const { isHydrated } = useStoreHydration();
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const pathname = usePathname();
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    async function checkOnboarding() {
-      try {
-        const done = await AsyncStorage.getItem(ONBOARDING_KEY);
-        const isDone = done === 'true';
-        setOnboardingDone(isDone);
-        if (!isDone) {
-          setShowOnboarding(true);
-        }
-      } catch {
-        setOnboardingDone(false);
+  // Vérifier l'état de l'onboarding
+  const checkOnboarding = useCallback(async () => {
+    try {
+      const done = await AsyncStorage.getItem(ONBOARDING_KEY);
+      const isDone = done === 'true';
+      
+      if (isDone && showOnboarding) {
+        // Fermer le modal si onboarding est maintenant terminé
+        setShowOnboarding(false);
+      }
+      
+      setOnboardingDone(isDone);
+      if (!isDone) {
         setShowOnboarding(true);
       }
+    } catch {
+      setOnboardingDone(false);
+      setShowOnboarding(true);
     }
+  }, [showOnboarding]);
+
+  // Vérification initiale
+  useEffect(() => {
     checkOnboarding();
-  }, []);
+  }, [checkOnboarding]);
+
+  // Vérifier quand le modal est visible (polling léger)
+  useEffect(() => {
+    if (showOnboarding) {
+      intervalRef.current = setInterval(() => {
+        checkOnboarding();
+      }, 500); // Vérifier toutes les 500ms
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [showOnboarding, checkOnboarding]);
+
+  // Vérifier aussi quand l'app revient au premier plan
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        checkOnboarding();
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [checkOnboarding]);
+
+  // Vérifier quand on navigue vers les tabs
+  useEffect(() => {
+    if (pathname?.startsWith('/(tabs)') && showOnboarding) {
+      checkOnboarding();
+    }
+  }, [pathname, showOnboarding, checkOnboarding]);
 
   useEffect(() => {
     if (isHydrated && onboardingDone !== null) {
