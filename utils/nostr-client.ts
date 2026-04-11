@@ -410,6 +410,8 @@ export class NostrClient {
       console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
       return false;
     }
+    // NIP-59 gift wraps use deliberately randomized timestamps (up to 2 days old) — skip age check
+    if (event.kind === 1059) return true;
     // Vérification timestamp (pas plus vieux que 24h, pas dans le futur de plus de 1h)
     const now = Math.floor(Date.now() / 1000);
     const maxAge = 24 * 60 * 60; // 24 heures

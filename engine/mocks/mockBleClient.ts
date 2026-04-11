@@ -91,6 +91,7 @@ export const createMockBleClient = (): MockBleClient => {
       mockClient._isConnected = true;
       mockClient._deviceInfo = {
         name: 'Mock MeshCore Device',
+        nodeId: 'MOCK-NODE-001',
         publicKey: '0000000000000000000000000000000000000000000000000000000000000000',
         txPower: 20,
         maxTxPower: 22,

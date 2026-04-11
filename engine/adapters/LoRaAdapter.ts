@@ -50,6 +50,8 @@ export class LoRaAdapter implements ProtocolAdapter {
   private messageHandler?: (event: HermesEvent) => void;
   private _isConnected = false;
   private unsubCallbacks: Array<() => void> = [];
+  private _bridgeCounter = 0;
+  private _msgIdCounter = 0;
   
   // Gestion des contacts connus
   private contacts = new Map<string, MeshCoreContact>();
@@ -161,6 +163,9 @@ export class LoRaAdapter implements ProtocolAdapter {
       case EventType.CHANNEL_MSG_SENT:
         await this.sendChannelMessage(event as MessageEvent);
         break;
+      case EventType.BRIDGE_NOSTR_TO_LORA:
+        await this.forwardBridgeToLora(event as BridgeEvent);
+        break;
       default:
         console.warn('[LoRaAdapter] Type non supporté:', event.type);
     }
@@ -189,11 +194,33 @@ export class LoRaAdapter implements ProtocolAdapter {
     }
   }
 
+  private async forwardBridgeToLora(event: BridgeEvent): Promise<void> {
+    const { payload } = event;
+    let target: string;
+    let content: string;
+    try {
+      const parsed = JSON.parse(payload.rawPayload || '{}');
+      target = parsed.target || event.from;
+      content = parsed.content || '';
+    } catch {
+      target = event.from;
+      content = String(payload.rawPayload || '');
+    }
+
+    const contact = this.contacts.get(target);
+    if (!contact) {
+      throw new Error(`Contact ${target} non trouvé pour bridge LoRa`);
+    }
+    await this.bleClient.sendDirectMessage(contact.pubkeyHex, content);
+  }
+
   private async sendChannelMessage(event: MessageEvent): Promise<void> {
     const { payload } = event;
-    
+    const channelMatch = payload.channelName?.match(/channel-(\d+)/);
+    const channelIdx = channelMatch ? parseInt(channelMatch[1], 10) : 0;
+
     try {
-      await this.bleClient.sendChannelMessage(0, payload.content);
+      await this.bleClient.sendChannelMessage(channelIdx, payload.content);
       console.log('[LoRaAdapter] Message channel envoyé via LoRa');
     } catch (err) {
       console.error('[LoRaAdapter] Échec envoi channel LoRa:', err);
@@ -252,6 +279,7 @@ export class LoRaAdapter implements ProtocolAdapter {
       meta: {
         originalId: (msg as any).msgId,
         hops: msg.pathLen,
+        snr: msg.snr,
       },
     };
 
@@ -283,27 +311,34 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private bridgeToNostr(loraEvent: MessageEvent): void {
-    // Créer un événement de bridge
     const bridgeEvent: BridgeEvent = {
-      id: `bridge-${loraEvent.id}`,
+      id: `bridge-${loraEvent.id}-${++this._bridgeCounter}`,
       type: EventType.BRIDGE_LORA_TO_NOSTR,
-      transport: Transport.LORA,
+      transport: Transport.INTERNAL,
       timestamp: Date.now(),
       from: loraEvent.from,
       to: '*',
       payload: {
         originalTransport: Transport.LORA,
         targetTransport: Transport.NOSTR,
-        rawPayload: JSON.stringify(loraEvent.payload),
+        rawPayload: JSON.stringify(`${loraEvent.from}:${loraEvent.payload.content}`),
       },
       meta: {
         originalId: loraEvent.id,
       },
     };
 
-    // Émettre dans Hermès - le NostrAdapter s'en chargera
+    // Dispatch locally for subscribers
     this.messageHandler?.(bridgeEvent);
-    
+
+    // Route to NostrAdapter.send() if available
+    const nostrAdapter = this.engine.getAdapter(Transport.NOSTR);
+    if (nostrAdapter?.isConnected) {
+      nostrAdapter.send(bridgeEvent).catch(err =>
+        console.warn('[LoRaAdapter] Bridge to Nostr failed:', err)
+      );
+    }
+
     console.log('[LoRaAdapter] Bridged vers Nostr:', loraEvent.id);
   }
 
@@ -321,13 +356,12 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private generateHermesId(msg: MeshCoreIncomingMsg): string {
-    // Combiner plusieurs champs pour un ID unique stable
-    return `lora-${msg.senderPubkeyPrefix?.slice(0, 16)}-${(msg as any).msgId || Date.now()}`;
+    return `lora-${msg.senderPubkeyPrefix?.slice(0, 16)}-${(msg as any).msgId || `${Date.now()}-${++this._msgIdCounter}`}`;
   }
 
   private emitConnectionEvent(connected: boolean): void {
     const event: HermesEvent = {
-      id: `lora-conn-${Date.now()}`,
+      id: `lora-${connected ? 'connected' : 'disconnected'}-${Date.now()}`,
       type: connected 
         ? EventType.TRANSPORT_CONNECTED 
         : EventType.TRANSPORT_DISCONNECTED,
@@ -351,10 +385,7 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   async syncContacts(): Promise<void> {
-    // Use onContacts callback pattern — no direct sync method
-    this.bleClient.onContacts((contacts) => {
-      contacts.forEach(c => this.contacts.set(c.pubkeyPrefix, c));
-    });
+    await this.bleClient.syncNextMessage();
   }
 
   async setChannel(channelIdx: number, name: string, secret: Uint8Array): Promise<void> {

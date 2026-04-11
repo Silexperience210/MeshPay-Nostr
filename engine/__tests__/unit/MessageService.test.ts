@@ -39,6 +39,7 @@ describe('MessageService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSave.mockResolvedValue(undefined); // reset implementation after clearAllMocks
     service = new MessageServiceImpl();
     service.setIdentity('local-node-123', 'npub123xyz');
 

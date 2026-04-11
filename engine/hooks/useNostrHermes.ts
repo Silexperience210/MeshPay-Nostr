@@ -116,10 +116,10 @@ export function useNostrHermes(): UseNostrHermesReturn {
   }, []);
   
   // ─── Synchronisation avec le wallet ─────────────────────────────────────────
-  
+
   useEffect(() => {
-    if (walletInfo?.xpub) {
-      setPublicKey(walletInfo.xpub);
+    if ((walletInfo as any)?.nostrPubkey) {
+      setPublicKey((walletInfo as any).nostrPubkey);
     } else {
       setPublicKey(null);
     }

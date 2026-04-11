@@ -27,6 +27,12 @@ describe('useNostrHermes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     engine = new HermesEngine({ debug: false });
+    // Restore default walletStore mock after clearAllMocks (doesn't reset implementations)
+    const { useWalletStore } = require('@/stores/walletStore');
+    useWalletStore.mockImplementation((selector: any) => {
+      const state = { walletInfo: { nostrPubkey: 'test-nostr-pubkey-123' } };
+      return selector ? selector(state) : state;
+    });
   });
   
   afterEach(async () => {

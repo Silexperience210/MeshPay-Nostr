@@ -44,6 +44,7 @@ export class NostrAdapter implements ProtocolAdapter {
   private engine: HermesEngine;
   private nostr: NostrClient;
   private unsubs: Array<() => void> = [];
+  private _pollingInterval: ReturnType<typeof setInterval> | undefined;
   private messageHandler?: (event: HermesEvent) => void;
   private _isConnected = false;
   private keypair: NostrKeypair | null = null;
@@ -83,8 +84,8 @@ export class NostrAdapter implements ProtocolAdapter {
     };
 
     // Vérifier périodiquement (le nostrClient gère sa propre reconnexion)
-    const interval = setInterval(checkConnection, 1000);
-    this.unsubs.push(() => clearInterval(interval));
+    // Store separately so stopListeners() doesn't cancel reconnect detection
+    this._pollingInterval = setInterval(checkConnection, 1000);
 
     // Vérification initiale
     checkConnection();
@@ -93,6 +94,10 @@ export class NostrAdapter implements ProtocolAdapter {
   }
 
   async stop(): Promise<void> {
+    if (this._pollingInterval !== undefined) {
+      clearInterval(this._pollingInterval);
+      this._pollingInterval = undefined;
+    }
     this.stopListeners();
     for (const unsub of this.unsubs) {
       try { unsub(); } catch {}
@@ -325,7 +330,7 @@ export class NostrAdapter implements ProtocolAdapter {
 
   private emitConnectionEvent(connected: boolean): void {
     const event: HermesEvent = {
-      id: `nostr-conn-${Date.now()}`,
+      id: `nostr-${connected ? 'connected' : 'disconnected'}-${Date.now()}`,
       type: connected 
         ? EventType.TRANSPORT_CONNECTED 
         : EventType.TRANSPORT_DISCONNECTED,
