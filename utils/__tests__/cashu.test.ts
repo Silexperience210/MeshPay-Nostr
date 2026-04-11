@@ -221,10 +221,16 @@ describe('BDHKE round-trip (createBlindedMessage + unblindSignature)', () => {
 // verifyDleqProof — structure de base
 // ──────────────────────────────────────────────
 describe('verifyDleqProof', () => {
-  it('retourne true si pas de champ dleq (preuve absente = acceptée)', () => {
+  it('retourne true si pas de champ dleq et DLEQ non requis (mode legacy)', () => {
     const proof: CashuProof = { id: '1', amount: 100, secret: 'test', C: '02abc' };
-    // Peu importe la clé mint — si pas de dleq, on accepte
-    expect(verifyDleqProof(proof, '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798')).toBe(true);
+    // En mode legacy (requireDleq=false), pas de dleq = accepté
+    expect(verifyDleqProof(proof, '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798', false)).toBe(true);
+  });
+
+  it('retourne false si pas de champ dleq et DLEQ requis (défaut NUT-12)', () => {
+    const proof: CashuProof = { id: '1', amount: 100, secret: 'test', C: '02abc' };
+    // Par défaut DLEQ_REQUIRED=true, pas de dleq = rejeté
+    expect(verifyDleqProof(proof, '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798')).toBe(false);
   });
 
   it('retourne false (ou true) — ne jamais crash sur des données invalides', () => {

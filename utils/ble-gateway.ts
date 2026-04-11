@@ -324,7 +324,7 @@ export class BleGatewayClient {
     // Le filtre serviceUUIDs sur Android peut entrer en conflit avec une connexion active
     // ou ne retourner aucun résultat selon le firmware. Un scan sans filtre est plus fiable.
     try {
-      await BleManager.stopScan().catch(() => {});
+      await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
       await BleManager.scan({ serviceUUIDs: [], seconds: timeoutMs / 1000 });
       await new Promise((res) => setTimeout(res, timeoutMs));
       await BleManager.stopScan();
@@ -560,7 +560,7 @@ export class BleGatewayClient {
     }
     if (this.connectedId) {
       console.log('[BleGateway] Déconnexion...');
-      await BleManager.disconnect(this.connectedId).catch(() => {});
+      await BleManager.disconnect(this.connectedId).catch(() => { /* cleanup: ignore */ });
       this.connectedId = null;
     }
   }
@@ -587,7 +587,7 @@ export class BleGatewayClient {
         return;
       }
       console.log('[BleGateway] SelfInfo retry — re-envoi AppStart...');
-      this.sendAppStart().catch(() => {});
+      this.sendAppStart().catch((e) => console.warn('[BleGateway] sendAppStart retry failed:', e));
     }, 3500);
   }
 
@@ -1582,7 +1582,7 @@ export function getBleGatewayClient(): BleGatewayClient {
  */
 export function resetBleGatewayClient(): void {
   if (_instance) {
-    _instance.disconnect().catch(() => {});
+    _instance.disconnect().catch(() => { /* cleanup: ignore */ });
     _instance = null;
   }
 }

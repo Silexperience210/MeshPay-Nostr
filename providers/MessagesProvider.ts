@@ -145,7 +145,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (identity) {
       if (meshRouterRef.current) meshRouterRef.current.destroy();
       meshRouterRef.current = new MeshRouter(identity.nodeId);
-      console.log('[MeshRouter] Initialisé pour nodeId:', identity.nodeId);
+      if (__DEV__) console.log('[MeshRouter] Initialisé pour nodeId:', identity.nodeId);
     }
     return () => {
       if (meshRouterRef.current) {
@@ -168,11 +168,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             console.log('[Messages] Display name chargé:', profile.displayName);
           }
           setIdentity(id);
-        }).catch(() => {
+        }).catch((e) => {
+          console.warn('[Messages] getUserProfile failed:', e);
           setIdentity(id);
         });
         
-        console.log('[Messages] Identité dérivée:', id.nodeId);
+        if (__DEV__) console.log('[Messages] Identité dérivée:', id.nodeId);
 
       } catch (err) {
         console.log('[Messages] Erreur dérivation identité:', err);
@@ -185,7 +186,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // sendSelfAdvert() = CMD_SEND_SELF_ADV (0x07) — compris par tout firmware MeshCore
   useEffect(() => {
     if (ble.connected && identity) {
-      ble.sendSelfAdvert().catch(() => {});
+      ble.sendSelfAdvert().catch((e) => console.warn('[MeshCore] SelfAdvert failed:', e));
       console.log('[MeshCore] SelfAdvert envoyé à la connexion BLE');
     }
   }, [ble.connected, identity]);
@@ -443,7 +444,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
               ? { ...c, lastMessage: `📡 ${plaintext.slice(0, 48)}`, lastMessageTime: msg.timestamp, unreadCount: c.unreadCount + 1 }
               : c
           ));
-          notifyForumMessage(channelName, '📡 LoRa', plaintext).catch(() => {});
+          notifyForumMessage(channelName, '📡 LoRa', plaintext).catch((e) => console.warn('[MeshCore] notifyForumMessage failed:', e));
           console.log('[MeshCore] Canal LoRa → forum:', channelName, '|', plaintext.slice(0, 40));
           return;
         }
@@ -869,10 +870,10 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       transport: 'nostr',
     };
 
-    saveMessage(msg).catch(() => {});
+    saveMessage(msg).catch((e) => console.warn('[Messages] saveMessage failed:', e));
     const preview = `${fromId.slice(0, 8)}: ${plaintext.slice(0, 40)}`;
-    updateConversationLastMessage(convId, preview, ts, true).catch(() => {});
-    notifyForumMessage(channelName, fromId.slice(0, 10), plaintext).catch(() => {});
+    updateConversationLastMessage(convId, preview, ts, true).catch((e) => console.warn('[Messages] updateConversationLastMessage failed:', e));
+    notifyForumMessage(channelName, fromId.slice(0, 10), plaintext).catch((e) => console.warn('[Messages] notifyForumMessage failed:', e));
 
     setMessagesByConv(prev => ({
       ...prev,
@@ -1409,7 +1410,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const convId = `forum:${channelName}`;
     joinedForums.current.add(channelName);
     setJoinedForumsList([...joinedForums.current]);
-    AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
+    AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch((e) => console.warn('[Messages] AsyncStorage joinForum save failed:', e));
 
     // Stocker la PSK en mémoire + AsyncStorage si forum privé
     if (pskHex) {
@@ -1487,11 +1488,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const leaveForum = useCallback((channelName: string): void => {
     joinedForums.current.delete(channelName);
     setJoinedForumsList([...joinedForums.current]);
-    AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch(() => {});
+    AsyncStorage.setItem(JOINED_FORUMS_KEY, JSON.stringify([...joinedForums.current])).catch((e) => console.warn('[Messages] AsyncStorage joinForum save failed:', e));
     // Supprimer la PSK si forum privé
     if (forumPsks.current.has(channelName)) {
       forumPsks.current.delete(channelName);
-      deletePsk(channelName).catch(() => {});
+      deletePsk(channelName).catch((e) => console.warn('[Messages] deletePsk failed:', e));
       console.log('[Forum] PSK supprimée pour:', channelName);
     }
     // Nostr : désabonner du channel
@@ -1712,7 +1713,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             });
             console.log('[Nostr→Conv] Token Cashu stocké:', tokenId);
           }
-        }).catch(() => {});
+        }).catch((e) => console.warn('[Messages] Cashu token storage failed:', e));
       }
 
       const stored: StoredMessage = {

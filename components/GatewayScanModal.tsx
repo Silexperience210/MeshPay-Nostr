@@ -59,7 +59,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
       isMountedRef.current = false;
       if (scanTimerRef.current) { clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
       discoverSubRef.current?.remove(); discoverSubRef.current = null;
-      BleManager.stopScan().catch(() => {});
+      BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
     };
   }, [visible]);
 
@@ -162,7 +162,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
       // Arrêter tout scan précédent
       discoverSubRef.current?.remove();
       discoverSubRef.current = null;
-      await BleManager.stopScan().catch(() => {});
+      await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
 
       // Enregistrer le handler de découverte
       discoverSubRef.current = BleManager.onDiscoverPeripheral(reportDevice);
@@ -183,7 +183,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
       // ── Phase 2 : fallback sans filtre (4s) si rien trouvé ──
       if (found.size === 0) {
         console.log('[Scan] Phase 2 — fallback sans filtre UUID');
-        await BleManager.stopScan().catch(() => {});
+        await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
         await BleManager.scan(
           { serviceUUIDs: [], seconds: 4, allowDuplicates: false, scanMode: 2 } as any
         );
@@ -193,7 +193,7 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
         if (!isMountedRef.current) return;
       }
 
-      await BleManager.stopScan().catch(() => {});
+      await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
       discoverSubRef.current?.remove();
       discoverSubRef.current = null;
 

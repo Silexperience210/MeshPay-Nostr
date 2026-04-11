@@ -276,7 +276,7 @@ function SeedManagementCard() {
 
   const handleCopyAddress = useCallback(() => {
     if (walletInfo?.firstReceiveAddress) {
-      Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch(() => {});
+      Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch((e) => console.warn('[Settings] Clipboard copy failed:', e));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -299,7 +299,7 @@ function SeedManagementCard() {
     }
     try {
       const json = await exportWallet(exportPwd);
-      Clipboard.setStringAsync(json).catch(() => {});
+      Clipboard.setStringAsync(json).catch((e) => console.warn('[Settings] Clipboard copy failed:', e));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Backup copié !', 'Le backup chiffré a été copié dans le presse-papier. Collez-le dans un endroit sûr (notes, gestionnaire de mots de passe…).');
       setShowExport(false);

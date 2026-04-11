@@ -387,20 +387,12 @@ export class NostrClient {
       onEvent(event);
     };
 
-    let eoseFired = 0;
-    const subs = filters.map((filter) =>
-      this.pool.subscribeMany(this.relayUrls, filter as any, {
-        onevent: handler,
-        oneose: onEOSE
-          ? () => {
-              eoseFired++;
-              if (eoseFired === filters.length) onEOSE();
-            }
-          : undefined,
-      })
-    );
+    const sub = this.pool.subscribeMany(this.relayUrls, filters as any, {
+      onevent: handler,
+      oneose: onEOSE ?? undefined,
+    });
 
-    return () => { for (const s of subs) s.close(); };
+    return () => sub.close();
   }
 
   /**

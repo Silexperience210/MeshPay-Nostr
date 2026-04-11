@@ -130,7 +130,7 @@ export default function NfcBackupModal({
         await NfcManager.cancelTechnologyRequest();
         written = true;
       } catch (ndefErr: any) {
-        await NfcManager.cancelTechnologyRequest().catch(() => {});
+        await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
 
         // If tag is unformatted, try NdefFormatable (Android only)
         if (!written && ndefErr?.message?.toLowerCase?.()?.includes('unsupported')) {
@@ -141,7 +141,7 @@ export default function NfcBackupModal({
             await NfcManager.cancelTechnologyRequest();
             written = true;
           } catch (formatErr: any) {
-            await NfcManager.cancelTechnologyRequest().catch(() => {});
+            await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
             throw new Error(
               'Tag NFC non compatible. Essayez un tag NTAG213/215/216 vierge ou pré-formaté NDEF.'
             );
@@ -156,7 +156,7 @@ export default function NfcBackupModal({
         onClose();
       }
     } catch (err: any) {
-      await NfcManager.cancelTechnologyRequest().catch(() => {});
+      await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
       setStep('password');
       setError(err?.message ?? 'Erreur NFC inconnue.');
     }
@@ -189,14 +189,14 @@ export default function NfcBackupModal({
       Alert.alert('Succès', 'Wallet importé depuis la carte NFC !');
       onClose();
     } catch (err: any) {
-      await NfcManager.cancelTechnologyRequest().catch(() => {});
+      await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
       setStep('password');
       setError(err?.message ?? 'Erreur NFC inconnue.');
     }
   };
 
   const handleCancel = async () => {
-    await NfcManager.cancelTechnologyRequest().catch(() => {});
+    await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
     setStep('password');
     setError('');
   };

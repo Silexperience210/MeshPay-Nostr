@@ -66,9 +66,9 @@ export class GatewayManagerImpl implements GatewayManager {
       }
     });
 
-    // S'abonner aux messages Nostr pour bridge vers LoRa
+    // S'abonner aux messages Nostr pour bridge vers LoRa (skip manual bridges)
     const unsubNostr = hermes.on(EventType.BRIDGE_NOSTR_TO_LORA, async (event) => {
-      if (this.bridgesEnabled.nostrToLora) {
+      if (this.bridgesEnabled.nostrToLora && !(event.payload as any)?.manual) {
         await this.handleNostrBridgeEvent(event);
       }
     });

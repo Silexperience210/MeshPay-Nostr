@@ -26,12 +26,6 @@ import {
   DecryptionError,
 } from '../../identity/UnifiedIdentityManager';
 
-/** Type local pour les tests — correspond au format attendu de backup chiffré */
-interface EncryptedBackup {
-  version: string;
-  encryptedData: string;
-  createdAt: number;
-}
 import { generateMnemonic, validateMnemonic } from '@/utils/bitcoin';
 
 // ─── Fixtures de test ─────────────────────────────────────────────────────────
@@ -318,20 +312,22 @@ describe('UnifiedIdentityManager', () => {
   describe('exportBackup', () => {
     it('devrait exporter un backup chiffré', async () => {
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
-      
+
       const backup = await (manager as any).exportBackup(TEST_PASSWORD);
-      
+
       expect(backup).toBeDefined();
-      const parsed: EncryptedBackup = JSON.parse(backup);
-      expect(parsed.version).toBe('1.0');
-      expect(parsed.encryptedData).toBeDefined();
-      expect(parsed.createdAt).toBeGreaterThan(0);
+      const parsed = JSON.parse(backup);
+      expect(parsed.v).toBe(1); // ENCRYPTION_VERSION
+      expect(parsed.salt).toBeDefined();
+      expect(parsed.iv).toBeDefined();
+      expect(parsed.ct).toBeDefined();
     });
 
-    it('devrait échouer avec un mauvais mot de passe', async () => {
+    it('devrait échouer si identité verrouillée', async () => {
       await manager.createIdentity(TEST_MNEMONIC_12, TEST_PASSWORD);
-      
-      await expect((manager as any).exportBackup(WRONG_PASSWORD)).rejects.toThrow(DecryptionError);
+      manager.lock();
+
+      await expect((manager as any).exportBackup(TEST_PASSWORD)).rejects.toThrow(IdentityError);
     });
   });
 
@@ -384,12 +380,16 @@ describe('UnifiedIdentityManager', () => {
       expect(publicIdentity?.nostr.pubkey).toBe(identity.nostr.pubkey);
     });
 
-    it('devrait échouer si la clé Nostr ne correspond pas', async () => {
+    it('devrait re-dériver la clé Nostr depuis le mnemonic (ignore le privkey legacy)', async () => {
       const wrongPrivkey = '0'.repeat(64);
-      
-      await expect(
-        (manager as any).migrateFromLegacy(TEST_MNEMONIC_12, wrongPrivkey, TEST_PASSWORD)
-      ).rejects.toThrow(IdentityError);
+      const identity = deriveUnifiedIdentity(TEST_MNEMONIC_12);
+
+      // migrateFromLegacy re-derives from mnemonic, ignoring the legacy privkey
+      await (manager as any).migrateFromLegacy(TEST_MNEMONIC_12, wrongPrivkey, TEST_PASSWORD);
+
+      expect(await manager.hasIdentity()).toBe(true);
+      const publicIdentity = await manager.getPublicIdentity();
+      expect(publicIdentity?.nostr.pubkey).toBe(identity.nostr.pubkey);
     });
   });
 

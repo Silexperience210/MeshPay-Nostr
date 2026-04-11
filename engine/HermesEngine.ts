@@ -238,7 +238,7 @@ export class HermesEngine {
       meta: options.meta || {},
     };
 
-    await this.emit(event, options.transport);
+    await this.emit(event);
   }
 
   // ─── Souscription ─────────────────────────────────────────────────────────

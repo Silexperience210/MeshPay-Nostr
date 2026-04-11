@@ -70,7 +70,7 @@ export async function writeTransactionToNFC(
     return { success: true };
   } catch (error) {
     console.error('[NFC] Erreur écriture:', error);
-    await NfcManager.cancelTechnologyRequest().catch(() => {});
+    await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
     return { success: false, error: String(error) };
   }
 }
@@ -115,7 +115,7 @@ export async function readTransactionFromNFC(): Promise<{
     return { success: true, record: txRecord };
   } catch (error) {
     console.error('[NFC] Erreur lecture:', error);
-    await NfcManager.cancelTechnologyRequest().catch(() => {});
+    await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
     return { success: false, error: String(error) };
   }
 }
@@ -190,7 +190,7 @@ export async function writeCashuTokenToNFC(
     return { success: true };
   } catch (error) {
     console.error('[NFC] Erreur écriture Cashu:', error);
-    await NfcManager.cancelTechnologyRequest().catch(() => {});
+    await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
     return { success: false, error: String(error) };
   }
 }
@@ -230,7 +230,7 @@ export async function readCashuTokenFromNFC(): Promise<{
     };
   } catch (error) {
     console.error('[NFC] Erreur lecture Cashu:', error);
-    await NfcManager.cancelTechnologyRequest().catch(() => {});
+    await NfcManager.cancelTechnologyRequest().catch(() => { /* cleanup: ignore */ });
     return { success: false, error: String(error) };
   }
 }

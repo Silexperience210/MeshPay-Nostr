@@ -296,7 +296,7 @@ function BitcoinBalanceCard({
 
   const handleCopyAddress = useCallback(() => {
     if (walletInfo?.firstReceiveAddress) {
-      Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch(() => {});
+      Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch((e) => console.warn('[Wallet] Clipboard copy failed:', e));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Copied', 'Address copied to clipboard');
     }
@@ -547,7 +547,7 @@ function CashuBalanceCard({
 
   const handleCopyInvoice = useCallback(() => {
     if (mintQuote?.request) {
-      Clipboard.setStringAsync(mintQuote.request).catch(() => {});
+      Clipboard.setStringAsync(mintQuote.request).catch((e) => console.warn('[Wallet] Clipboard copy failed:', e));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert('Copied', 'Lightning invoice copied to clipboard');
     }
@@ -1188,7 +1188,7 @@ function CashuBalanceCard({
                 <TouchableOpacity
                   style={styles.copyInvoiceBtn}
                   onPress={() => {
-                    Clipboard.setStringAsync(generatedSendToken).catch(() => {});
+                    Clipboard.setStringAsync(generatedSendToken).catch((e) => console.warn('[Wallet] Clipboard copy failed:', e));
                     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                     Alert.alert('Copié', 'Token copié dans le presse-papiers');
                   }}
@@ -1364,7 +1364,7 @@ function TransactionItem({ tx, btcPrice, currency }: { tx: FormattedTransaction;
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
         onPress={() => {
-          Clipboard.setStringAsync(tx.txid).catch(() => {});
+          Clipboard.setStringAsync(tx.txid).catch((e) => console.warn('[Wallet] Clipboard copy failed:', e));
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
           Alert.alert('TX ID Copied', tx.txid);
         }}
@@ -1648,7 +1648,7 @@ export default function WalletScreen() {
               activeOpacity={0.7}
               onPress={() => {
                 if (walletInfo?.firstReceiveAddress) {
-                  Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch(() => {});
+                  Clipboard.setStringAsync(walletInfo.firstReceiveAddress).catch((e) => console.warn('[Wallet] Clipboard copy failed:', e));
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                   Alert.alert('Copied', walletInfo.firstReceiveAddress);
                 }

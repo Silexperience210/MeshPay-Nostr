@@ -423,7 +423,8 @@ export const useWalletStore = create<WalletState>()(
             // Derive wallet data first, THEN mark hydrated so consumers see complete state
             state._setWalletData(state.mnemonic).then(() => {
               state.setHasHydrated(true);
-            }).catch(() => {
+            }).catch((e) => {
+              console.warn('[WalletStore] Rehydration _setWalletData failed:', e);
               state.setHasHydrated(true);
             });
           } else {

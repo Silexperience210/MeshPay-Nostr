@@ -298,7 +298,7 @@ export function useConnection(): UseConnectionReturn {
   
   const startAll = useCallback(async (): Promise<void> => {
     await Promise.all([
-      connectNostr().catch(() => {}),
+      connectNostr().catch((e) => console.warn('[Connection] connectNostr failed:', e)),
       // LoRa nécessite un deviceId, donc pas de connexion auto ici
     ]);
   }, [connectNostr]);

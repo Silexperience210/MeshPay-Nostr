@@ -7,7 +7,13 @@
 import * as SecureStore from 'expo-secure-store';
 import { InteractionManager } from 'react-native';
 // @ts-ignore - subpath exports use .js extension
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
+// @ts-ignore - subpath exports use .js extension
+import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
+// @ts-ignore - subpath exports use .js extension
+import { sha256 } from '@noble/hashes/sha2.js';
+// @ts-ignore - subpath exports use .js extension
+import { gcm } from '@noble/ciphers/aes.js';
 import { deriveUnifiedIdentity, UnifiedIdentity, BitcoinIdentity, NostrIdentity, MeshCoreIdentity } from './Derivation';
 import { HermesEngine, hermes } from '../HermesEngine';
 import { EventType } from '../types';
@@ -116,7 +122,7 @@ export class UnifiedIdentityManager {
     this.isUnlocked = true;
 
     // Émission non-bloquante
-    this.emitWalletInitialized(identity).catch(() => {});
+    this.emitWalletInitialized(identity).catch((e) => console.warn('[Identity] emitWalletInitialized failed:', e));
 
     return {
       mnemonic,
@@ -255,9 +261,20 @@ export class UnifiedIdentityManager {
 
   async importBackup(backupJson: string, password: string): Promise<void> {
     const decrypted = await this.decryptKey(backupJson, password);
-    const data = JSON.parse(decrypted) as StoredIdentity;
-    const encrypted = await this.encryptKey(JSON.stringify(data), password);
-    await SecureStore.setItemAsync(STORAGE_KEY, encrypted);
+    const data = JSON.parse(decrypted);
+
+    // Backup contains raw privkeys — encrypt them for storage
+    const encryptedNostrPrivkey = await this.encryptKey(data.nostr.privkey, password);
+    const encryptedMeshcorePrivkey = await this.encryptKey(data.meshcore.privkey, password);
+
+    const storedIdentity: StoredIdentity = {
+      bitcoin: data.bitcoin,
+      nostr: { pubkey: data.nostr.pubkey, npub: data.nostr.npub, privkey: encryptedNostrPrivkey },
+      meshcore: { pubkey: data.meshcore.pubkey, nodeId: data.meshcore.nodeId, privkey: encryptedMeshcorePrivkey },
+      metadata: data.metadata,
+    };
+
+    await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(storedIdentity));
     await this.unlock(password);
   }
 
@@ -267,15 +284,6 @@ export class UnifiedIdentityManager {
   }
 
   private async encryptKey(key: string, password: string): Promise<string> {
-    // @ts-ignore
-    const { pbkdf2 } = await import('@noble/hashes/pbkdf2.js');
-    // @ts-ignore
-    const { sha256 } = await import('@noble/hashes/sha2.js');
-    // @ts-ignore
-    const { gcm } = await import('@noble/ciphers/aes.js');
-    // @ts-ignore
-    const { randomBytes } = await import('@noble/hashes/utils.js');
-
     const salt = randomBytes(32);
     const iv = randomBytes(12);
 
@@ -298,13 +306,6 @@ export class UnifiedIdentityManager {
   }
 
   private async decryptKey(encrypted: string, password: string): Promise<string> {
-    // @ts-ignore
-    const { pbkdf2 } = await import('@noble/hashes/pbkdf2.js');
-    // @ts-ignore
-    const { sha256 } = await import('@noble/hashes/sha2.js');
-    // @ts-ignore
-    const { gcm } = await import('@noble/ciphers/aes.js');
-
     const { v, salt, iv, ct } = JSON.parse(encrypted);
 
     if (v !== ENCRYPTION_VERSION) {

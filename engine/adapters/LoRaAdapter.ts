@@ -101,7 +101,7 @@ export class LoRaAdapter implements ProtocolAdapter {
     this.unsubCallbacks = [];
     
     if (this._isConnected) {
-      await this.bleClient.disconnect().catch(() => {});
+      await this.bleClient.disconnect().catch(() => { /* cleanup: ignore */ });
       this._isConnected = false;
     }
     

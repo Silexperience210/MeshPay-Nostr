@@ -157,7 +157,7 @@ function AppContent() {
   useEffect(() => {
     requestNotificationPermission()
       .then(() => configureNotificationChannels())
-      .catch(() => {});
+      .catch((e) => console.warn('[Layout] Notification permission error:', e));
   }, []);
 
   useEffect(() => {

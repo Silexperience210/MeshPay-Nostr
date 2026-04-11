@@ -87,8 +87,8 @@ export async function playAudioBase64(
     { shouldPlay: true },
     (status) => {
       if (status.isLoaded && status.didJustFinish) {
-        sound.unloadAsync().catch(() => {});
-        FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => {});
+        sound.unloadAsync().catch(() => { /* cleanup: ignore */ });
+        FileSystem.deleteAsync(tmpUri, { idempotent: true }).catch(() => { /* cleanup: ignore */ });
         onFinish?.();
       }
     }

@@ -269,7 +269,7 @@ function AudioBubble({ audioData, audioDuration, isMe }: { audioData?: string; a
   }, [audioData, isPlaying, audioDuration]);
 
   useEffect(() => () => {
-    soundRef.current?.unloadAsync().catch(() => {});
+    soundRef.current?.unloadAsync().catch(() => { /* cleanup: ignore */ });
     if (progressTimerRef.current) clearInterval(progressTimerRef.current);
   }, []);
 
@@ -674,7 +674,7 @@ export default function ChatScreen() {
     markRead(convId);
     // FIX #3: Résolution proactive pubkey si DM sans pubkey connue
     if (!convId.startsWith('forum:')) {
-      startConversation(convId).catch(() => {});
+      startConversation(convId).catch((e) => console.warn('[Chat] startConversation failed:', e));
     }
   }, [convId]);
 

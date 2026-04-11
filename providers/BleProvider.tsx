@@ -228,9 +228,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
           // Forcer la déconnexion même si connectedId n'est pas encore set
           // (BleManager.connect() peut encore tourner en background sinon)
           if (lastDeviceId) {
-            BleManager.disconnect(lastDeviceId).catch(() => {});
+            BleManager.disconnect(lastDeviceId).catch(() => { /* cleanup: ignore */ });
           }
-          client.disconnect().catch(() => {});
+          client.disconnect().catch(() => { /* cleanup: ignore */ });
         }
       } catch (error: any) {
         console.error('[BleProvider] Initialization error:', error);

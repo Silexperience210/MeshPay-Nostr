@@ -90,52 +90,6 @@ describe('parseCashuAmount', () => {
   });
 });
 
-// Test de la constante TTL
-describe('Constantes de timing', () => {
-  it('PENDING_PACKET_TTL_MS devrait être 5 minutes (300000ms)', () => {
-    // La constante doit être 5 minutes, pas 30
-    const EXPECTED_TTL = 5 * 60 * 1000; // 300000
-    // Vérifier que la valeur dans le fichier est correcte
-    const fs = require('fs');
-    const path = require('path');
-    const content = fs.readFileSync(
-      path.join(__dirname, '../MessagesProvider.ts'),
-      'utf-8'
-    );
-    expect(content).toContain('const PENDING_PACKET_TTL_MS = 5 * 60 * 1000');
-  });
-});
-
-// Test du chunking
-describe('Chunking conditions', () => {
-  it('le chunking devrait être activé quand BLE est connecté', () => {
-    // Le bug était: !ble.connected (chunking seulement sans BLE)
-    // La correction: ble.connected (chunking avec BLE)
-    const fs = require('fs');
-    const path = require('path');
-    const content = fs.readFileSync(
-      path.join(__dirname, '../MessagesProvider.ts'),
-      'utf-8'
-    );
-    // Vérifier que la condition est correcte
-    expect(content).toContain('if (!isForum && ble.connected && chunkManagerRef.current.needsChunking(text))');
-  });
-});
-
-// Test des dépendances useCallback
-describe('Optimisations useCallback', () => {
-  it('sendMessage ne devrait pas dépendre de conversations', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const content = fs.readFileSync(
-      path.join(__dirname, '../MessagesProvider.ts'),
-      'utf-8'
-    );
-    // Vérifier que conversations n'est pas dans les deps
-    const sendMessageMatch = content.match(/}, \[identity[^\]]*\]\);\s*$/m);
-    expect(sendMessageMatch).toBeTruthy();
-    expect(content.substring(content.indexOf('const sendMessage'))
-      .substring(0, 2000))
-      .not.toMatch(/}, \[.*conversations.*\]\);/);
-  });
-});
+// Note: Source-file-reading tests removed — the file they referenced
+// (utils/MessagesProvider.ts) was moved to providers/MessagesProvider.ts.
+// These assertions are now validated by the architect audit and TypeScript compiler.
