@@ -1209,28 +1209,15 @@ function NetworkSettingsCard() {
   const { settings, updateSettings } = useAppSettings();
 
   const handleNetworkChange = useCallback(() => {
+    // Testnet UI désactivé : la dérivation BIP32 et la construction de tx sont
+    // hardcodées en mainnet (utils/bitcoin-tx.ts). Permettre de basculer donnerait
+    // l'illusion d'un switch alors que le wallet resterait sur mainnet.
     Alert.alert(
       'Bitcoin Network',
-      'Select network',
-      [
-        {
-          text: 'Mainnet',
-          onPress: () => {
-            updateSettings({ bitcoinNetwork: 'mainnet' });
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          },
-        },
-        {
-          text: 'Testnet',
-          onPress: () => {
-            updateSettings({ bitcoinNetwork: 'testnet' });
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
+      'Only Mainnet is currently supported. Testnet coming soon.',
+      [{ text: 'OK', style: 'cancel' }]
     );
-  }, [updateSettings]);
+  }, []);
 
   const handleCurrencyChange = useCallback(() => {
     Alert.alert(

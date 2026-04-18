@@ -419,9 +419,12 @@ describe('LoRaAdapter Integration', () => {
     
     it('should get device info', () => {
       const info = adapter.getDeviceInfo();
-      
+
       expect(info).toBeDefined();
-      expect((info as any)?.nodeId).toBe('MOCK-NODE-001');
+      // BleDeviceInfo ne contient pas de nodeId (pas dans le type réel) ;
+      // on vérifie les champs canoniques du mock à la place.
+      expect(info?.name).toBe('Mock MeshCore Device');
+      expect(info?.publicKey).toHaveLength(64);
     });
   });
 

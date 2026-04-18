@@ -21,9 +21,14 @@ let bitcoinModule: typeof import('@/utils/bitcoin') | null = null;
 
 async function loadBitcoinModule() {
   if (!bitcoinModule) {
-    console.log('[WalletStore] Loading bitcoin module...');
-    bitcoinModule = await import('@/utils/bitcoin');
-    console.log('[WalletStore] Bitcoin module loaded');
+    if (__DEV__) console.log('[WalletStore] Loading bitcoin module...');
+    const importPromise = import('@/utils/bitcoin');
+    const timeoutMs = 10_000;
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Bitcoin module import timed out after ${timeoutMs}ms`)), timeoutMs)
+    );
+    bitcoinModule = await Promise.race([importPromise, timeout]);
+    if (__DEV__) console.log('[WalletStore] Bitcoin module loaded');
   }
   return bitcoinModule;
 }
@@ -181,6 +186,7 @@ export interface WalletState {
   isImporting: boolean;
   generateError: Error | null;
   importError: Error | null;
+  rehydrationError: Error | null;
   _hasHydrated: boolean;
 
   generateWallet: (strength?: 12 | 24) => Promise<void>;
@@ -212,6 +218,7 @@ export const useWalletStore = create<WalletState>()(
       isImporting: false,
       generateError: null,
       importError: null,
+      rehydrationError: null,
       _hasHydrated: false,
 
       generateWallet: async (strength: 12 | 24 = 12) => {
@@ -417,14 +424,22 @@ export const useWalletStore = create<WalletState>()(
       name: 'wallet-storage',
       storage: createJSONStorage(() => secureWalletStorage),
       onRehydrateStorage: () => (state, error) => {
-        console.log('[WalletStore] Rehydrated from storage', { hasState: !!state, error });
+        if (__DEV__) console.log('[WalletStore] Rehydrated from storage', { hasState: !!state, error });
+        if (error) {
+          // Le storage lui-même a échoué — SecureStore corrompu ou indispo
+          const err = error instanceof Error ? error : new Error(String(error));
+          useWalletStore.setState({ rehydrationError: err });
+          useWalletStore.getState().setHasHydrated(true);
+          return;
+        }
         if (state) {
           if (state.mnemonic) {
-            // Derive wallet data first, THEN mark hydrated so consumers see complete state
             state._setWalletData(state.mnemonic).then(() => {
               state.setHasHydrated(true);
             }).catch((e) => {
               console.warn('[WalletStore] Rehydration _setWalletData failed:', e);
+              const err = e instanceof Error ? e : new Error(String(e));
+              useWalletStore.setState({ rehydrationError: err });
               state.setHasHydrated(true);
             });
           } else {

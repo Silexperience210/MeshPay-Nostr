@@ -69,11 +69,17 @@ export class NostrAdapter implements ProtocolAdapter {
   // ─── Cycle de vie ─────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
+    // Guard contre double-start: clear l'intervalle précédent si présent
+    if (this._pollingInterval !== undefined) {
+      clearInterval(this._pollingInterval);
+      this._pollingInterval = undefined;
+    }
+
     // Écouter l'état de connexion Nostr
     const checkConnection = () => {
       const wasConnected = this._isConnected;
       this._isConnected = this.nostr.isConnected;
-      
+
       if (!wasConnected && this._isConnected) {
         this.emitConnectionEvent(true);
         this.startListeners();
@@ -84,13 +90,12 @@ export class NostrAdapter implements ProtocolAdapter {
     };
 
     // Vérifier périodiquement (le nostrClient gère sa propre reconnexion)
-    // Store separately so stopListeners() doesn't cancel reconnect detection
     this._pollingInterval = setInterval(checkConnection, 1000);
 
     // Vérification initiale
     checkConnection();
 
-    console.log('[NostrAdapter] Démarré');
+    if (__DEV__) console.log('[NostrAdapter] Démarré');
   }
 
   async stop(): Promise<void> {
@@ -186,6 +191,8 @@ export class NostrAdapter implements ProtocolAdapter {
 
   private startListeners(): void {
     if (!this.nostr.isConnected) return;
+    // Idempotent : ne pas redoubler les subscriptions existantes
+    if (this.unsubs.length > 0) return;
 
     // DMs entrants (NIP-04 et NIP-17)
     try {

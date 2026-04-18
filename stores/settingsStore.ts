@@ -176,10 +176,16 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       addCustomRelay: (url: string) => {
-        const existing = get().nostrRelays.find(r => r.url === url);
+        const trimmed = url.trim();
+        // Sécurité : seuls wss:// (TLS) sont acceptés. ws:// exposerait les messages
+        // en clair sur le réseau — inacceptable pour un client Nostr chiffré.
+        if (!/^wss:\/\/[^\s]+$/i.test(trimmed)) {
+          throw new Error('URL relay invalide : seul wss:// est accepté');
+        }
+        const existing = get().nostrRelays.find(r => r.url === trimmed);
         if (existing) return;
-        
-        const relays = [...get().nostrRelays, { url, enabled: true, custom: true }];
+
+        const relays = [...get().nostrRelays, { url: trimmed, enabled: true, custom: true }];
         get().updateSettings({ nostrRelays: relays });
       },
 

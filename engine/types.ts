@@ -72,6 +72,10 @@ export interface HermesEvent {
     bridgeTimestamp?: number;
     /** Indique si c'est un message de canal (gateway LoRa↔Nostr) */
     isChannelMessage?: boolean;
+    /** Signal-to-noise ratio (LoRa radio metric) */
+    snr?: number;
+    /** Received signal strength indicator (LoRa/BLE) */
+    rssi?: number;
   };
 }
 

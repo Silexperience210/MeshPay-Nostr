@@ -15,6 +15,7 @@ import {
   type MempoolFeeEstimates,
 } from '@/utils/mempool';
 import { createTransactionWithFetch, estimateFee, validateAddress, signTransaction } from '@/utils/bitcoin-tx';
+import { validateMnemonic } from '@/utils/bitcoin';
 import { sendBitcoinTxViaNostr, isTxAlreadyKnown } from '@/utils/tx-relay';
 
 export interface BitcoinTransaction {
@@ -179,6 +180,13 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
 
       if (amountSats <= 0) {
         throw new Error('Montant invalide');
+      }
+
+      // Sécurité : le mnémonique doit être BIP39-valide avant toute signature.
+      // Évite de signer avec un mnémonique corrompu (checksum invalide)
+      // qui produirait des signatures incorrectes et perdrait les fonds.
+      if (!validateMnemonic(mnemonic)) {
+        throw new Error('Mnémonique invalide — impossible de signer');
       }
 
       // Snapshot du solde au moment du lock (évite la TOCTOU)

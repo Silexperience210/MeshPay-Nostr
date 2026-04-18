@@ -109,37 +109,43 @@ function AppContent() {
     checkOnboarding();
   }, [checkOnboarding]);
 
-  // Vérifier quand le modal est visible (polling léger)
+  // Polling du modal d'onboarding : uniquement quand le modal est visible ET
+  // que l'app est au premier plan. Sinon on brûle CPU/batterie inutilement.
   useEffect(() => {
-    if (showOnboarding) {
+    const startPolling = () => {
+      if (intervalRef.current) return;
       intervalRef.current = setInterval(() => {
         checkOnboarding();
-      }, 500); // Vérifier toutes les 500ms
-    } else {
+      }, 500);
+    };
+    const stopPolling = () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+    };
+
+    if (showOnboarding && AppState.currentState === 'active') {
+      startPolling();
+    } else {
+      stopPolling();
     }
 
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    };
-  }, [showOnboarding, checkOnboarding]);
-
-  // Vérifier aussi quand l'app revient au premier plan
-  useEffect(() => {
     const handleAppStateChange = (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {
         checkOnboarding();
+        if (showOnboarding) startPolling();
+      } else {
+        stopPolling();
       }
     };
 
     const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription.remove();
-  }, [checkOnboarding]);
+    return () => {
+      subscription.remove();
+      stopPolling();
+    };
+  }, [showOnboarding, checkOnboarding]);
 
   // Vérifier quand on navigue vers les tabs
   useEffect(() => {

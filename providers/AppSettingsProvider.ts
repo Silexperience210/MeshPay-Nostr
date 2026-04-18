@@ -10,6 +10,7 @@
  */
 
 import createContextHook from '@nkzw/create-context-hook';
+import { useMemo } from 'react';
 import { useSettingsStore } from '@/stores/settingsStore';
 
 // ─── Ré-exports des types depuis settingsStore ────────────────────────────────
@@ -42,8 +43,7 @@ export interface AppSettingsHookValue {
 export const [AppSettingsContext, useAppSettings] = createContextHook((): AppSettingsHookValue => {
   const store = useSettingsStore();
 
-  // Reconstruire l'objet settings depuis les champs plats du store
-  const settings: import('@/stores/settingsStore').AppSettings = {
+  const settings: import('@/stores/settingsStore').AppSettings = useMemo(() => ({
     connectionMode: store.connectionMode,
     language: store.language,
     onboardingLangDone: store.onboardingLangDone,
@@ -61,9 +61,27 @@ export const [AppSettingsContext, useAppSettings] = createContextHook((): AppSet
     notifications: store.notifications,
     shareLocation: store.shareLocation,
     nostrRelays: store.nostrRelays,
-  };
+  }), [
+    store.connectionMode,
+    store.language,
+    store.onboardingLangDone,
+    store.mempoolUrl,
+    store.customMempoolUrl,
+    store.useCustomMempool,
+    store.defaultCashuMint,
+    store.fallbackCashuMint,
+    store.customCashuMint,
+    store.useCustomCashuMint,
+    store.bitcoinNetwork,
+    store.fiatCurrency,
+    store.autoSyncInterval,
+    store.autoRelay,
+    store.notifications,
+    store.shareLocation,
+    store.nostrRelays,
+  ]);
 
-  return {
+  return useMemo(() => ({
     settings,
     updateSettings: store.updateSettings,
     getMempoolUrl: store.getMempoolUrl,
@@ -75,5 +93,15 @@ export const [AppSettingsContext, useAppSettings] = createContextHook((): AppSet
     isBridgeMode: store.isBridgeMode(),
     isLoading: store.isLoading,
     isSaving: store.isSaving,
-  };
+  }), [
+    settings,
+    store.updateSettings,
+    store.getMempoolUrl,
+    store.getCashuMintUrl,
+    store.getActiveRelayUrls,
+    store.resetToDefaults,
+    store.connectionMode,
+    store.isLoading,
+    store.isSaving,
+  ]);
 });

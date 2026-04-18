@@ -7,7 +7,7 @@
  * V3.0: Protocole natif MeshCore Companion (CMD_SEND_TXT_MSG, channels, contacts)
  */
 
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import { Platform, PermissionsAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BleManager from 'react-native-ble-manager';
@@ -503,7 +503,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     await clientRef.current.sendLogin(pubkeyHex, password);
   };
 
-  const contextValue: BleContextValue = {
+  const contextValue: BleContextValue = useMemo(() => ({
     ...state,
     connectToGateway,
     disconnectGateway,
@@ -530,7 +530,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     sendStatusReq,
     sendLogin,
     onBleMessage,
-  };
+  }), [state]);
 
   return <BleContext.Provider value={contextValue}>{children}</BleContext.Provider>;
 }

@@ -55,9 +55,18 @@ export class LoRaAdapter implements ProtocolAdapter {
   
   // Gestion des contacts connus
   private contacts = new Map<string, MeshCoreContact>();
-  
-  // Pour le chunking
-  private partialMessages = new Map<string, string>(); // msgId → accumulatedText
+
+  // Pour le chunking (msgId → { text accumulé, timestamp pour TTL })
+  private partialMessages = new Map<string, { text: string; firstSeenMs: number }>();
+  private static readonly PARTIAL_TTL_MS = 60_000;
+  private partialSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Déduplication des messages reçus (par msgId)
+  private recentMsgIds = new Map<string, number>(); // msgId → expiresAt
+  private static readonly DEDUP_TTL_MS = 5 * 60_000;
+  private static readonly DEDUP_MAX = 1000;
+
+  private _listenersSetup = false;
 
   constructor(
     engine: HermesEngine,
@@ -84,16 +93,21 @@ export class LoRaAdapter implements ProtocolAdapter {
       }
     });
 
+    // Purge périodique des partial messages expirés
+    if (!this.partialSweepTimer) {
+      this.partialSweepTimer = setInterval(() => this.sweepExpired(), 30_000);
+    }
+
     // Auto-connect si configuré
     if (this.config.autoConnect && this.config.lastDeviceId) {
       try {
         await this.connect(this.config.lastDeviceId);
       } catch (err) {
-        console.log('[LoRaAdapter] Auto-connect échoué:', err);
+        if (__DEV__) console.log('[LoRaAdapter] Auto-connect échoué:', err);
       }
     }
 
-    console.log('[LoRaAdapter] Démarré');
+    if (__DEV__) console.log('[LoRaAdapter] Démarré');
   }
 
   async stop(): Promise<void> {
@@ -101,13 +115,33 @@ export class LoRaAdapter implements ProtocolAdapter {
       try { unsub(); } catch {}
     }
     this.unsubCallbacks = [];
-    
+    this._listenersSetup = false;
+
+    if (this.partialSweepTimer) {
+      clearInterval(this.partialSweepTimer);
+      this.partialSweepTimer = null;
+    }
+    this.partialMessages.clear();
+    this.recentMsgIds.clear();
+
     if (this._isConnected) {
       await this.bleClient.disconnect().catch(() => { /* cleanup: ignore */ });
       this._isConnected = false;
     }
-    
-    console.log('[LoRaAdapter] Arrêté');
+
+    if (__DEV__) console.log('[LoRaAdapter] Arrêté');
+  }
+
+  private sweepExpired(): void {
+    const now = Date.now();
+    for (const [id, meta] of this.partialMessages) {
+      if (now - meta.firstSeenMs > LoRaAdapter.PARTIAL_TTL_MS) {
+        this.partialMessages.delete(id);
+      }
+    }
+    for (const [id, expiresAt] of this.recentMsgIds) {
+      if (now > expiresAt) this.recentMsgIds.delete(id);
+    }
   }
 
   // ─── Connexion ────────────────────────────────────────────────────────────
@@ -131,21 +165,27 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private setupListeners(): void {
-    // Messages entrants via LoRa
+    if (this._listenersSetup) return;
+    this._listenersSetup = true;
+
     this.bleClient.onIncomingMessage((msg) => {
       this.handleIncomingMessage(msg);
     });
 
-    // Contacts découverts
     this.bleClient.onContactDiscovered((contact) => {
       this.contacts.set(contact.pubkeyHex, contact);
     });
 
-    // Liste complète des contacts
     this.bleClient.onContacts((contacts) => {
       for (const c of contacts) {
         this.contacts.set(c.pubkeyHex, c);
       }
+    });
+
+    this.unsubCallbacks.push(() => {
+      this.bleClient.onIncomingMessage(() => {});
+      this.bleClient.onContactDiscovered(() => {});
+      this.bleClient.onContacts(() => {});
     });
   }
 
@@ -236,7 +276,19 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private handleIncomingMessage(msg: MeshCoreIncomingMsg): void {
-    console.log('[LoRaAdapter] Message reçu:', msg.type, 'de', msg.senderPubkeyPrefix?.slice(0, 16));
+    if (__DEV__) console.log('[LoRaAdapter] Message reçu:', msg.type, 'de', msg.senderPubkeyPrefix?.slice(0, 16));
+
+    // Dédup : ignorer les retransmissions du même msgId
+    const originalId = (msg as any).msgId ? String((msg as any).msgId) : undefined;
+    if (originalId) {
+      const now = Date.now();
+      if (this.recentMsgIds.has(originalId)) return;
+      if (this.recentMsgIds.size >= LoRaAdapter.DEDUP_MAX) {
+        const firstKey = this.recentMsgIds.keys().next().value;
+        if (firstKey) this.recentMsgIds.delete(firstKey);
+      }
+      this.recentMsgIds.set(originalId, now + LoRaAdapter.DEDUP_TTL_MS);
+    }
 
     // Déterminer le type d'événement
     let eventType: EventType;
