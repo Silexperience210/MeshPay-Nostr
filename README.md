@@ -1,8 +1,36 @@
+<div align="center">
+
 # MeshPay-Nostr
 
-Mobile messaging + Bitcoin wallet that runs over **Nostr relays** (when online)
-and over **MeshCore LoRa BLE gateways** (when offline). Built with React Native
-and Expo. Android-first.
+**Mobile messaging + Bitcoin wallet — over Nostr (online) and LoRa mesh (offline).**
+
+[![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://github.com/Silexperience210/MeshPay-Nostr/releases)
+[![Latest Release](https://img.shields.io/github/v/release/Silexperience210/MeshPay-Nostr?include_prereleases&sort=semver)](https://github.com/Silexperience210/MeshPay-Nostr/releases/latest)
+[![Tests](https://img.shields.io/badge/tests-701%20%2F%20701-brightgreen)](#tests)
+[![Status](https://img.shields.io/badge/status-beta-orange)](#limitations)
+[![License](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](#license)
+
+[![React Native](https://img.shields.io/badge/React%20Native-0.81-61DAFB?logo=react&logoColor=white)](https://reactnative.dev)
+[![Expo](https://img.shields.io/badge/Expo%20SDK-54-000020?logo=expo&logoColor=white)](https://expo.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Zustand](https://img.shields.io/badge/state-Zustand%205-443e38)](https://github.com/pmndrs/zustand)
+
+[![Nostr](https://img.shields.io/badge/Nostr-NIP--17%20%2F%20NIP--44%20%2F%20NIP--28-purple)](https://github.com/nostr-protocol/nips)
+[![Bitcoin](https://img.shields.io/badge/Bitcoin-BIP39%20%2F%20BIP84%20%2F%20BIP85-F7931A?logo=bitcoin&logoColor=white)](https://github.com/bitcoin/bips)
+[![Cashu](https://img.shields.io/badge/Cashu-NUT--03%2F04%2F05%2F11%2F12-yellow)](https://cashu.space)
+[![MeshCore](https://img.shields.io/badge/MeshCore-Companion%20BLE-blueviolet)](https://github.com/meshcore-dev/MeshCore)
+
+[Releases](https://github.com/Silexperience210/MeshPay-Nostr/releases) ·
+[Issues](https://github.com/Silexperience210/MeshPay-Nostr/issues) ·
+[Architecture](#architecture) ·
+[Security](#security) ·
+[Limitations](#limitations)
+
+</div>
+
+---
+
+Built with React Native and Expo. Android-first.
 
 > **Status:** beta. The core messaging, wallet, and Nostr/LoRa transports work.
 > The marketplace, NFC backup, and several BLE companion features are still
