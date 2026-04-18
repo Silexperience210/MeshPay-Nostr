@@ -1,281 +1,242 @@
-<div align="center">
+# MeshPay-Nostr
 
-# 🥜🌐 MeshPay-Nostr 📶⚡
+Mobile messaging + Bitcoin wallet that runs over **Nostr relays** (when online)
+and over **MeshCore LoRa BLE gateways** (when offline). Built with React Native
+and Expo. Android-first.
 
-### Messagerie P2P Incensurable | Identité Bitcoin Proof | Wallet Cashu | LoRa Mesh | Marketplace Décentralisée
-
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-blue.svg)](https://github.com/Silexperience210/MeshPay-Nostr)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/Silexperience210/MeshPay-Nostr)](https://github.com/Silexperience210/MeshPay-Nostr/releases)
-[![Cashu](https://img.shields.io/badge/Cashu-9.5%2F10-gold)](https://cashu.space)
-
-[![Bitcoin](https://img.shields.io/badge/Bitcoin-Identity%20Proof-orange?logo=bitcoin)](https://github.com/Silexperience210/MeshPay-Nostr)
-[![LoRa](https://img.shields.io/badge/LoRa-Uncensorable-brightgreen?logo=semtech)](https://lora-alliance.org/)
-[![MeshCore](https://img.shields.io/badge/MeshCore-BLE%20V3-blueviolet)](https://github.com/meshcore-dev/MeshCore)
-[![Nostr](https://img.shields.io/badge/Nostr-NIP--15%2F17%2F1985-purple)](https://nostr.com)
-
-**MeshPay-Nostr** est la **première messagerie P2P incensurable** combinant **identité Bitcoin proof**, **wallet Cashu**, **marketplace décentralisée NIP-15** et **commerce local via LoRa Mesh**. Aucun serveur, aucune censure, fonctionne même sans internet.
-
-[📦 Télécharger APK](https://github.com/Silexperience210/MeshPay-Nostr/releases/latest) • [📖 Documentation](#documentation) • [🚀 Roadmap](#roadmap)
-
-</div>
+> **Status:** beta. The core messaging, wallet, and Nostr/LoRa transports work.
+> The marketplace, NFC backup, and several BLE companion features are still
+> hardening — see [Limitations](#limitations) below.
 
 ---
 
-## 🔥 Ce qui rend MeshPay-Nostr UNIQUE
+## What it actually does
 
-### 🛡️ Messagerie Incensurable
-- **Aucun serveur central** — Communication directe P2P
-- **LoRa Mesh** — Fonctionne sans internet (5–20 km)
-- **BLE Gateway** — Connexion directe appareil-à-appareil
-- **Résistant à la censure** — Impossible à bloquer
+### Messaging
+- **Nostr DMs** — NIP-44 (ChaCha20-Poly1305 + HKDF) and NIP-17 sealed Gift Wrap (kind:1059)
+- **Nostr public channels** — NIP-28 (kind:40/41/42) with deterministic channel IDs from a forum name
+- **LoRa direct + channel messages** — over a MeshCore BLE companion device (ESP32 with MeshCore firmware)
+- **Auto-bridge** — incoming LoRa traffic can be relayed to Nostr (and vice-versa) when both transports are connected
 
-### 🆔 Identité Bitcoin Proof
-- **NodeId dérivé de votre wallet** — MESH-XXXX unique
-- **Clés Bitcoin = Identité** — Pas de compte, pas de pseudo
-- **Vérification cryptographique** — Impossible d'usurper
-- **BIP-85 isolation** — Bitcoin / Nostr / MeshCore indépendants
+### Wallet
+- **BIP39 mnemonic** (12 or 24 words), generated locally, stored in `expo-secure-store`
+- **BIP84 / m/84'/0'/0'** native segwit (`bc1...`) — **mainnet only** today
+- **Mempool.space** for balance / UTXOs / fee estimates / broadcast
+- **Cashu eCash** — mint / melt / swap (NUT-03/04/05), P2PK locking (NUT-11),
+  DLEQ verification (NUT-12), encrypted backup
+- **Bitcoin tx broadcast fallback over Nostr** — if the mempool API is
+  unreachable, a signed tx can be relayed via a Nostr gateway peer
 
-### 🛒 Marketplace Décentralisée (NEW v3.0.7)
-- **NIP-15** — Stalls (kind:30017) et produits (kind:30018) publiés sur Nostr
-- **Commerce LoRa local** — Annonces ~60 bytes diffusées sur le mesh sans internet
-- **Paiement intégré** — Cashu eCash, Lightning BOLT11, on-chain Bitcoin
-- **Commandes chiffrées** — DMs NIP-17 Gift Wrap entre acheteur et vendeur
-- **Réputation NIP-1985** — Avis 1–5 étoiles publiés on-chain, impossibles à falsifier
-- **Notifications push** — Nouvelles commandes, paiements, avis en temps réel
-- **Gestion stock** — Quantité fixe ou illimitée, zones de livraison personnalisées
+### Identity
+- **BIP-85 isolation** — the BIP39 seed derives independent child seeds for
+  Bitcoin / Nostr / MeshCore so a leak in one domain doesn't expose the others
+  (see `utils/identity.ts`)
+- The Nostr public key (npub) is your identity — no account, no signup
 
-### 💰 Wallet Cashu #1 (9.5/10)
-- **Mint/Melt/Swap complet** — Tous les NUTs implémentés
-- **Atomic swaps** — BTC↔Cashu trustless
-- **P2PK tokens** — Verrouillables à une clé (NUT-11)
-
----
-
-## ✨ Fonctionnalités Complètes
-
-### 📡 Communication
-- ✅ **DMs chiffrés E2E** — ECDH secp256k1 + AES-GCM-256 (transport mesh)
-- ✅ **DMs Nostr NIP-44** — ChaCha20-Poly1305 + HKDF
-- ✅ **Gift Wrap NIP-17** — Sender anonymisé, timestamp aléatoire ±2 jours
-- ✅ **Forums publics** — Chiffrement déterministe par nom
-- ✅ **Forums privés PSK** — Clé aléatoire 256 bits, partagée via DM chiffré
-- ✅ **LoRa longue portée** — 868/915 MHz, 5–20 km
-- ✅ **BLE proximité** — 10–100 m, sans infrastructure
-- ✅ **Multi-hop routing** — Jusqu'à 10 sauts
-- ✅ **Messages auto-destruct** — Effacement après 24 h
-
-### 🛒 Marketplace (v3.0.7)
-- ✅ **Onglet Shop dédié** — Browse / Ma boutique / Commandes
-- ✅ **Publication Nostr NIP-15** — Stall + produits diffusés sur les relays
-- ✅ **Broadcast LoRa local** — `SHOP:{id,name,price,stock,pubkey}` compact
-- ✅ **TTL LoRa 30 min** — Produits expirés retirés automatiquement
-- ✅ **Checkout 3 étapes** — Livraison → Paiement → Confirmation
-- ✅ **Zones de livraison** — Coût variable par région (France, Europe, Monde)
-- ✅ **Flux vendeur** — Envoi info paiement (BOLT11 / BTC / Cashu token)
-- ✅ **Flux acheteur** — Copie paiement, suivi statut commande
-- ✅ **Avis post-livraison** — ReviewModal 5 étoiles + commentaire 500 chars
-- ✅ **Réputation produit/vendeur** — Moyenne étoiles affichée sur ProductCard
-- ✅ **Notifications push** — Canaux Android `shop_orders` / `shop_reviews`
-- ✅ **Images produit** — Alerte si URI locale (non accessible publiquement)
-
-### 🆔 Identité & Sécurité
-- ✅ **NodeId unique** — Dérivé cryptographiquement du wallet (SHA256 pubkey)
-- ✅ **BIP-85 identity isolation** — Seeds Bitcoin/Nostr/MeshCore indépendants
-- ✅ **Anti-usurpation** — Vérification signature obligatoire
-- ✅ **Display name** — Optionnel, changeable
-- ✅ **Status en ligne** — Présence temps réel
-- ✅ **Radar de pairs** — Carte GPS des utilisateurs proches
-
-### 💰 Wallet Cashu Avancé
-- ✅ **Mint/Melt/Swap** — NUTs 03, 04, 05
-- ✅ **P2PK** — Tokens verrouillables (NUT-11)
-- ✅ **DLEQ proofs** — Vérification cryptographique (NUT-12)
-- ✅ **QR animés** — Gros tokens en plusieurs parties (NUT-16)
-- ✅ **Atomic swaps** — Échange BTC↔Cashu trustless
-- ✅ **Backup/Restore** — Export JSON
-
-### 📡 BLE MeshCore V3
-- ✅ **Nordic UART (NUS)** — Service `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
-- ✅ **Battery** — `RESP_BATT_STORAGE` uint16 millivolts (fix v3.0.7)
-- ✅ **Stats parsées** — CORE / RADIO / PACKETS layouts corrects (fix v3.0.7)
-- ✅ **Settings LoRa** — Fréquence / SF / TX Power liés aux vraies valeurs BLE (fix v3.0.7)
+### App surfaces
+- 5 tabs: **Messages**, **Mesh**, **Wallet**, **Shop**, **Settings**
+- 3 locales: English, French, Spanish (`locales/`)
+- NFC backup of the encrypted wallet (NDEF, with NdefFormatable fallback)
+- QR scanner for seed restore + Bitcoin payment URIs
 
 ---
 
-## 🏆 MeshPay-Nostr vs Concurrence
+## Tech stack
 
-| Feature | MeshPay-Nostr | Signal | Telegram | OpenBazaar |
-|---------|--------------|--------|----------|------------|
-| **Sans serveur** | ✅ P2P | ❌ Centralisé | ❌ Centralisé | ⚠️ |
-| **Sans internet** | ✅ LoRa | ❌ | ❌ | ❌ |
-| **Identité Bitcoin** | ✅ | ❌ | ❌ | ❌ |
-| **Wallet intégré** | ✅ Cashu+LN | ❌ | ❌ | ⚠️ |
-| **Marketplace P2P** | ✅ NIP-15 | ❌ | ❌ | ✅ |
-| **Commerce hors-ligne** | ✅ LoRa | ❌ | ❌ | ❌ |
-| **Réputation on-chain** | ✅ NIP-1985 | ❌ | ❌ | ⚠️ |
-| **Censure-résistant** | ✅ | ⚠️ | ❌ | ⚠️ |
-
----
-
-## ⚡ État Actuel (Mars 2026)
-
-### ✅ v3.0.7 — MARKETPLACE + BLE HARDENED
-
-| Module | Status |
-|--------|--------|
-| Messagerie P2P (LoRa/BLE) | ✅ 100% |
-| Chiffrement NIP-44 (ChaCha20-Poly1305) | ✅ 100% |
-| Forums privés PSK 256 bits | ✅ 100% |
-| Identité BIP-85 (Bitcoin/Nostr/Mesh) | ✅ 100% |
-| Wallet Cashu complet | ✅ 100% |
-| Gift Wrap NIP-17 | ✅ 100% |
-| GPS Radar | ✅ 100% |
-| Multi-hop routing | ✅ 100% |
-| **Marketplace NIP-15 (Shop tab)** | ✅ **NEW** |
-| **Commerce LoRa local (SHOP: prefix)** | ✅ **NEW** |
-| **Checkout Cashu/LN/onchain** | ✅ **NEW** |
-| **Réputation NIP-1985** | ✅ **NEW** |
-| **Notifications push (shop_orders/reviews)** | ✅ **NEW** |
-| **Fix BLE battery (uint16 mv)** | ✅ **Fixed** |
-| **Fix parseStats CORE/RADIO/PACKETS** | ✅ **Fixed** |
-| **Fix LoRa Settings (fréq/SF/TX réels)** | ✅ **Fixed** |
+| Area | Choice |
+|------|--------|
+| Framework | Expo SDK 54, React Native 0.81, React 19 |
+| Router | `expo-router` v6 |
+| State | Zustand 5 (wallet, settings, UI) + a few legacy Context providers |
+| Crypto | `@noble/curves`, `@noble/ciphers`, `@noble/hashes`, `@scure/bip32`, `@scure/bip39`, `secp256k1`, `bitcoinjs-lib` |
+| Nostr | `nostr-tools` 2.x |
+| BLE | `react-native-ble-manager` + `react-native-ble-plx` (MeshCore Companion protocol) |
+| USB serial | `react-native-usb-serialport-for-android` (alternative to BLE for desktop testing) |
+| Tests | Jest + `jest-expo` (701 tests across 24 suites at last commit) |
+| Build / OTA | EAS Build + `expo-updates` (OTA disabled in practice — release via APK tags) |
 
 ---
 
-## 🔒 Sécurité — Audit Cypherpunk
+## Hardware (optional but required for offline mode)
 
-### Corrections appliquées (v2.7)
+To use the LoRa mesh, you need a **MeshCore-compatible BLE companion device**
+— typically an ESP32 + SX1262 board flashed with the [MeshCore firmware](https://github.com/meshcore-dev/MeshCore).
 
-| Composant | Correction |
-|-----------|------------|
-| `nostr-client.ts` | **NIP-44 v2** — ChaCha20-Poly1305 + HKDF + padding |
-| `encryption.ts` | `generateForumKey()` — PSK 256 bits aléatoire |
-| `identity.ts` | **BIP-85** — seeds enfants isolés par domaine |
-| `cashu.ts` | Rejection sampling + `crypto.getRandomValues` + HTTPS forcé |
-| `bitcoin-tx.ts` | Clés privées effacées (`fill(0)`) dans `finally` |
-| `BitcoinProvider.ts` | Mutex `isSendingRef` anti-TOCTOU |
-| `mempool.ts` | Sanity check frais — plafond 1 000 sat/vB |
-
-### TODO — Améliorations futures
-
-- **[ ] Forward secrecy DMs** — Ratchet ECDH éphémère par message
-- **[ ] BigInt non-zéroable** (`cashu.ts`) — Refactoriser blinding factor en `Uint8Array`
-- **[ ] Mnémonique en React state** — Déverrouillage biométrique natif
-- **[ ] Mode strict DLEQ** — Rejeter proofs sans DLEQ (NUT-12)
-- **[ ] Passphrase BIP39** — Support 25e mot à l'import/génération
-- **[ ] Relay Tor/i2p** — Masquer IPs et métadonnées de connexion
-- **[ ] Timestamp noise** — Quantifier `created_at` à la minute
+The app speaks the MeshCore Companion BLE protocol (Nordic UART service,
+`6E400001-…`). Without a device, only the Nostr (online) transport is
+available.
 
 ---
 
-## 📦 Installation
+## Install (end user)
+
+The Android APK is published as GitHub releases.
 
 ```bash
-# Télécharger la dernière release
-wget https://github.com/Silexperience210/MeshPay-Nostr/releases/latest/download/MeshPay-Nostr.apk
-
-# Installer via ADB
+# Latest release
 adb install MeshPay-Nostr.apk
 ```
 
----
+Releases live at `https://github.com/Silexperience210/MeshPay-Nostr/releases`.
 
-## 🚀 Utilisation Rapide
-
-### 1. Créer son identité
-```
-Settings → Wallet → Generate 12 Words
-```
-Votre NodeId MESH-XXXX est automatiquement créé.
-
-### 2. Rejoindre un forum
-```
-Messages → + → Discover → Sélectionner un forum
-```
-
-### 3. Ouvrir la marketplace
-```
-Onglet Shop → Browse produits Nostr & LoRa locaux
-```
-
-### 4. Vendre un produit
-```
-Shop → Ma boutique → + Produit → Publier sur Nostr ou Broadcaster en LoRa
-```
-
-### 5. Acheter et payer
-```
-Shop → Sélectionner produit → Checkout → Cashu / Lightning / Bitcoin
-```
-
-### 6. Recevoir/envoyer Cashu
-```
-Messages → Attacher token → ou Wallet → Melt
-```
+> iOS is configured in `app.json` but is not actively built or tested.
+> There is no `ios/` native directory in the repo.
 
 ---
 
-## 💝 Soutenir MeshPay
+## Develop
 
-**Cashu:** `silexperience@minibits.cash`
-
-Vos dons financent le développement open-source.
-
----
-
-## 🏛️ Architecture - Hermès Engine v2.0
-
-MeshPay-Nostr utilise désormais **Hermès Engine**, une architecture event-sourced qui remplace progressivement les React Contexts traditionnels.
-
-### Pourquoi Hermès ?
-
-| Avantages | Description |
-|-----------|-------------|
-| **Performance** | Plus de re-renders inutiles des Context Providers |
-| **Testabilité** | Event-sourced = tests déterministes |
-| **Débogage** | Time-travel debugging avec EventStore |
-| **Extensibilité** | Ajouter un transport = 1 adapter |
-
-### Migration en cours
-
-- **v3.3.0** (actuel): Providers legacy marqués `@deprecated`
-- **v3.4.0**: Warnings dans la console en dev
-- **v4.0.0**: Suppression des providers legacy
-
-### Utilisation rapide
-
-```tsx
-import { useNostrHermes, useMessages, useGateway } from '@/engine/hooks';
-
-function MyComponent() {
-  // Nostr
-  const { isConnected, publicKey, publishDM } = useNostrHermes();
-  
-  // Messages
-  const { conversations, sendDM } = useMessages();
-  
-  // Gateway
-  const { status, startGateway, stats } = useGateway();
-  
-  // ...
-}
+```bash
+bun install
+bun start            # Expo dev server
+bun run android      # build + install debug APK on a connected device
+bun test             # jest
+npx tsc --noEmit     # typecheck
 ```
 
-📖 **[Guide de migration complet](./MIGRATION_GUIDE.md)**
+The CI workflow `.github/workflows/android-build.yml` builds a release APK
+when a tag matching `apk-*` is pushed. There is no auto-deploy on push.
 
 ---
 
-## 📜 Licence
+## Architecture
 
-MIT License — Voir [LICENSE](./LICENSE)
+### Hermès Engine
+
+`engine/HermesEngine.ts` is an event-sourced bus. Two protocol adapters plug
+into it:
+
+- `engine/adapters/NostrAdapter.ts` — wraps `nostr-tools` and emits
+  `DM_RECEIVED`, `CHANNEL_MSG_RECEIVED`, `BRIDGE_*` events
+- `engine/adapters/LoRaAdapter.ts` — wraps the MeshCore BLE client and does
+  the same for LoRa traffic
+
+A `GatewayManager` (`engine/gateway/`) handles auto-bridging between the two
+when both adapters are connected.
+
+A `UnifiedIdentityManager` (`engine/identity/`) creates the BIP-85 derived
+seeds when the wallet is first generated.
+
+The legacy Context providers under `providers/` are still in use for
+some screens — migration to Hermès is gradual.
+
+### Stores (Zustand)
+
+- `stores/walletStore.ts` — mnemonic + derived addresses, persisted in
+  SecureStore. Hydration is async; consumers should wait for `_hasHydrated`.
+- `stores/settingsStore.ts` — connection mode, language, mempool URL,
+  Cashu mint, Nostr relay list. Persisted in AsyncStorage.
+
+### Where the code lives
+
+```
+app/            Expo Router screens (tabs, onboarding, identity-setup)
+components/     Modals + reusable UI
+engine/         Hermès bus, adapters, identity, gateway, services
+providers/      Legacy React Context wrappers (some still in use)
+services/       Background BLE, ACK, chunking, retry, migration
+stores/         Zustand stores (wallet, settings, UI)
+utils/          Crypto, BIP39, NIP-04/17/44, Cashu, mempool, MeshCore protocol
+locales/        i18n (en/fr/es)
+```
 
 ---
 
-<div align="center">
+## Security
 
-**Fait avec ❤️ par la communauté MeshPay-Nostr**
+What is in place today:
 
-[⭐ Star ce repo](https://github.com/Silexperience210/MeshPay-Nostr) • [🐛 Signaler un bug](https://github.com/Silexperience210/MeshPay-Nostr/issues)
+- **Mnemonic at rest** in `expo-secure-store` (Android Keystore / iOS Keychain)
+- **NIP-44 v2** (ChaCha20-Poly1305 + HKDF + length padding) for Nostr DMs
+- **NIP-17 Gift Wrap** for sealed-sender DMs (sender pubkey + timestamp hidden)
+- **BIP-85 domain isolation** between Bitcoin / Nostr / MeshCore identities
+- **Forum PSK** — 256-bit random key for private LoRa channels, shared via
+  encrypted DM
+- **Mnemonic validation before signing** — `validateMnemonic()` is called
+  before any Bitcoin transaction is signed (prevents fund loss on a corrupted
+  seed)
+- **wss:// only** for custom Nostr relays (rejects plaintext `ws://`)
+- **Fee sanity cap** at 1000 sat/vB to block fee-grief attacks
+- **Send mutex** (`isSendingRef`) to prevent two concurrent transactions
+  spending the same UTXOs
 
-</div>
+What is **not** done yet (PRs welcome):
+
+- No forward secrecy on DMs (no per-message ECDH ratchet)
+- No biometric unlock — the mnemonic is decrypted as soon as the app starts
+- No Tor / i2p relay for IP metadata
+- No timestamp quantization on outgoing Nostr events
+- Strict-DLEQ mode for Cashu is not enforced (proofs without DLEQ are accepted)
+
+---
+
+## Limitations
+
+- **Mainnet only.** A `bitcoinNetwork` setting exists in the store but the
+  derivation paths and address generation are hardcoded to mainnet. The UI
+  toggle for Testnet was removed in the latest audit because it had no effect.
+- **OTA updates are configured but unreliable.** Ship by pushing an `apk-*`
+  tag and distributing the APK from the GitHub release.
+- **Marketplace (Shop tab) is functional but young.** It publishes NIP-15
+  stalls (kind:30017) and products (kind:30018), accepts Cashu / Lightning /
+  on-chain checkout, and supports NIP-1985 reviews — but none of this has
+  been load-tested with real merchants.
+- **Multi-hop LoRa range depends entirely on the hardware.** The "5–20 km"
+  number you see in older docs assumes line-of-sight + high-gain antennas.
+  In practice it's whatever your ESP32 board + antenna can reach.
+- **No iOS build.** The app.json declares iOS keys but `ios/` doesn't exist
+  in the repo and there is no iOS workflow in CI.
+- **The `nostrClient.subscribeChannel('*', ...)` handler in NostrAdapter
+  is broad** — every channel message hits the engine. Filter by channel ID
+  before broadcasting to UI for production use.
+
+---
+
+## Tests
+
+```bash
+bun test
+```
+
+Last verified: **701 / 701 passing across 24 suites** (commit `2b1dd2a`).
+
+Coverage is concentrated in:
+
+- `engine/__tests__/unit/` — Hermès engine, adapters, EventStore,
+  deduplication, gateway, message service, unified identity
+- `engine/__tests__/integration/` — bridge LoRa↔Nostr, double-write
+- `utils/__tests__/` — BIP39 / wallet / Bitcoin tx, NIP-17, Nostr client,
+  channels, presence, Cashu, tx-relay, messaging-bus
+
+UI components and Expo Router screens are not covered by Jest — manual
+testing required.
+
+---
+
+## Donations
+
+If this is useful to you:
+
+- **Cashu (Lightning):** `silexperience@minibits.cash`
+
+---
+
+## License
+
+No `LICENSE` file is present in the repo at the time of writing. Until one is
+added, treat this code as **all rights reserved** by the author. If you intend
+to fork, distribute, or build commercially on top of it, open an issue first.
+
+---
+
+## Contributing
+
+Bug reports and PRs are welcome at
+[github.com/Silexperience210/MeshPay-Nostr/issues](https://github.com/Silexperience210/MeshPay-Nostr/issues).
+
+When opening a PR, please run before pushing:
+
+```bash
+npx tsc --noEmit
+bun test
+```
