@@ -409,7 +409,36 @@ export class BleGatewayClient {
     // ── 4. Bonding EXPLICITE (dialogue PIN Android) ──
     await this.createBondExplicit(deviceId, 60000);
 
-    // ── 5. Activer notifications RX (Device → App) avec retry ──
+    // ── 4b. Re-découverte APRÈS bond ─────────────────────────────────
+    // Bug Android classique : createBond invalide le cache de services GATT ;
+    // les handles découverts avant le bond peuvent être obsolètes. Sur Xiaomi
+    // HyperOS (Android 16) on observe que startNotification() « réussit »
+    // mais les notifications RX ne reviennent jamais — le CCCD est écrit sur
+    // un handle périmé. Rediscovery post-bond est obligatoire.
+    try {
+      await BleManager.retrieveServices(deviceId);
+      if (__DEV__) console.log('[BleGateway] Services re-discovered after bond');
+    } catch (e) {
+      console.warn('[BleGateway] Post-bond rediscovery failed (continuing):', e);
+    }
+
+    // ── 5a. Listener AVANT startNotification ──
+    // Si on l'attachait après, certaines piles BLE OEM livrent une première
+    // notification entre les deux lignes et on la perd.
+    notifListener = this.emitter.addListener(
+      'BleManagerDidUpdateValueForCharacteristic',
+      (data: any) => {
+        if (data.peripheral !== deviceId) return;
+        // react-native-ble-manager peut retourner UUID court ('6e400003') ou complet
+        const charLower = (data.characteristic || '').toLowerCase();
+        if (!charLower.startsWith('6e400003')) return;
+        this.handleFrame(new Uint8Array(data.value));
+      }
+    );
+    this.listeners.push(notifListener);
+    notifListener = null; // Transféré au tableau listeners
+
+    // ── 5b. Activer notifications RX (Device → App) avec retry ──
     let notifySet = false;
     for (let attempt = 0; attempt < 3 && !notifySet; attempt++) {
       try {
@@ -423,20 +452,6 @@ export class BleGatewayClient {
         if (attempt === 2) throw e;
       }
     }
-
-    // Écouter les trames entrantes
-    notifListener = this.emitter.addListener(
-      'BleManagerDidUpdateValueForCharacteristic',
-      (data: any) => {
-        if (data.peripheral !== deviceId) return;
-        // react-native-ble-manager peut retourner UUID court ('6e400003') ou complet
-        const charLower = (data.characteristic || '').toLowerCase();
-        if (!charLower.startsWith('6e400003')) return;
-        this.handleFrame(new Uint8Array(data.value));
-      }
-    );
-    this.listeners.push(notifListener);
-    notifListener = null; // Transféré au tableau listeners
 
     // Écouter déconnexion
     discListener = this.emitter.addListener(
