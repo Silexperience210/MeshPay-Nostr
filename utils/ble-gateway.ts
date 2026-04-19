@@ -425,12 +425,22 @@ export class BleGatewayClient {
     // ── 5a. Listener AVANT startNotification ──
     // Si on l'attachait après, certaines piles BLE OEM livrent une première
     // notification entre les deux lignes et on la perd.
+    // En release on log quand même les premières trames reçues (sans __DEV__)
+    // pour diagnostiquer les cas "device connecté mais app muette" — comme
+    // observé avec MeshCore v1.13 sur Xiaomi Redmi / Android 16.
+    let framesReceivedCount = 0;
     notifListener = this.emitter.addListener(
       'BleManagerDidUpdateValueForCharacteristic',
       (data: any) => {
         if (data.peripheral !== deviceId) return;
-        // react-native-ble-manager peut retourner UUID court ('6e400003') ou complet
-        const charLower = (data.characteristic || '').toLowerCase();
+        const rawChar = data.characteristic || '';
+        const charLower = rawChar.toLowerCase();
+        // Log les 2 premières trames reçues pour prouver que les notifications
+        // passent bien. Filtre ensuite par UUID RX (6e400003).
+        if (framesReceivedCount < 2) {
+          framesReceivedCount++;
+          console.log(`[BleGateway] RX event #${framesReceivedCount} char=${rawChar} bytes=${data.value?.length ?? 0}`);
+        }
         if (!charLower.startsWith('6e400003')) return;
         this.handleFrame(new Uint8Array(data.value));
       }
@@ -439,16 +449,25 @@ export class BleGatewayClient {
     notifListener = null; // Transféré au tableau listeners
 
     // ── 5b. Activer notifications RX (Device → App) avec retry ──
+    // Sur Android 14+ (surtout Xiaomi HyperOS) startNotification() peut
+    // retourner success sans écrire le descripteur CCCD (bug
+    // react-native-ble-manager connu). startNotificationUseBuffer force
+    // l'écriture du CCCD et est utilisé en fallback.
     let notifySet = false;
     for (let attempt = 0; attempt < 3 && !notifySet; attempt++) {
       try {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * attempt));
-        await BleManager.startNotification(deviceId, SERVICE_UUID, RX_UUID);
+        if (attempt === 2 && typeof (BleManager as any).startNotificationUseBuffer === 'function') {
+          await (BleManager as any).startNotificationUseBuffer(deviceId, SERVICE_UUID, RX_UUID, 128);
+          console.log('[BleGateway] Notifications activées via startNotificationUseBuffer (fallback)');
+        } else {
+          await BleManager.startNotification(deviceId, SERVICE_UUID, RX_UUID);
+          console.log(`[BleGateway] Notifications activées (tentative ${attempt + 1})`);
+        }
         notifySet = true;
-        console.log(`[BleGateway] Notifications activées (tentative ${attempt + 1})`);
         await new Promise((r) => setTimeout(r, 300));
       } catch (e) {
-        console.log(`[BleGateway] startNotification ${attempt + 1}/3 échoué`);
+        console.log(`[BleGateway] startNotification ${attempt + 1}/3 échoué:`, e);
         if (attempt === 2) throw e;
       }
     }
