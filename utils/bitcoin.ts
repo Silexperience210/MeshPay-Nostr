@@ -65,9 +65,33 @@ export function validateMnemonic(mnemonic: string): boolean {
   return valid;
 }
 
+// Cache du résultat de PBKDF2 (2048 itérations HMAC-SHA512) — pur JS coûteux.
+// Appelé par BIP32 (Bitcoin), BIP85 (Nostr + MeshCore) et la dérivation identité,
+// soit 4+ fois à chaque lancement avec la même entrée. Mesuré ~12s / appel sur
+// un émulateur software. Clé = mnemonic + "\x00" + passphrase ; taille max = 4
+// pour couvrir simultanément mnemonic vide, mnemonic actif, avec/sans passphrase.
+const SEED_CACHE_MAX = 4;
+const seedCache = new Map<string, Uint8Array>();
+
 export function mnemonicToSeed(mnemonic: string, passphrase?: string): Uint8Array {
-  console.log('[Bitcoin] Deriving seed from mnemonic...');
-  return bip39.mnemonicToSeedSync(mnemonic, passphrase);
+  const key = `${mnemonic}\x00${passphrase ?? ''}`;
+  const cached = seedCache.get(key);
+  if (cached) return cached;
+
+  if (__DEV__) console.log('[Bitcoin] Deriving seed from mnemonic...');
+  const seed = bip39.mnemonicToSeedSync(mnemonic, passphrase);
+
+  if (seedCache.size >= SEED_CACHE_MAX) {
+    const firstKey = seedCache.keys().next().value;
+    if (firstKey) seedCache.delete(firstKey);
+  }
+  seedCache.set(key, seed);
+  return seed;
+}
+
+/** Vide le cache des seeds dérivées — à appeler lors d'un deleteWallet/logout. */
+export function clearSeedCache(): void {
+  seedCache.clear();
 }
 
 export function entropyToMnemonic(entropy: Uint8Array): string {

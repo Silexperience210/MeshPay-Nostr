@@ -326,6 +326,11 @@ export const useWalletStore = create<WalletState>()(
           await SecureStore.deleteItemAsync(WALLET_INITIALIZED_KEY);
           await AsyncStorage.removeItem(MNEMONIC_KEY);
           await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
+
+          // Vider le cache de seeds dérivées pour ne pas garder l'ancien
+          // mnemonic → seed en mémoire après suppression.
+          const btc = await loadBitcoinModule();
+          btc?.clearSeedCache?.();
           
           set({
             mnemonic: null,
