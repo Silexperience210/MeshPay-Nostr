@@ -267,10 +267,14 @@ export class NostrClient {
       }, CONNECT_TIMEOUT_MS);
 
       try {
+        // NB: `onevent` est obligatoire même si on ne consomme pas l'event,
+        // sinon nostr-tools log "onevent() callback not defined for subscription".
+        // On utilise ce sub uniquement comme handshake WS ; on ferme dès l'EOSE.
         const sub = this.pool.subscribeMany(
           this.relayUrls,
           { kinds: [Kind.Text], limit: 1 },
           {
+            onevent: () => { /* ping handshake — on ignore le payload */ },
             oneose: () => {
               clearTimeout(timeout);
               for (const url of this.relayUrls) {

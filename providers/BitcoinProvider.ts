@@ -27,6 +27,29 @@ export interface BitcoinTransaction {
   fee?: number;
 }
 
+/**
+ * Exécute des tâches asynchrones en limitant la concurrence.
+ * mempool.space et blockstream renvoient 429 au-delà de ~5-10 reqs simultanées —
+ * ce pool tient la concurrence basse pour éviter le rate-limit.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 export interface BitcoinState {
   balance: number;
   unconfirmedBalance: number;
@@ -80,11 +103,17 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
       const allAddresses = [...receiveAddresses, ...changeAddresses];
       console.log('[Bitcoin] Sync', allAddresses.length, 'adresses (', receiveAddresses.length, 'receive +', changeAddresses.length, 'change)...');
 
+      // Concurrency 4 pour éviter le rate-limit 429 (10 addrs × 3 endpoints = 30
+      // calls, en parallèle c'est garanti 429 sur mempool.space). On sérialise
+      // par petits lots.
+      const CONC = 4;
       const [balancesData, utxosData, feesData, txsPerAddr] = await Promise.all([
-        Promise.all(allAddresses.map(addr => getAddressBalance(addr))),
-        Promise.all(allAddresses.map(addr => getAddressUtxos(addr))),
+        mapWithConcurrency(allAddresses, CONC, (addr) => getAddressBalance(addr)),
+        mapWithConcurrency(allAddresses, CONC, (addr) => getAddressUtxos(addr)),
         getFeeEstimates(),
-        Promise.all(allAddresses.map(addr => getAddressTransactions(addr).catch(() => [] as any[]))),
+        mapWithConcurrency(allAddresses, CONC, (addr) =>
+          getAddressTransactions(addr).catch(() => [] as any[]),
+        ),
       ]);
 
       const totalConfirmed = balancesData.reduce((sum, b) => sum + b.confirmed, 0);
