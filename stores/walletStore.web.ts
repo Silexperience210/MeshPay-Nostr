@@ -1,6 +1,14 @@
 /**
- * Wallet Store (Web) - Version web avec localStorage
- * Remplace WalletSeedProvider.web
+ * Wallet Store (Web) — persistance SESSION-ONLY.
+ *
+ * Le web n'a pas d'équivalent SecureStore / Keystore. Écrire la seed BIP39
+ * en clair dans `sessionStorage` l'exposerait à tout script tiers (XSS, ext.
+ * navigateur, dev tools d'un autre profil OS).
+ *
+ * Contrainte de sécurité retenue : utiliser `sessionStorage` à la place.
+ * Le wallet reste utilisable pendant la session de l'onglet mais disparaît
+ * à la fermeture. Pour une persistance durable, l'utilisateur doit passer
+ * par l'app mobile (Android / iOS) qui chiffre via le Keystore natif.
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -74,12 +82,12 @@ export const useWalletStore = create<WalletState>()(
 
         try {
           const newMnemonic = generateMnemonic(strength);
-          console.log('[WalletStore-Web] Mnemonic generated, saving to localStorage...');
+          console.log('[WalletStore-Web] Mnemonic generated, saving to sessionStorage...');
           
-          localStorage.setItem(MNEMONIC_KEY, newMnemonic);
-          localStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
+          sessionStorage.setItem(MNEMONIC_KEY, newMnemonic);
+          sessionStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
           
-          console.log('[WalletStore-Web] Saved to localStorage');
+          console.log('[WalletStore-Web] Saved to sessionStorage');
           
           get()._setWalletData(newMnemonic);
           console.log('[WalletStore-Web] Wallet initialized successfully');
@@ -108,9 +116,9 @@ export const useWalletStore = create<WalletState>()(
             throw new Error(`Longueur invalide : ${wordCount} mots (12 ou 24 requis)`);
           }
           
-          localStorage.setItem(MNEMONIC_KEY, trimmed);
-          localStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
-          console.log('[WalletStore-Web] Imported wallet saved to localStorage');
+          sessionStorage.setItem(MNEMONIC_KEY, trimmed);
+          sessionStorage.setItem(WALLET_INITIALIZED_KEY, 'true');
+          console.log('[WalletStore-Web] Imported wallet saved to sessionStorage');
           
           get()._setWalletData(trimmed);
         } catch (error: any) {
@@ -125,8 +133,8 @@ export const useWalletStore = create<WalletState>()(
       deleteWallet: async () => {
         console.log('[WalletStore-Web] Deleting wallet...');
         try {
-          localStorage.removeItem(MNEMONIC_KEY);
-          localStorage.removeItem(WALLET_INITIALIZED_KEY);
+          sessionStorage.removeItem(MNEMONIC_KEY);
+          sessionStorage.removeItem(WALLET_INITIALIZED_KEY);
           console.log('[WalletStore-Web] Wallet deleted');
           
           get()._clearWalletData();
@@ -177,7 +185,7 @@ export const useWalletStore = create<WalletState>()(
     }),
     {
       name: 'wallet-storage-web',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => sessionStorage),
       onRehydrateStorage: () => (state, error) => {
         console.log('[WalletStore-Web] Rehydrated from storage', { hasState: !!state, error });
         // FIX: Toujours marquer comme hydraté pour éviter le freeze

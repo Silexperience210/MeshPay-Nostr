@@ -307,14 +307,17 @@ export class NostrAdapter implements ProtocolAdapter {
   }
 
   private handleIncomingTxRelay(payload: any, nostrEvent: NostrEvent): void {
-    // Peut être un bridge LoRa ou une transaction Bitcoin
-    const eventType = payload.type === 'lora_relay' 
-      ? EventType.BRIDGE_NOSTR_TO_LORA
-      : EventType.BRIDGE_NOSTR_TO_LORA;
+    // On n'émet un BRIDGE_NOSTR_TO_LORA que pour les relais LoRa.
+    // Les autres payloads tx-relay (broadcast Bitcoin hors-ligne, etc.) ne
+    // doivent pas être routés vers LoRa — ils sont consommés directement par
+    // le TxRelayProvider, on les ignore ici.
+    if (payload?.type !== 'lora_relay') {
+      return;
+    }
 
     const event: HermesEvent = {
       id: this.generateHermesId(nostrEvent.id),
-      type: eventType,
+      type: EventType.BRIDGE_NOSTR_TO_LORA,
       transport: Transport.NOSTR,
       timestamp: nostrEvent.created_at * 1000,
       from: nostrEvent.pubkey,
@@ -322,7 +325,7 @@ export class NostrAdapter implements ProtocolAdapter {
       payload: {
         originalTransport: Transport.NOSTR,
         targetTransport: Transport.LORA,
-        rawPayload: payload.type === 'lora_relay' ? payload.data : JSON.stringify(payload),
+        rawPayload: payload.data,
         nostrPayload: payload,
       },
       meta: {

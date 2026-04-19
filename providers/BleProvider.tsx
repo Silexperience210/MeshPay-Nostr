@@ -248,6 +248,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         clientRef.current.disconnect().catch(console.error);
       }
       retryServiceRef.current.stop();
+      // Libérer le service background pour ne pas laisser un polling + AppState
+      // listener actifs si le Provider se démonte (hot reload, logout, etc.)
+      getBackgroundBleService().stop().catch(console.error);
     };
   }, []);
 
@@ -255,7 +258,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     if (state.connected) {
       retryServiceRef.current.start();
       getBackgroundBleService().register().catch(console.error);
-      console.log('[BleProvider] Services démarrés');
+      if (__DEV__) console.log('[BleProvider] Services démarrés');
     } else {
       retryServiceRef.current.stop();
     }
