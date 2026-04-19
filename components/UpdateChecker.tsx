@@ -68,10 +68,15 @@ export function UpdateChecker() {
         Alert.alert('À jour', 'Vous utilisez la dernière version disponible.');
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[Update] Erreur vérification:', msg);
-      // Toutes les erreurs OTA sont silencieuses (serveur non configuré, token absent, réseau)
-      // L'utilisateur voit juste "À jour" — pas d'alerte d'erreur réseau inutile
+      // Erreur OTA silencieuse : serveur non configuré (déploiement via APK tags,
+      // pas via EAS publish), token absent, ou réseau hors-ligne. On ne veut pas
+      // polluer logcat (le warn se déclenchait à chaque ouverture Settings).
+      // Si tu reconfigures EAS OTA plus tard, remets console.warn pour le
+      // diagnostic.
+      if (__DEV__) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log('[Update] Erreur vérification (silencieuse):', msg);
+      }
     } finally {
       setChecking(false);
     }

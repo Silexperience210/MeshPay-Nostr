@@ -392,7 +392,68 @@ export const fetchBtcPrice = async (_mempoolUrl?: string, currency?: string): Pr
     return currency === 'EUR' ? 82000 : 88000;
   }
 };
-export const formatTransactions = (raw: any[], addresses: string[]): any[] => raw;
+/**
+ * Transforme une liste de transactions brutes de mempool.space en
+ * FormattedTransaction consommable par l'UI.
+ *
+ * Jusqu'à v1.0.102 cette fonction renvoyait `raw` tel quel, ce qui affichait
+ * "+NaN" dans le wallet (amount/type/blockTime absents sur les objets raw).
+ *
+ * Règle d'attribution :
+ *   - received = somme des vout.value dont scriptpubkey_address appartient
+ *     à nos adresses (receive + change).
+ *   - spent    = somme des vin.prevout.value de nos propres UTXO dépensés.
+ *   - net > 0 → incoming (on reçoit)
+ *   - net < 0 → outgoing (on dépense)
+ *   - montant affiché = |net| pour que "Envoi 10k" et "Réception 10k" se lisent
+ *     symétriquement (le signe est ajouté par l'UI).
+ */
+export const formatTransactions = (raw: any[], addresses: string[]): FormattedTransaction[] => {
+  const owned = new Set(addresses);
+  const out: FormattedTransaction[] = [];
+
+  for (const tx of raw ?? []) {
+    if (!tx?.txid) continue;
+
+    const received = (tx.vout ?? []).reduce((sum: number, o: any) => {
+      const addr = o?.scriptpubkey_address;
+      const value = Number(o?.value);
+      if (addr && owned.has(addr) && Number.isFinite(value)) {
+        return sum + value;
+      }
+      return sum;
+    }, 0);
+
+    const spent = (tx.vin ?? []).reduce((sum: number, inp: any) => {
+      const addr = inp?.prevout?.scriptpubkey_address;
+      const value = Number(inp?.prevout?.value);
+      if (addr && owned.has(addr) && Number.isFinite(value)) {
+        return sum + value;
+      }
+      return sum;
+    }, 0);
+
+    const net = received - spent;
+
+    // Mempool.space status : { confirmed: bool, block_time?: number }
+    const status = tx.status ?? {};
+    const confirmed = !!status.confirmed;
+    const blockTime = typeof status.block_time === 'number' ? status.block_time : undefined;
+
+    out.push({
+      txid: String(tx.txid),
+      amount: Math.abs(net),
+      type: net >= 0 ? 'incoming' : 'outgoing',
+      confirmed,
+      timestamp: blockTime,
+      blockTime,
+      fee: typeof tx.fee === 'number' ? tx.fee : undefined,
+    });
+  }
+
+  return out;
+};
+
 export const satsToBtc = (sats: number): string => (sats / 100000000).toFixed(8);
 export const satsToFiat = (sats: number, price: number): number => (sats / 100000000) * price;
 

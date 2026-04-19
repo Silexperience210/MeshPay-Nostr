@@ -15,6 +15,9 @@ export function formatTime(timestamp: number): string {
 }
 
 export function formatSats(sats: number): string {
+  // Guard : si la source a renvoyé undefined/null/string non numérique,
+  // on affiche 0 au lieu du visuel "+NaN" observé live.
+  if (!Number.isFinite(sats)) return '0';
   if (sats >= 1000000) return `${(sats / 1000000).toFixed(2)}M`;
   if (sats >= 1000) return sats.toLocaleString();
   return sats.toString();
