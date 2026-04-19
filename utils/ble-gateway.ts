@@ -461,14 +461,23 @@ export class BleGatewayClient {
     await this.sendAppStart();
     this.scheduleSelfInfoRetry();
 
-    // Attendre SelfInfo (3s) + retry si non reçu
+    // Attendre SelfInfo (3s) + une relance manuelle, puis arrêter explicitement
+    // la boucle de retry (sinon scheduleSelfInfoRetry continue jusqu'au cap).
     const gotSelfInfo = await this.waitForSelfInfo(3000);
     if (!gotSelfInfo) {
-      console.log('[BleGateway] SelfInfo non reçu — retry...');
+      console.log('[BleGateway] SelfInfo non reçu après 3s — relance manuelle...');
       await this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION]));
       await this.sendAppStart();
-      await this.waitForSelfInfo(4000);
+      const gotRetry = await this.waitForSelfInfo(4000);
+      if (!gotRetry) {
+        console.warn('[BleGateway] SelfInfo toujours absent après relance — firmware incompatible ?');
+        this.awaitingSelfInfo = false;
+        this.clearSelfInfoRetry();
+        throw new Error('MeshCore handshake failed: SelfInfo not received (firmware unresponsive)');
+      }
     }
+    // Handshake réussi — arrêter la boucle interval de retry en filet de sécurité.
+    this.clearSelfInfoRetry();
 
     // ── 7. Post-connexion ──
     // Configurer canal 0 (public) pour recevoir les broadcasts
@@ -582,15 +591,45 @@ export class BleGatewayClient {
     console.log('[BleGateway] AppStart envoyé (v' + APP_PROTOCOL_VERSION + ')');
   }
 
+  // Cap le retry SelfInfo : sinon un firmware MeshCore silencieux
+  // (version mismatch, device en mode autre, corruption) provoque un flood
+  // infini de re-envois AppStart toutes les 3.5s. Observé live : 40+ retries
+  // en < 3 min, drainant la batterie et spammant le log.
+  private static readonly SELF_INFO_MAX_RETRIES = 3;
+  private selfInfoRetryCount = 0;
+
   private scheduleSelfInfoRetry(): void {
     this.clearSelfInfoRetry();
+    this.selfInfoRetryCount = 0;
     this.selfInfoRetryTimer = setInterval(async () => {
       if (!this.connectedId || !this.awaitingSelfInfo) {
         this.clearSelfInfoRetry();
         return;
       }
-      console.log('[BleGateway] SelfInfo retry — re-envoi AppStart...');
-      this.sendAppStart().catch((e) => console.warn('[BleGateway] sendAppStart retry failed:', e));
+      if (this.selfInfoRetryCount >= BleGatewayClient.SELF_INFO_MAX_RETRIES) {
+        console.warn(
+          `[BleGateway] SelfInfo: ${BleGatewayClient.SELF_INFO_MAX_RETRIES} retries épuisés — handshake abandonné`,
+        );
+        this.awaitingSelfInfo = false;
+        this.clearSelfInfoRetry();
+        // Déconnecter pour que l'UI propose un rescan/retry manuel au lieu de
+        // laisser l'utilisateur devant une connexion fantôme.
+        if (this.connectedId) {
+          BleManager.disconnect(this.connectedId).catch(() => { /* cleanup: ignore */ });
+          this.connectedId = null;
+          this.disconnectCallback?.();
+        }
+        return;
+      }
+      this.selfInfoRetryCount++;
+      if (__DEV__) {
+        console.log(
+          `[BleGateway] SelfInfo retry ${this.selfInfoRetryCount}/${BleGatewayClient.SELF_INFO_MAX_RETRIES} — re-envoi AppStart...`,
+        );
+      }
+      this.sendAppStart().catch((e) =>
+        console.warn('[BleGateway] sendAppStart retry failed:', e),
+      );
     }, 3500);
   }
 
@@ -599,6 +638,7 @@ export class BleGatewayClient {
       clearInterval(this.selfInfoRetryTimer);
       this.selfInfoRetryTimer = null;
     }
+    this.selfInfoRetryCount = 0;
   }
 
   private waitForSelfInfo(timeoutMs: number): Promise<boolean> {

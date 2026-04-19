@@ -132,21 +132,48 @@ export default function GatewayScanModal({ visible, onClose }: GatewayScanModalP
 
       const found: Map<string, BleGatewayDevice> = new Map();
 
+      // Sur certains OEM (Xiaomi notamment) `allowDuplicates: false` n'est pas
+      // respecté — le même device ressort à chaque scan window. On déduplique
+      // strictement par id et on ne met à jour le state/log que si une donnée
+      // utile (nom ou RSSI significativement meilleur) a changé.
+      const RSSI_CHANGE_THRESHOLD = 10; // ne rafraîchit pas pour ±10 dBm
       const reportDevice = (dev: any) => {
         if (!dev?.id) return;
         const name: string = dev.name || dev.advertising?.localName || dev.localName || '';
-        const displayName = name || `BLE ${dev.id.slice(-5)}`;
-        if (!found.has(dev.id) || name) { // mise à jour si on récupère le nom
+        const rssi: number = typeof dev.rssi === 'number' ? dev.rssi : -100;
+
+        const existing = found.get(dev.id);
+        const displayName = name || existing?.name || `BLE ${dev.id.slice(-5)}`;
+
+        // Premier hit → on ajoute et on log.
+        if (!existing) {
           found.set(dev.id, {
             id: dev.id,
             name: displayName,
-            rssi: dev.rssi || -100,
+            rssi,
             type: detectDeviceType(displayName),
           });
           if (isMountedRef.current) {
             setLocalDevices(Array.from(found.values()).sort((a, b) => b.rssi - a.rssi));
           }
-          console.log('📱 TROUVÉ:', displayName, dev.id, dev.rssi);
+          console.log('📱 TROUVÉ:', displayName, dev.id, rssi);
+          return;
+        }
+
+        // Hit suivant — ne met à jour que si le nom est nouveau ou si le RSSI
+        // bouge franchement. Évite le re-render à chaque window de scan.
+        const nameChanged = !!name && name !== existing.name;
+        const rssiChanged = Math.abs(rssi - existing.rssi) >= RSSI_CHANGE_THRESHOLD;
+        if (!nameChanged && !rssiChanged) return;
+
+        found.set(dev.id, {
+          ...existing,
+          name: nameChanged ? name : existing.name,
+          rssi: rssiChanged ? rssi : existing.rssi,
+          type: detectDeviceType(nameChanged ? name : existing.name),
+        });
+        if (isMountedRef.current) {
+          setLocalDevices(Array.from(found.values()).sort((a, b) => b.rssi - a.rssi));
         }
       };
 
