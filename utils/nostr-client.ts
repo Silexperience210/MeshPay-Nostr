@@ -28,11 +28,9 @@ import {
 } from 'nostr-tools';
 import { SimplePool } from 'nostr-tools/pool';
 import { nip19 } from 'nostr-tools';
-// @ts-ignore — subpath exports
 import * as nip17 from 'nostr-tools/nip17';
 import { HDKey } from '@scure/bip32';
 import { secp256k1 } from '@noble/curves/secp256k1';
-// @ts-ignore — subpath exports
 import { sha256 } from '@noble/hashes/sha2.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
 
@@ -233,6 +231,17 @@ export class NostrClient {
 
   setOnStatusChange(cb: (relays: RelayInfo[]) => void): void {
     this.onStatusChange = cb;
+  }
+
+  /** Liste (lecture seule) des URLs de relais actuellement configurés. */
+  get relayList(): readonly string[] {
+    return this.relayUrls;
+  }
+
+  /** Reconnecte aux relais courants (utilise la liste déjà configurée). */
+  async reconnect(): Promise<void> {
+    this._intentionalDisconnect = false;
+    await this.connect(this.relayUrls);
   }
 
   // ── Connexion ──────────────────────────────────────────────────────────────

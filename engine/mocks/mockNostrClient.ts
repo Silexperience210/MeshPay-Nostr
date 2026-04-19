@@ -25,7 +25,7 @@ export interface MockNostrClient extends NostrClient {
   subscribeTxRelay: jest.Mock;
   
   // Utilitaires
-  reconnectRelays: jest.Mock;
+  reconnect: jest.Mock;
   
   // Helpers pour les tests
   simulateIncomingDM: (from: string, content: string, event?: Partial<NostrEvent>) => void;
@@ -155,7 +155,7 @@ export const createMockNostrClient = (): MockNostrClient => {
       };
     }),
     
-    reconnectRelays: jest.fn().mockImplementation(() => {
+    reconnect: jest.fn().mockImplementation(() => {
       mockClient.isConnected = true;
       return Promise.resolve();
     }),

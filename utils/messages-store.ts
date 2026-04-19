@@ -17,7 +17,6 @@ import {
   DBConversation,
   DBMessage,
 } from '@/utils/database';
-// @ts-ignore - subpath exports use .js extension
 import { randomBytes } from '@noble/hashes/utils.js';
 
 // Re-export des types pour compatibilité

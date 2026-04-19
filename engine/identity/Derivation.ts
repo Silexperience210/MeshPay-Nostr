@@ -10,11 +10,8 @@
  */
 
 import { HDKey } from '@scure/bip32';
-// @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
 import { ripemd160 } from '@noble/hashes/legacy.js';
-// @ts-ignore - subpath exports use .js extension
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
 import { secp256k1 } from '@noble/curves/secp256k1';

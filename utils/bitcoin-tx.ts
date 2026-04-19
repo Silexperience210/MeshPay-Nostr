@@ -6,9 +6,7 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import { HDKey } from '@scure/bip32';
 import { mnemonicToSeed, pubkeyToSegwitAddress } from '@/utils/bitcoin';
-// @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
 import { ripemd160 } from '@noble/hashes/legacy.js';
 import type { MempoolUtxo } from './mempool';
 import * as secp256k1 from 'secp256k1';

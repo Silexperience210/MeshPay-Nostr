@@ -350,7 +350,7 @@ export class NostrAdapter implements ProtocolAdapter {
       to: '*',
       payload: {
         transport: Transport.NOSTR,
-        endpoint: (this.nostr as any).relays?.map((r: any) => r.url).join(', ') || 'unknown',
+        endpoint: this.nostr.relayList?.join(', ') || 'unknown',
       },
       meta: {},
     };
@@ -364,10 +364,10 @@ export class NostrAdapter implements ProtocolAdapter {
 
   // ─── API Publique Spécifique ──────────────────────────────────────────────
 
-  /** Reconnecter aux relays */
+  /** Reconnecter aux relays (no-op si le client ne supporte pas la reconnexion) */
   async reconnect(): Promise<void> {
-    if (typeof (this.nostr as any).reconnectRelays === 'function') {
-      await (this.nostr as any).reconnectRelays();
+    if (typeof this.nostr.reconnect === 'function') {
+      await this.nostr.reconnect();
     }
   }
 

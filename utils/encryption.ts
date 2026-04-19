@@ -1,14 +1,9 @@
 // Chiffrement E2E AES-GCM-256 + ECDH secp256k1 pour messages MeshCore
-// @ts-ignore
 import { gcm } from '@noble/ciphers/aes';
-// @ts-ignore
 import { randomBytes } from '@noble/ciphers/webcrypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
-// @ts-ignore
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore
 import { hkdf } from '@noble/hashes/hkdf.js';
-// @ts-ignore
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 // hexToBytes — implémentation locale (noble/hashes ne l'exporte pas toujours)

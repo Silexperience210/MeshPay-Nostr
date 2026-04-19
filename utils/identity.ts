@@ -1,10 +1,7 @@
 // Identité MeshCore dérivée du seed Bitcoin (BIP32 m/69'/0'/0'/0)
 import { HDKey } from '@scure/bip32';
-// @ts-ignore
 import { sha256, sha512 } from '@noble/hashes/sha2.js';
-// @ts-ignore
 import { hmac } from '@noble/hashes/hmac.js';
-// @ts-ignore
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
 

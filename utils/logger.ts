@@ -11,7 +11,6 @@
  *   - Pas de fuite de secrets via les logs
  */
 
-// @ts-ignore - subpath exports use .js extension
 import { randomBytes } from '@noble/hashes/utils.js';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';

@@ -1,11 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import createContextHook from '@nkzw/create-context-hook';
-// @ts-ignore - subpath exports
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
-// @ts-ignore - subpath exports
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { gcm } from '@noble/ciphers/aes';
 import {

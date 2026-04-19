@@ -1,12 +1,8 @@
 import * as bip39 from '@scure/bip39';
-// @ts-ignore - subpath exports use .js extension
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { HDKey } from '@scure/bip32';
-// @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
 import { ripemd160 } from '@noble/hashes/legacy.js';
-// @ts-ignore - subpath exports use .js extension
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 const BIP44_BTC_PATH = "m/84'/0'/0'";

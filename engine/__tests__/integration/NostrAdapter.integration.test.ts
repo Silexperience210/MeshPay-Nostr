@@ -389,7 +389,7 @@ describe('NostrAdapter Integration', () => {
     
     it('should expose reconnect method', async () => {
       await adapter.reconnect();
-      expect(mockClient.reconnectRelays).toHaveBeenCalled();
+      expect(mockClient.reconnect).toHaveBeenCalled();
     });
     
     it('should expose publish method', async () => {

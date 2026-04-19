@@ -1,6 +1,4 @@
-// @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { logger } from '@/utils/logger';

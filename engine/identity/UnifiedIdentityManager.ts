@@ -6,13 +6,9 @@
 
 import * as SecureStore from 'expo-secure-store';
 import { InteractionManager } from 'react-native';
-// @ts-ignore - subpath exports use .js extension
 import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
-// @ts-ignore - subpath exports use .js extension
 import { pbkdf2 } from '@noble/hashes/pbkdf2.js';
-// @ts-ignore - subpath exports use .js extension
 import { sha256 } from '@noble/hashes/sha2.js';
-// @ts-ignore - subpath exports use .js extension
 import { gcm } from '@noble/ciphers/aes.js';
 import { deriveUnifiedIdentity, UnifiedIdentity, BitcoinIdentity, NostrIdentity, MeshCoreIdentity } from './Derivation';
 import { HermesEngine, hermes } from '../HermesEngine';

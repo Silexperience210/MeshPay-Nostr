@@ -279,7 +279,7 @@ export class LoRaAdapter implements ProtocolAdapter {
     if (__DEV__) console.log('[LoRaAdapter] Message reçu:', msg.type, 'de', msg.senderPubkeyPrefix?.slice(0, 16));
 
     // Dédup : ignorer les retransmissions du même msgId
-    const originalId = (msg as any).msgId ? String((msg as any).msgId) : undefined;
+    const originalId = msg.msgId ? String(msg.msgId) : undefined;
     if (originalId) {
       const now = Date.now();
       if (this.recentMsgIds.has(originalId)) return;
@@ -305,12 +305,10 @@ export class LoRaAdapter implements ProtocolAdapter {
         content = msg.text || '';
         channelName = `channel-${msg.channelIdx || 0}`;
         break;
+      case 'announce':
+        this.handleAnnounce(msg);
+        return;
       default:
-        // Traitement spécial pour les types inconnus (ex: announce)
-        if ((msg as any).type === 'announce') {
-          this.handleAnnounce(msg);
-          return;
-        }
         console.warn('[LoRaAdapter] Type de message inconnu:', msg.type);
         return;
     }
@@ -329,7 +327,7 @@ export class LoRaAdapter implements ProtocolAdapter {
         channelName,
       },
       meta: {
-        originalId: (msg as any).msgId,
+        originalId: msg.msgId,
         hops: msg.pathLen,
         snr: msg.snr,
       },
@@ -408,7 +406,7 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private generateHermesId(msg: MeshCoreIncomingMsg): string {
-    return `lora-${msg.senderPubkeyPrefix?.slice(0, 16)}-${(msg as any).msgId || `${Date.now()}-${++this._msgIdCounter}`}`;
+    return `lora-${msg.senderPubkeyPrefix?.slice(0, 16)}-${msg.msgId || `${Date.now()}-${++this._msgIdCounter}`}`;
   }
 
   private emitConnectionEvent(connected: boolean): void {

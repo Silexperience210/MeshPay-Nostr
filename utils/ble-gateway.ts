@@ -181,14 +181,17 @@ export interface MeshCoreContact {
 }
 
 export interface MeshCoreIncomingMsg {
-  type: 'direct' | 'channel';
+  /** 'announce' est émis pour les advert/beacon LoRa (pas un vrai message texte) */
+  type: 'direct' | 'channel' | 'announce';
   channelIdx?: number;
   senderPubkeyPrefix: string; // 12 hex chars, vide pour les messages canal
-  pathLen: number;
-  txtType: number;
-  timestamp: number;
-  text: string;
+  pathLen?: number;
+  txtType?: number;
+  timestamp?: number;
+  text?: string;
   snr?: number;
+  /** Identifiant optionnel fourni par le firmware MeshCore pour dedup/ACK */
+  msgId?: string;
 }
 
 export interface ChannelConfig {
