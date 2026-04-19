@@ -406,25 +406,48 @@ async function initDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_contacts_sort ON contacts(isFavorite DESC, displayName ASC);
   `);
 
-  // ✅ CORRECTION: Migrations inline dans une transaction
+  // Migrations idempotentes : chaque ALTER TABLE est tentée indépendamment.
+  // Si la colonne existe déjà, SQLite renvoie "duplicate column name" qu'on ignore.
+  // Si on groupait tout en BEGIN/COMMIT, une seule colonne déjà présente ferait
+  // échouer toute la transaction — et les nouvelles colonnes manqueraient.
+  const addColumnIfMissing = async (table: string, column: string, definition: string) => {
+    try {
+      await db!.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+      console.log(`[Database] Migration: +${table}.${column}`);
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+        console.warn(`[Database] ALTER TABLE ${table}.${column} ignored:`, msg);
+      }
+    }
+  };
+
+  // messages: colonnes media/transport ajoutées progressivement
+  await addColumnIfMissing('messages', 'audioData', 'TEXT');
+  await addColumnIfMissing('messages', 'audioDuration', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('messages', 'imageData', 'TEXT');
+  await addColumnIfMissing('messages', 'imageMime', 'TEXT');
+  await addColumnIfMissing('messages', 'transport', 'TEXT');
+
+  // pending_messages: conversation_id ajouté après v1.0.98
+  await addColumnIfMissing('pending_messages', 'conversation_id', 'TEXT');
+
+  // cashu_tokens: state / source / memo / unverified / retryCount / lastCheckAt
+  // ajoutés après la migration NUT-12 — anciennes DBs n'ont qu'id/token/proofs.
+  await addColumnIfMissing('cashu_tokens', 'state', "TEXT NOT NULL DEFAULT 'unspent'");
+  await addColumnIfMissing('cashu_tokens', 'spentAt', 'INTEGER');
+  await addColumnIfMissing('cashu_tokens', 'source', 'TEXT');
+  await addColumnIfMissing('cashu_tokens', 'memo', 'TEXT');
+  await addColumnIfMissing('cashu_tokens', 'unverified', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('cashu_tokens', 'retryCount', 'INTEGER DEFAULT 0');
+  await addColumnIfMissing('cashu_tokens', 'lastCheckAt', 'INTEGER');
+
+  // Une fois les colonnes garanties présentes, (re)créer les index qui en dépendent.
   await db.execAsync(`
-    BEGIN TRANSACTION;
-    
-    -- Migration: ajouter colonnes audio aux messages existants
-    ALTER TABLE messages ADD COLUMN audioData TEXT;
-    ALTER TABLE messages ADD COLUMN audioDuration INTEGER DEFAULT 0;
-    
-    -- Migration: colonnes image/gif
-    ALTER TABLE messages ADD COLUMN imageData TEXT;
-    ALTER TABLE messages ADD COLUMN imageMime TEXT;
-    
-    -- Migration: colonne transport (Nostr/LoRa/BLE)
-    ALTER TABLE messages ADD COLUMN transport TEXT;
-    
-    COMMIT;
-  `).catch(() => {
-    // Ignorer les erreurs si les colonnes existent déjà
-    console.log('[Database] Colonnes migrations déjà présentes ou erreur');
+    CREATE INDEX IF NOT EXISTS idx_pending_conversation ON pending_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_cashu_state ON cashu_tokens(state) WHERE state IN ('unspent', 'unverified');
+  `).catch((err) => {
+    console.warn('[Database] Post-migration index failed:', err?.message || err);
   });
 
   console.log('[Database] Tables initialisées');
