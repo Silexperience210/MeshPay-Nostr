@@ -14,13 +14,13 @@
  * ║  Device → App : [code][data...]     sur 6e400003 (TX/notify)        ║
  * ╚══════════════════════════════════════════════════════════════════════╝
  *
- * Séquence connexion :
+ * Séquence connexion (source : docs/companion_protocol.md §5 "Send Initial Commands") :
  *   1. connect() + requestMTU(185)
  *   2. retrieveServices()
  *   3. createBond() — bonding explicite PIN Android
  *   4. startNotification() sur RX (6e400003) — avec retry
- *   5. DeviceQuery  (cmd=22) [version=3]
- *   6. AppStart     (cmd=1)  → device répond SelfInfo (code=5)
+ *   5. AppStart     (cmd=1)  → device répond SelfInfo (code=5)   ← DOIT être envoyé EN PREMIER
+ *   6. DeviceQuery  (cmd=22) [version=3] → device répond DeviceInfo (code=13)
  *   7. SetTime      (cmd=6)  envoyé auto dans parseSelfInfo
  *   8. configureDefaultChannels() — canal 0 public
  *   9. getContacts() — liste tous les nœuds connus
@@ -28,7 +28,7 @@
  */
 
 import BleManager from 'react-native-ble-manager';
-import { NativeEventEmitter, NativeModules } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import {
   MESHCORE_BLE,
   type MeshCorePacket,
@@ -448,27 +448,45 @@ export class BleGatewayClient {
     this.listeners.push(notifListener);
     notifListener = null; // Transféré au tableau listeners
 
-    // ── 5b. Activer notifications RX (Device → App) avec retry ──
-    // Sur Android 14+ (surtout Xiaomi HyperOS) startNotification() peut
-    // retourner success sans écrire le descripteur CCCD (bug
-    // react-native-ble-manager connu). startNotificationUseBuffer force
-    // l'écriture du CCCD et est utilisé en fallback.
+    // ── 5b. Activer notifications RX (Device → App) ──
+    // ATTENTION : ne PAS utiliser startNotificationWithBuffer sur ce projet.
+    // MeshCore envoie des frames de taille variable (SelfInfo ~50 octets,
+    // ChannelMsg ~30 octets…). startNotificationWithBuffer(N) accumule les
+    // bytes dans un buffer côté natif et ne bridge à JS que quand il atteint
+    // exactement N octets — sinon il retourne silencieusement. Résultat :
+    // les frames courtes ne sont JAMAIS remontées, le handshake expire.
+    // (Piège observé 2026-04-20 sur Redmi/HyperOS.)
     let notifySet = false;
     for (let attempt = 0; attempt < 3 && !notifySet; attempt++) {
       try {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * attempt));
-        if (attempt === 2 && typeof (BleManager as any).startNotificationUseBuffer === 'function') {
-          await (BleManager as any).startNotificationUseBuffer(deviceId, SERVICE_UUID, RX_UUID, 128);
-          console.log('[BleGateway] Notifications activées via startNotificationUseBuffer (fallback)');
-        } else {
-          await BleManager.startNotification(deviceId, SERVICE_UUID, RX_UUID);
-          console.log(`[BleGateway] Notifications activées (tentative ${attempt + 1})`);
-        }
+        await BleManager.startNotification(deviceId, SERVICE_UUID, RX_UUID);
+        console.log(`[BleGateway] Notifications activées (tentative ${attempt + 1})`);
         notifySet = true;
         await new Promise((r) => setTimeout(r, 300));
       } catch (e) {
         console.log(`[BleGateway] startNotification ${attempt + 1}/3 échoué:`, e);
         if (attempt === 2) throw e;
+      }
+    }
+
+    // ── 5c. Belt-and-suspenders : écrire le CCCD 0x2902 nous-mêmes ──
+    // Observé sur Redmi/HyperOS/Android 16 : startNotificationWithBuffer
+    // résout "success" mais BluetoothGatt ne log aucun writeDescriptor(),
+    // donc le péripherique ne reçoit jamais le bit NOTIFY. Cet appel direct
+    // à writeDescriptor passe par un code-path différent dans ble-manager
+    // (BleManager.writeDescriptor → Peripheral.writeDescriptor) qui sur
+    // certains OEM rétablit l'écriture quand startNotification* la perd.
+    // [0x01, 0x00] = ENABLE_NOTIFICATION_VALUE (spec Bluetooth Core v4.0+).
+    if (Platform.OS === 'android') {
+      try {
+        const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
+        await (BleManager as any).writeDescriptor(
+          deviceId, SERVICE_UUID, RX_UUID, CCCD_UUID, [0x01, 0x00]
+        );
+        console.log('[BleGateway] CCCD 0x2902 écrit manuellement (0x0100)');
+      } catch (e) {
+        console.log('[BleGateway] CCCD manual write échoué (non-fatal):', e);
       }
     }
 
@@ -487,21 +505,26 @@ export class BleGatewayClient {
     discListener = null; // Transféré au tableau listeners
 
     // ── 6. Handshake MeshCore ──
+    // Ordre officiel (companion_protocol.md §5) : APP_START **puis** DEVICE_QUERY.
+    // APP_START déclenche la réponse SelfInfo qu'on attend. DEVICE_QUERY sert
+    // ensuite à négocier `app_target_ver` côté firmware (utilisé par V3 msgs).
     this.awaitingSelfInfo = true;
-    await this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION]));
-    console.log('[BleGateway] DeviceQuery envoyé');
-    await new Promise((res) => setTimeout(res, 300));
-
     await this.sendAppStart();
     this.scheduleSelfInfoRetry();
+
+    // DEVICE_QUERY peut partir en parallèle — sa réponse (DEVICE_INFO code 13)
+    // est indépendante du SelfInfo qu'on attend.
+    this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION]))
+      .then(() => console.log('[BleGateway] DeviceQuery envoyé'))
+      .catch((e) => console.warn('[BleGateway] DeviceQuery échoué:', e));
 
     // Attendre SelfInfo (3s) + une relance manuelle, puis arrêter explicitement
     // la boucle de retry (sinon scheduleSelfInfoRetry continue jusqu'au cap).
     const gotSelfInfo = await this.waitForSelfInfo(3000);
     if (!gotSelfInfo) {
       console.log('[BleGateway] SelfInfo non reçu après 3s — relance manuelle...');
-      await this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION]));
       await this.sendAppStart();
+      await this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION])).catch(() => {});
       const gotRetry = await this.waitForSelfInfo(4000);
       if (!gotRetry) {
         console.warn('[BleGateway] SelfInfo toujours absent après relance — firmware incompatible ?');
@@ -614,15 +637,19 @@ export class BleGatewayClient {
   // ── AppStart / SelfInfo retry ────────────────────────────────────
 
   private async sendAppStart(): Promise<void> {
-    // Format firmware v1.13 : payload[7+] = app_name → cmd_frame[8+]
-    // [version:1][reserved:6][app_name][null]
+    // Source de vérité : MyMesh.cpp ligne 933-937 (firmware v1.13) :
+    //   } else if (cmd_frame[0] == CMD_APP_START && len >= 8) {
+    //     //  cmd_frame[1..7]  reserved future
+    //     char *app_name = (char *)&cmd_frame[8];
+    // → Layout : [cmd:1][reserved:7][app_name:UTF-8][null-padding si besoin]
+    // Firmware exige len >= 8. app_name commence obligatoirement à cmd_frame[8].
+    // Donc payload (sans le cmd byte) doit avoir 7 bytes réservés + nom à payload[7+].
     const appNameBytes = new TextEncoder().encode('MeshPay\0');
     const payload = new Uint8Array(7 + appNameBytes.length);
-    payload[0] = APP_PROTOCOL_VERSION; // version
-    // payload[1..6] = reserved zeros (déjà 0)
+    // payload[0..6] = 7 bytes réservés (tous zéro — firmware les ignore complètement)
     payload.set(appNameBytes, 7);
     await this.sendFrame(CMD_APP_START, payload);
-    console.log('[BleGateway] AppStart envoyé (v' + APP_PROTOCOL_VERSION + ')');
+    console.log('[BleGateway] AppStart envoyé (name=MeshPay, len=' + (payload.length + 1) + 'B)');
   }
 
   // Cap le retry SelfInfo : sinon un firmware MeshCore silencieux
