@@ -118,10 +118,12 @@ describe('LoRaAdapter Integration', () => {
       
       expect(mockBle.sendDirectMessage).toHaveBeenCalledWith(
         'recipientpubkeyhex' + 'a'.repeat(20),
-        'Hello via LoRa!'
+        'Hello via LoRa!',
+        0,
+        'test-lora-dm-1' // localMsgId propagé pour mapper l'ACK firmware
       );
     });
-    
+
     it('should throw error when contact not found', async () => {
       const event: MessageEvent = {
         id: 'test-lora-dm-unknown',
@@ -158,7 +160,7 @@ describe('LoRaAdapter Integration', () => {
       
       await engine.emit(event, Transport.LORA);
       
-      expect(mockBle.sendChannelMessage).toHaveBeenCalledWith(0, 'Hello channel!');
+      expect(mockBle.sendChannelMessage).toHaveBeenCalledWith(0, 'Hello channel!', 'test-lora-channel-1');
     });
     
     it('should use correct channel index from payload', async () => {
@@ -179,7 +181,7 @@ describe('LoRaAdapter Integration', () => {
       
       await engine.emit(event, Transport.LORA);
       
-      expect(mockBle.sendChannelMessage).toHaveBeenCalledWith(5, 'Message on channel 5');
+      expect(mockBle.sendChannelMessage).toHaveBeenCalledWith(5, 'Message on channel 5', 'test-lora-channel-5');
     });
     
     it('should throw error when not connected', async () => {

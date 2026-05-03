@@ -25,6 +25,7 @@ import {
 import { type MeshCorePacket } from '@/utils/meshcore-protocol';
 import { getMessageRetryService } from '@/services/MessageRetryService';
 import { getBackgroundBleService } from '@/services/BackgroundBleService';
+import { updateMessageStatusDB, removePendingMessage } from '@/utils/database';
 
 const BLE_LAST_DEVICE_KEY = 'ble_last_device_id';
 
@@ -48,13 +49,17 @@ interface BleContextValue extends BleState {
   onPacket: (handler: (packet: MeshCorePacket) => void) => void;
   confirmLoraActive: () => void;
   // Protocole natif MeshCore Companion — messages
-  sendDirectMessage: (pubkeyHex: string, text: string) => Promise<void>;
-  sendChannelMessage: (text: string) => Promise<void>; // utilise currentChannel
+  // localMsgId : DBMessage.id, propagé jusqu'à PUSH_SEND_CONFIRMED via expected_ack
+  sendDirectMessage: (pubkeyHex: string, text: string, localMsgId?: string) => Promise<void>;
+  sendChannelMessage: (text: string, localMsgId?: string) => Promise<void>; // utilise currentChannel
   sendChannelData: (dataType: number, payload: Uint8Array) => Promise<void>; // v1.15.0+
   setChannel: (idx: number) => void;
   syncContacts: () => Promise<void>;
   sendSelfAdvert: () => Promise<void>;
   onBleMessage: (cb: (msg: MeshCoreIncomingMsg) => void) => void;
+  // ACK firmware (multi-listener — utilisé par MessagesProvider pour MAJ React state)
+  onSendConfirmed: (cb: (localMsgId: string | null, ackCode: number, rtt: number) => void) => () => void;
+  onMessageAccepted: (cb: (localMsgId: string, expectedAck: number, estTimeoutMs: number, isFlood: boolean) => void) => () => void;
   // Protocole natif MeshCore Companion — device settings
   setAdvertName: (name: string) => Promise<void>;
   setTxPower: (dbm: number) => Promise<void>;
@@ -101,6 +106,10 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
   const retryServiceRef = useRef(getMessageRetryService());
   const incomingMessageCallbackRef = useRef<((msg: MeshCoreIncomingMsg) => void) | null>(null);
 
+  // Listeners ACK pour MessagesProvider (callback BLE single-slot → fan-out manuel ici)
+  const sendConfirmedListenersRef = useRef<Set<(localMsgId: string | null, ackCode: number, rtt: number) => void>>(new Set());
+  const messageAcceptedListenersRef = useRef<Set<(localMsgId: string, expectedAck: number, estTimeoutMs: number, isFlood: boolean) => void>>(new Set());
+
   useEffect(() => {
     const initBle = async () => {
       try {
@@ -145,9 +154,37 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
           setState((prev) => ({ ...prev, meshContacts: contacts }));
         });
 
-        // Callback : confirmation ACK reçu
-        client.onSendConfirmed((ackCode, rtt) => {
-          console.log(`[BleProvider] Message confirmé ACK:${ackCode} RTT:${rtt}ms`);
+        // Callback : firmware a accepté le message (RESP_SENT) → status « sent »
+        // (BLE → LoRa OK, en attente d'ACK distant). Persiste en DB et fan-out
+        // vers les listeners React (MessagesProvider).
+        client.onMessageAccepted((localMsgId, expectedAck, estTimeoutMs, isFlood) => {
+          console.log(`[BleProvider] RESP_SENT msgId=${localMsgId} ack=0x${expectedAck.toString(16)} timeout=${estTimeoutMs}ms ${isFlood ? 'flood' : 'direct'}`);
+          updateMessageStatusDB(localMsgId, 'sent').catch((e) =>
+            console.warn('[BleProvider] updateMessageStatusDB(sent) failed:', e)
+          );
+          for (const cb of messageAcceptedListenersRef.current) {
+            try { cb(localMsgId, expectedAck, estTimeoutMs, isFlood); } catch (e) {
+              console.error('[BleProvider] messageAccepted listener error:', e);
+            }
+          }
+        });
+
+        // Callback : firmware confirme la livraison LoRa (PUSH_SEND_CONFIRMED)
+        // → status « delivered ». Persiste en DB, retire de la file de retry et
+        // fan-out vers les listeners React.
+        client.onSendConfirmed((localMsgId, ackCode, rtt) => {
+          console.log(`[BleProvider] PUSH_SEND_CONFIRMED ack=0x${ackCode.toString(16)} RTT:${rtt}ms${localMsgId ? ` msgId=${localMsgId}` : ' (orphelin)'}`);
+          if (localMsgId) {
+            updateMessageStatusDB(localMsgId, 'delivered').catch((e) =>
+              console.warn('[BleProvider] updateMessageStatusDB(delivered) failed:', e)
+            );
+            removePendingMessage(localMsgId).catch(() => { /* peut ne plus exister, OK */ });
+          }
+          for (const cb of sendConfirmedListenersRef.current) {
+            try { cb(localMsgId, ackCode, rtt); } catch (e) {
+              console.error('[BleProvider] sendConfirmed listener error:', e);
+            }
+          }
         });
 
         // Callback : batterie
@@ -396,17 +433,30 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
 
   // ── Protocole natif MeshCore Companion ─────────────────────────
 
-  const sendDirectMessage = async (pubkeyHex: string, text: string) => {
+  const sendDirectMessage = async (pubkeyHex: string, text: string, localMsgId?: string) => {
     if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
     const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
-    await clientRef.current.sendDirectMessage(hexClean, text);
+    await clientRef.current.sendDirectMessage(hexClean, text, 0, localMsgId);
     setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
   };
 
-  const sendChannelMessage = async (text: string) => {
+  const sendChannelMessage = async (text: string, localMsgId?: string) => {
     if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
-    await clientRef.current.sendChannelMessage(state.currentChannel, text);
+    await clientRef.current.sendChannelMessage(state.currentChannel, text, localMsgId);
     setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+  };
+
+  // Multi-listener pour le ACK firmware. Le client BLE expose un seul slot
+  // (this.sendConfirmedCallback) — câblé une fois dans BleProvider lors de l'init,
+  // qui fan-out manuellement vers les abonnés enregistrés ici.
+  const onSendConfirmed = (cb: (localMsgId: string | null, ackCode: number, rtt: number) => void) => {
+    sendConfirmedListenersRef.current.add(cb);
+    return () => { sendConfirmedListenersRef.current.delete(cb); };
+  };
+
+  const onMessageAccepted = (cb: (localMsgId: string, expectedAck: number, estTimeoutMs: number, isFlood: boolean) => void) => {
+    messageAcceptedListenersRef.current.add(cb);
+    return () => { messageAcceptedListenersRef.current.delete(cb); };
   };
 
   const sendChannelData = async (dataType: number, payload: Uint8Array) => {
@@ -541,6 +591,8 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     sendStatusReq,
     sendLogin,
     onBleMessage,
+    onSendConfirmed,
+    onMessageAccepted,
   }), [state]);
 
   return <BleContext.Provider value={contextValue}>{children}</BleContext.Provider>;

@@ -212,21 +212,23 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private async sendDM(event: MessageEvent): Promise<void> {
-    const { to, payload } = event;
-    
+    const { to, payload, id: eventId } = event;
+
     // 'to' est un nodeId ou pubkeyHex
     // Trouver le contact
     let contact: MeshCoreContact | undefined;
-    
+
     // Recherche par pubkey
     contact = this.contacts.get(to);
-    
+
     if (!contact) {
       throw new Error(`Contact ${to} non trouvé pour envoi LoRa`);
     }
 
     try {
-      await this.bleClient.sendDirectMessage(contact.pubkeyHex, payload.content);
+      // eventId = HermesEvent.id, propagé pour mapper l'ACK firmware
+      // (RESP_SENT → 'sent', PUSH_SEND_CONFIRMED → 'delivered').
+      await this.bleClient.sendDirectMessage(contact.pubkeyHex, payload.content, 0, eventId);
       console.log('[LoRaAdapter] DM envoyé via LoRa à:', contact.pubkeyHex.slice(0, 16));
     } catch (err) {
       console.error('[LoRaAdapter] Échec envoi DM LoRa:', err);
@@ -235,7 +237,7 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   private async forwardBridgeToLora(event: BridgeEvent): Promise<void> {
-    const { payload } = event;
+    const { payload, id: eventId } = event;
     let target: string;
     let content: string;
     try {
@@ -251,16 +253,16 @@ export class LoRaAdapter implements ProtocolAdapter {
     if (!contact) {
       throw new Error(`Contact ${target} non trouvé pour bridge LoRa`);
     }
-    await this.bleClient.sendDirectMessage(contact.pubkeyHex, content);
+    await this.bleClient.sendDirectMessage(contact.pubkeyHex, content, 0, eventId);
   }
 
   private async sendChannelMessage(event: MessageEvent): Promise<void> {
-    const { payload } = event;
+    const { payload, id: eventId } = event;
     const channelMatch = payload.channelName?.match(/channel-(\d+)/);
     const channelIdx = channelMatch ? parseInt(channelMatch[1], 10) : 0;
 
     try {
-      await this.bleClient.sendChannelMessage(channelIdx, payload.content);
+      await this.bleClient.sendChannelMessage(channelIdx, payload.content, eventId);
       console.log('[LoRaAdapter] Message channel envoyé via LoRa');
     } catch (err) {
       console.error('[LoRaAdapter] Échec envoi channel LoRa:', err);

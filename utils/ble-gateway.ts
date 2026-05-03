@@ -234,7 +234,8 @@ export class BleGatewayClient {
   private incomingMessageCallback:   ((msg: MeshCoreIncomingMsg) => void) | null = null;
   private contactDiscoveredCallback: ((contact: MeshCoreContact) => void) | null = null;
   private contactsCallback:          ((contacts: MeshCoreContact[]) => void) | null = null;
-  private sendConfirmedCallback:     ((ackCode: number, roundTripMs: number) => void) | null = null;
+  private sendConfirmedCallback:     ((localMsgId: string | null, ackCode: number, roundTripMs: number) => void) | null = null;
+  private messageAcceptedCallback:   ((localMsgId: string, expectedAck: number, estTimeoutMs: number, isFlood: boolean) => void) | null = null;
   private disconnectCallback:        (() => void) | null = null;
   private batteryCallback:           ((volts: number) => void) | null = null;
   private statsCallback:             ((stats: MeshCoreStats) => void) | null = null;
@@ -246,6 +247,16 @@ export class BleGatewayClient {
 
   // Gestion contacts
   private pendingContacts: MeshCoreContact[] = [];
+
+  // ── ACK tracking (firmware native PUSH_SEND_CONFIRMED) ─────────────
+  // Quand l'app envoie un CMD_SEND_TXT_MSG, on pousse le localMsgId dans une
+  // FIFO. Le firmware répond avec RESP_SENT contenant `expected_ack` (uint32)
+  // — on le pop puis on map expectedAck → localMsgId. Plus tard, le firmware
+  // émet PUSH_SEND_CONFIRMED avec le même hash : on retrouve le localMsgId,
+  // on le passe à sendConfirmedCallback (qui marque le message « delivered »).
+  private pendingMsgIdQueue: string[] = [];           // FIFO en attente de RESP_SENT
+  private expectedAckToMsgId = new Map<number, string>(); // expected_ack → localMsgId
+  private readonly ACK_MAP_MAX = 200;                 // garde-fou anti-fuite mémoire
 
   // Buffer de paquets reçus avant l'enregistrement du messageHandler
   // Évite de perdre des messages si syncNextMessage() est appelé avant onMessage()
@@ -772,11 +783,16 @@ export class BleGatewayClient {
   }
 
   /**
-   * Envoie un DM via CMD_SEND_TXT_MSG (0x02) — firmware standard v1.13.
+   * Envoie un DM via CMD_SEND_TXT_MSG (0x02) — firmware standard v1.13/v1.15.
    * Format : [txt_type:1][attempt:1][timestamp:4LE][pub_key_prefix:6][text...]
    * Le destinataire doit être dans les contacts du device (lookupContactByPubKey).
+   *
+   * @param localMsgId  Identifiant local du message (DBMessage.id). Quand fourni,
+   *                    le firmware ACK (PUSH_SEND_CONFIRMED) sera mappé vers ce
+   *                    msgId via sendConfirmedCallback — l'app peut alors marquer
+   *                    le message « delivered » dans SQLite.
    */
-  async sendDirectMessage(pubkeyHex: string, text: string, attempt = 0): Promise<void> {
+  async sendDirectMessage(pubkeyHex: string, text: string, attempt = 0, localMsgId?: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
 
     const hexClean = this.normalizePubkeyHex(pubkeyHex);
@@ -795,15 +811,30 @@ export class BleGatewayClient {
     payload.set(textBytes, i);
 
     console.log(`[BleGateway] sendDirectMessage → prefix=${hexClean.slice(0, 12)} (${text.length}B)`);
-    await this.sendFrame(CMD_SEND_TXT_MSG, payload);
+    if (localMsgId) this.pendingMsgIdQueue.push(localMsgId);
+    try {
+      await this.sendFrame(CMD_SEND_TXT_MSG, payload);
+    } catch (err) {
+      // Echec d'écriture BLE : retire l'id de la file (jamais d'ACK firmware attendu).
+      if (localMsgId) {
+        const idx = this.pendingMsgIdQueue.lastIndexOf(localMsgId);
+        if (idx >= 0) this.pendingMsgIdQueue.splice(idx, 1);
+      }
+      throw err;
+    }
   }
 
   /**
-   * Envoie un message canal via CMD_SEND_CHAN_MSG (0x03) — firmware standard v1.13.
+   * Envoie un message canal via CMD_SEND_CHAN_MSG (0x03) — firmware v1.13/v1.15.
    * Format officiel : [txt_type:1][channel_idx:1][timestamp:4LE][text...]
    * Source : meshcore.js library sendCommandSendChannelTxtMsg
+   *
+   * NOTE : les messages canal n'ont PAS d'expected_ack (broadcast) — le firmware
+   * répond bien RESP_SENT mais expected_ack=0 et aucun PUSH_SEND_CONFIRMED ne
+   * suit. Le localMsgId est tout de même tracé pour le RESP_SENT (transition
+   * « sending » → « sent »).
    */
-  async sendChannelMessage(channelIdx: number, text: string): Promise<void> {
+  async sendChannelMessage(channelIdx: number, text: string, localMsgId?: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
 
     // Vérifier que le canal est configuré (auto-configure si canal 0)
@@ -833,7 +864,16 @@ export class BleGatewayClient {
     payload.set(textBytes, i);
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
-    await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
+    if (localMsgId) this.pendingMsgIdQueue.push(localMsgId);
+    try {
+      await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
+    } catch (err) {
+      if (localMsgId) {
+        const idx = this.pendingMsgIdQueue.lastIndexOf(localMsgId);
+        if (idx >= 0) this.pendingMsgIdQueue.splice(idx, 1);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -1086,7 +1126,23 @@ export class BleGatewayClient {
   onIncomingMessage(cb: (msg: MeshCoreIncomingMsg) => void): void { this.incomingMessageCallback = cb; }
   onContactDiscovered(cb: (c: MeshCoreContact) => void): void     { this.contactDiscoveredCallback = cb; }
   onContacts(cb: (contacts: MeshCoreContact[]) => void): void     { this.contactsCallback = cb; }
-  onSendConfirmed(cb: (ackCode: number, rtt: number) => void): void { this.sendConfirmedCallback = cb; }
+  /**
+   * Notifié quand le firmware confirme la livraison LoRa d'un message
+   * (PUSH_SEND_CONFIRMED). `localMsgId` est le DBMessage.id passé à
+   * sendDirectMessage(); `null` si l'expected_ack n'a pas pu être mappé
+   * (RESP_SENT pas reçu ou ACK déjà consommé en cas de duplicata firmware).
+   */
+  onSendConfirmed(cb: (localMsgId: string | null, ackCode: number, rtt: number) => void): void {
+    this.sendConfirmedCallback = cb;
+  }
+  /**
+   * Notifié quand le firmware accepte un message (RESP_SENT) — l'app peut alors
+   * marquer le message « sent » (transmis sur LoRa, pas encore livré). Le passage
+   * « sent → delivered » se fait via onSendConfirmed.
+   */
+  onMessageAccepted(cb: (localMsgId: string, expectedAck: number, estTimeoutMs: number, isFlood: boolean) => void): void {
+    this.messageAcceptedCallback = cb;
+  }
   onDisconnect(cb: () => void): void                  { this.disconnectCallback = cb; }
   onBattery(cb: (volts: number) => void): void        { this.batteryCallback = cb; }
   onStats(cb: (stats: MeshCoreStats) => void): void   { this.statsCallback = cb; }
@@ -1150,7 +1206,7 @@ export class BleGatewayClient {
         break;
 
       case RESP_SENT:
-        console.log('[BleGateway] RESP_SENT — message accepté par firmware, en file LoRa');
+        this.parseRespSent(payload);
         break;
 
       case RESP_DIRECT_MSG_OLD:
@@ -1707,7 +1763,7 @@ export class BleGatewayClient {
   }
 
   private parseSendConfirmed(payload: Uint8Array): void {
-    // Source : MyMesh.cpp:393-397 processAck() — 9 bytes total dont code=0x82
+    // Source : MyMesh.cpp:413-418 processAck() — 9 bytes total dont code=0x82
     //   out_frame[0] = PUSH_CODE_SEND_CONFIRMED;
     //   memcpy(&out_frame[1], data, 4);              // 4-byte ACK hash
     //   memcpy(&out_frame[5], &trip_time, 4);        // uint32 LE trip_time ms
@@ -1724,8 +1780,60 @@ export class BleGatewayClient {
     const roundTripMs = view.getUint32(4, true);
     // Convertir hex 4-byte en uint32 (little-endian, comme `expected_ack` côté firmware)
     const ackHashUint32 = view.getUint32(0, true);
-    console.log(`[BleGateway] PUSH_SEND_CONFIRMED ack=${ackHash} RTT:${roundTripMs}ms`);
-    this.sendConfirmedCallback?.(ackHashUint32, roundTripMs);
+
+    // Lookup le localMsgId mappé via RESP_SENT.expected_ack (cf. parseRespSent).
+    // Le firmware peut renvoyer le même ACK plusieurs fois (cf. MyMesh.cpp:420
+    // « NOTE: the same ACK can be received multiple times! ») — on ne supprime
+    // donc le mapping qu'à la première réception, et les suivantes seront livrées
+    // avec localMsgId=null (l'app peut alors ignorer ou idempotenter).
+    const localMsgId = this.expectedAckToMsgId.get(ackHashUint32) ?? null;
+    if (localMsgId) this.expectedAckToMsgId.delete(ackHashUint32);
+
+    console.log(`[BleGateway] PUSH_SEND_CONFIRMED ack=${ackHash} RTT:${roundTripMs}ms${localMsgId ? ` msgId=${localMsgId}` : ''}`);
+    this.sendConfirmedCallback?.(localMsgId, ackHashUint32, roundTripMs);
+  }
+
+  /**
+   * Parse RESP_CODE_SENT (0x06) — réponse firmware à CMD_SEND_TXT_MSG.
+   * Format firmware v1.13/v1.15 (MyMesh.cpp:1092-1096) :
+   *   [0] route_flag : 0=direct, 1=flood
+   *   [1..4] expected_ack (uint32 LE) — sera renvoyé dans PUSH_SEND_CONFIRMED
+   *   [5..8] est_timeout (uint32 LE, ms) — durée estimée avant ACK
+   *
+   * On pop le localMsgId en tête de file (FIFO ordonnée par les commandes envoyées)
+   * et on l'enregistre dans expectedAckToMsgId pour pouvoir corréler le futur
+   * PUSH_SEND_CONFIRMED. Si expected_ack=0 (canal/broadcast — pas d'ACK attendu),
+   * on saute le mapping mais on consomme quand même l'id de la file.
+   */
+  private parseRespSent(payload: Uint8Array): void {
+    if (payload.length < 9) {
+      // RESP_SENT minimum 9B — sinon firmware ancien ou frame corrompue
+      console.warn('[BleGateway] RESP_SENT trop court:', payload.length);
+      this.pendingMsgIdQueue.shift(); // consomme quand même
+      return;
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset);
+    const isFlood     = payload[0] === 1;
+    const expectedAck = view.getUint32(1, true);
+    const estTimeout  = view.getUint32(5, true);
+
+    const localMsgId = this.pendingMsgIdQueue.shift();
+    if (!localMsgId) {
+      console.log(`[BleGateway] RESP_SENT (orphelin, pas de msgId tracé) ack=0x${expectedAck.toString(16)} timeout=${estTimeout}ms ${isFlood ? 'flood' : 'direct'}`);
+      return;
+    }
+
+    if (expectedAck !== 0) {
+      // Garde-fou anti-fuite : trim l'entrée la plus ancienne si on dépasse la limite
+      if (this.expectedAckToMsgId.size >= this.ACK_MAP_MAX) {
+        const firstKey = this.expectedAckToMsgId.keys().next().value;
+        if (firstKey !== undefined) this.expectedAckToMsgId.delete(firstKey);
+      }
+      this.expectedAckToMsgId.set(expectedAck, localMsgId);
+    }
+
+    console.log(`[BleGateway] RESP_SENT msgId=${localMsgId} ack=0x${expectedAck.toString(16)} timeout=${estTimeout}ms ${isFlood ? 'flood' : 'direct'}`);
+    this.messageAcceptedCallback?.(localMsgId, expectedAck, estTimeout, isFlood);
   }
 
   private parseContact(payload: Uint8Array): void {

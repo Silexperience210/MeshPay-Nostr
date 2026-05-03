@@ -170,7 +170,9 @@ describe('LoRa↔Nostr Bridge', () => {
       
       expect(mockBle.sendDirectMessage).toHaveBeenCalledWith(
         'nostrrecipientpubkeyhex' + 'c'.repeat(20),
-        expect.stringContaining('Bridge to LoRa')
+        expect.stringContaining('Bridge to LoRa'),
+        0,
+        expect.any(String) // localMsgId (HermesEvent.id) propagé pour ACK firmware
       );
     });
     

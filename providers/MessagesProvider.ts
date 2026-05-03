@@ -23,6 +23,7 @@ import {
   updateConversationPubkey,
   markConversationRead,
   generateMsgId,
+  updateMessageStatus,
 } from '@/utils/messages-store';
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
 import { deriveMeshIdentity, type MeshIdentityFull as MeshIdentity } from '@/utils/identity';
@@ -706,6 +707,38 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     return () => clearInterval(timer);
   }, [ble.connected]);
 
+  // ── ACK firmware (RESP_SENT + PUSH_SEND_CONFIRMED) → MAJ React state ──
+  // BleProvider persiste déjà 'sent' / 'delivered' en SQLite et purge la file
+  // de retry — on n'a plus qu'à refléter le changement dans messagesByConv pour
+  // que l'UI affiche les coches de livraison en temps réel.
+  useEffect(() => {
+    const updateStatus = (msgId: string, status: StoredMessage['status']) => {
+      setMessagesByConv(prev => {
+        const next: typeof prev = {};
+        let changed = false;
+        for (const [convId, msgs] of Object.entries(prev)) {
+          const idx = msgs.findIndex(m => m.id === msgId);
+          if (idx >= 0) {
+            next[convId] = msgs.map(m => m.id === msgId ? { ...m, status } : m);
+            changed = true;
+          } else {
+            next[convId] = msgs;
+          }
+        }
+        return changed ? next : prev;
+      });
+    };
+
+    const unsubAccepted = ble.onMessageAccepted((msgId) => {
+      updateStatus(msgId, 'sent');
+    });
+    const unsubConfirmed = ble.onSendConfirmed((msgId) => {
+      if (msgId) updateStatus(msgId, 'delivered');
+    });
+
+    return () => { unsubAccepted(); unsubConfirmed(); };
+  }, [ble.onMessageAccepted, ble.onSendConfirmed]);
+
   // Auto-join forum "public" dès connexion BLE — canal 0, broadcast LoRa (CMD_SEND_CHAN_MSG)
   // joinForum est idempotente : vérifie existing avant de créer, skipAnnounce évite kind:40 Nostr
   useEffect(() => {
@@ -1154,9 +1187,11 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       const channelName = convId.slice(6);
 
       // Broadcast LoRa (flood) via MeshCore Companion — CMD_SEND_CHAN_MSG (0x03)
+      // msgId est passé pour que RESP_SENT puisse marquer le message « sent »
+      // (les messages canal n'ont pas d'ACK distant, donc pas de transition « delivered »).
       if (ble.connected) {
         try {
-          await ble.sendChannelMessage(text);
+          await ble.sendChannelMessage(text, msgId);
           console.log('[MeshCore] Broadcast flood canal LoRa:', channelName);
         } catch (bleErr) {
           console.warn('[MeshCore] Flood BLE échoué (Nostr fallback):', bleErr);
@@ -1226,7 +1261,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
       }
       // Protocole natif MeshCore Companion — CMD_SEND_TXT_MSG (0x02)
-      await ble.sendDirectMessage(conv.peerPubkey, text);
+      // msgId est tracé pour mapper l'ACK firmware (PUSH_SEND_CONFIRMED) :
+      // RESP_SENT → « sent », PUSH_SEND_CONFIRMED → « delivered » (cf. BleProvider).
+      await ble.sendDirectMessage(conv.peerPubkey, text, msgId);
       console.log('[MeshCore] DM envoyé via CMD_SEND_TXT_MSG → Companion:', convId);
       const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
       publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);

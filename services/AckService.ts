@@ -1,6 +1,21 @@
 /**
  * Ack Service - Gestion des accusés de réception
- * Ajoute des ACK pour confirmer la livraison des messages
+ *
+ * @deprecated Le firmware MeshCore Companion fournit un ACK natif
+ * (RESP_CODE_SENT + PUSH_CODE_SEND_CONFIRMED). MeshPay l'utilise désormais
+ * directement via BleProvider :
+ *   - sendDirectMessage(pubkey, text, msgId) propage le DBMessage.id
+ *   - utils/ble-gateway parse expected_ack et map vers msgId
+ *   - BleProvider.onMessageAccepted → status « sent » en SQLite
+ *   - BleProvider.onSendConfirmed → status « delivered » + clear retry queue
+ *   - MessagesProvider listener → MAJ React state messagesByConv
+ *
+ * Ce service est conservé uniquement pour l'API externe `getAckService`
+ * référencée par useAppInitialization et integration-check, mais ses méthodes
+ * sont des no-op. À supprimer une fois ces deux call-sites nettoyés.
+ *
+ * NE PAS utiliser pour de nouveaux développements — implémentait un ACK
+ * échoé over-the-air incompatible avec le format firmware natif.
  */
 import { MeshCorePacket, MeshCoreMessageType, createTextMessageSync, nodeIdToUint64, uint64ToNodeId } from '@/utils/meshcore-protocol';
 import { getBleGatewayClient } from '@/utils/ble-gateway';
