@@ -2,7 +2,8 @@
 import { HDKey } from '@scure/bip32';
 import { sha256, sha512 } from '@noble/hashes/sha2.js';
 import { hmac } from '@noble/hashes/hmac.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
+import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import { mnemonicToSeed } from '@/utils/bitcoin';
 
 // Chemin de dérivation dédié à la messagerie MeshCore
@@ -102,6 +103,22 @@ export function deriveMeshIdentity(mnemonic: string, passphrase?: string): MeshI
   return {
     nodeId,
     displayName: null, // Sera chargé depuis la DB
+    pubkeyHex: bytesToHex(pubkeyBytes),
+    privkeyHex: bytesToHex(privkeyBytes),
+    pubkeyBytes,
+    privkeyBytes,
+  };
+}
+
+// Générer une identité MeshCore éphémère aléatoire (sans mnemonic BIP39)
+export function generateRandomMeshIdentity(): MeshIdentityFull {
+  const privkeyBytes = randomBytes(32);
+  const pubkeyBytes = secp256k1.getPublicKey(privkeyBytes, true); // 33 bytes compressé
+  const hash = sha256(pubkeyBytes);
+  const nodeId = 'MESH-' + bytesToHex(hash).slice(0, 8).toUpperCase();
+  return {
+    nodeId,
+    displayName: null,
     pubkeyHex: bytesToHex(pubkeyBytes),
     privkeyHex: bytesToHex(privkeyBytes),
     pubkeyBytes,

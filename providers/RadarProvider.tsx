@@ -15,6 +15,7 @@ import { nostrClient } from '@/utils/nostr-client';
 import { useNostr } from '@/providers/NostrProvider';
 import { useMessages } from '@/providers/MessagesProvider';
 import { useGateway } from '@/providers/GatewayProvider';
+import { useAppSettings } from '@/providers/AppSettingsProvider';
 
 interface RadarState {
   radarPeers: RadarPeer[];
@@ -53,6 +54,7 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
   const { identity } = useMessages();
   const { isConnected: nostrConnected } = useNostr();
   const { gatewayState } = useGateway();
+  const { isLoRaMode } = useAppSettings();
 
   const [radarPeers, setRadarPeers] = useState<RadarPeer[]>([]);
   const [myLocation, setMyLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -128,7 +130,7 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
           const p = { lat: location.coords.latitude, lng: location.coords.longitude };
           setMyLocation(p);
           myLocationRef.current = p;
-          if (nostrClient.isConnected && identity) {
+          if (nostrClient.isConnected && identity && !isLoRaMode) {
             nostrClient.publishPresence(identity.nodeId, p.lat, p.lng).catch(() => {});
           }
         }
@@ -144,7 +146,7 @@ export function RadarProvider({ children }: { children: React.ReactNode }) {
 
   // ── Peers Nostr (subscribePresence) ──────────────────────────────────────
   useEffect(() => {
-    if (!nostrConnected || !identity) return;
+    if (!nostrConnected || !identity || isLoRaMode) return;
 
     const unsub = nostrClient.subscribePresence((payload, _event) => {
       if (payload.nodeId === identity.nodeId) return;

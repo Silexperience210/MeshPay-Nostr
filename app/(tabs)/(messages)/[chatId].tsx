@@ -1084,17 +1084,19 @@ export default function ChatScreen() {
         )}
 
         <View style={styles.inputContainer}>
-          {/* Bouton Média (photo/GIF) — toujours présent */}
-          <TouchableOpacity
-            style={styles.cashuSendButton}
-            activeOpacity={0.7}
-            onPress={handlePickMedia}
-            disabled={isRecording || isSendingMedia}
-          >
-            {isSendingMedia
-              ? <ActivityIndicator size="small" color={Colors.blue} />
-              : <Camera size={20} color={isRecording ? Colors.textMuted : Colors.blue} />}
-          </TouchableOpacity>
+          {/* Bouton Média (photo/GIF) — masqué en mode LoRa-only (Nostr-only) */}
+          {!isLoRaMode && (
+            <TouchableOpacity
+              style={styles.cashuSendButton}
+              activeOpacity={0.7}
+              onPress={handlePickMedia}
+              disabled={isRecording || isSendingMedia}
+            >
+              {isSendingMedia
+                ? <ActivityIndicator size="small" color={Colors.blue} />
+                : <Camera size={20} color={isRecording ? Colors.textMuted : Colors.blue} />}
+            </TouchableOpacity>
+          )}
 
           {/* Bouton Cashu — toujours présent, pas de switch de layout */}
           <TouchableOpacity
@@ -1129,7 +1131,7 @@ export default function ChatScreen() {
             )}
           </View>
 
-          {/* Bouton Send ou Mic — seul switch autorisé */}
+          {/* Bouton Send ou Mic — seul switch autorisé. Mic masqué en mode LoRa-only */}
           {inputText.trim() && !isRecording ? (
             <TouchableOpacity
               style={[styles.sendButton, !isSending && styles.sendButtonActive]}
@@ -1141,7 +1143,7 @@ export default function ChatScreen() {
                 ? <ActivityIndicator size="small" color={Colors.black} />
                 : <Send size={18} color={Colors.black} />}
             </TouchableOpacity>
-          ) : (
+          ) : !isLoRaMode ? (
             <TouchableOpacity
               style={[styles.sendButton, isRecording ? styles.micButtonRecording : styles.micButton]}
               onPress={isRecording ? () => void handleMicPressOut(true) : () => void handleMicPressIn()}
@@ -1149,7 +1151,7 @@ export default function ChatScreen() {
             >
               <Mic size={18} color={isRecording ? Colors.white : Colors.textMuted} />
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
       </KeyboardAvoidingView>
 

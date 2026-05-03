@@ -66,7 +66,11 @@ export default function MeshStatsModal({ visible, onClose, onContactAction }: Me
 
   // Refresh toutes les données au montage
   const refreshAll = useCallback(async () => {
-    if (!ble.connected) return;
+    if (!ble.connected) {
+      // Même sans connexion, on sort du loading pour ne pas bloquer l'UI
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       await ble.getBattery();
@@ -83,10 +87,10 @@ export default function MeshStatsModal({ visible, onClose, onContactAction }: Me
   }, [ble]);
 
   useEffect(() => {
-    if (visible && ble.connected) {
+    if (visible) {
       refreshAll();
     }
-  }, [visible, ble.connected]);
+  }, [visible]);
 
   const deviceInfo = ble.deviceInfo;
 
@@ -118,6 +122,18 @@ export default function MeshStatsModal({ visible, onClose, onContactAction }: Me
               <X size={20} color={Colors.textMuted} />
             </TouchableOpacity>
           </View>
+
+          {/* Connexion status */}
+          {!ble.connected && (
+            <View style={[styles.deviceRow, { backgroundColor: Colors.surfaceLight }]}>
+              <Text style={[styles.deviceName, { color: Colors.yellow }]}>
+                ⚠ Aucun device BLE connecté
+              </Text>
+              <Text style={{ color: Colors.textMuted, fontSize: 12 }}>
+                Les stats firmware nécessitent un Companion MeshCore
+              </Text>
+            </View>
+          )}
 
           {/* Quick battery bar */}
           {deviceInfo && (

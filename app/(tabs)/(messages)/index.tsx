@@ -794,7 +794,7 @@ export default function MessagesScreen() {
           <Text style={[styles.statusText, { color: modeColor }]}>{modeLabel}</Text>
           <View style={styles.statusDivider} />
           <Text style={styles.statusNodes}>
-            {identity ? identity.nodeId : 'No wallet'}
+            {identity ? identity.nodeId : '...'}
           </Text>
         </View>
         <View style={styles.statusRight}>
@@ -853,7 +853,7 @@ export default function MessagesScreen() {
             <Text style={styles.emptySubtitle}>
               {identity
                 ? `Votre NodeID: ${identity.nodeId}\nPartagez-le pour recevoir des messages.`
-                : 'Créez un wallet pour commencer à communiquer.'}
+                : 'Initialisation de l\'identité...'}
             </Text>
           </View>
         }

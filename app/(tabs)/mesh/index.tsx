@@ -8,6 +8,7 @@ import {
   Animated,
   Modal,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import {
   Radio,
@@ -812,29 +813,25 @@ export default function MeshScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Boutons device settings + stats (si BLE connecté) */}
-      {bleConnected && (
-        <>
-          <TouchableOpacity
-            style={[styles.gatewayFloatingBtn, { bottom: 160, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent }]}
-            onPress={() => setShowDeviceSettings(true)}
-            activeOpacity={0.8}
-          >
-            <Activity size={16} color={Colors.accent} />
-            <Text style={[styles.gatewayFloatingText, { color: Colors.accent }]}>Config</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.gatewayFloatingBtn, { bottom: 220, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.cyan }]}
-            onPress={() => setShowStats(true)}
-            activeOpacity={0.8}
-          >
-            <Cpu size={16} color={Colors.cyan} />
-            <Text style={[styles.gatewayFloatingText, { color: Colors.cyan }]}>
-              Stats{batteryVolts != null ? ` ${batteryVolts.toFixed(1)}V` : ''}
-            </Text>
-          </TouchableOpacity>
-        </>
-      )}
+      {/* Boutons device settings + stats (toujours visibles, stats fonctionnent même sans BLE avec état explicite) */}
+      <TouchableOpacity
+        style={[styles.gatewayFloatingBtn, { bottom: 160, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.accent }]}
+        onPress={() => bleConnected ? setShowDeviceSettings(true) : Alert.alert('Device non connecté', 'Connectez un device MeshCore via BLE pour accéder à la configuration.')}
+        activeOpacity={0.8}
+      >
+        <Activity size={16} color={bleConnected ? Colors.accent : Colors.textMuted} />
+        <Text style={[styles.gatewayFloatingText, { color: bleConnected ? Colors.accent : Colors.textMuted }]}>Config</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.gatewayFloatingBtn, { bottom: 220, backgroundColor: Colors.surface, borderWidth: 1, borderColor: bleConnected ? Colors.cyan : Colors.textMuted }]}
+        onPress={() => setShowStats(true)}
+        activeOpacity={0.8}
+      >
+        <Cpu size={16} color={bleConnected ? Colors.cyan : Colors.textMuted} />
+        <Text style={[styles.gatewayFloatingText, { color: bleConnected ? Colors.cyan : Colors.textMuted }]}>
+          Stats{batteryVolts != null ? ` ${batteryVolts.toFixed(1)}V` : ''}
+        </Text>
+      </TouchableOpacity>
 
       <NodeDetailModal peer={selectedPeer} visible={showDetail} onClose={handleCloseDetail} />
       <GatewayScanModal visible={showGatewayModal} onClose={() => setShowGatewayModal(false)} />

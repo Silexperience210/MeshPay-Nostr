@@ -26,13 +26,15 @@ import {
   updateMessageStatus,
 } from '@/utils/messages-store';
 import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementCashuTokenRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
-import { deriveMeshIdentity, type MeshIdentityFull as MeshIdentity } from '@/utils/identity';
+import { deriveMeshIdentity, generateRandomMeshIdentity, hexToBytes, type MeshIdentityFull as MeshIdentity } from '@/utils/identity';
+import * as SecureStore from 'expo-secure-store';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
 import { getBleGatewayClient, type MeshCoreContact } from '@/utils/ble-gateway';
 import { nostrClient, deriveChannelId } from '@/utils/nostr-client';
 import { notifyForumMessage } from '@/utils/notifications';
 import { useNostr } from '@/providers/NostrProvider';
+import { useAppSettings } from '@/providers/AppSettingsProvider';
 import { useWalletStore } from '@/stores/walletStore';
 // Import BLE provider pour communication LoRa via gateway ESP32
 import { useBle } from '@/providers/BleProvider';
@@ -99,6 +101,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const usbSerial = useUsbSerial(); // Accès USB Serial (transport alternatif)
   const { gatewayState, registerPeer, handleLoRaMessage: handleLoRaMsg, relayCashu } = useGateway();
   const { isConnected: nostrConnected } = useNostr();
+  const { isInternetMode, isLoRaMode, isBridgeMode } = useAppSettings();
   const [identity, setIdentity] = useState<MeshIdentity | null>(null);
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
   const [messagesByConv, setMessagesByConv] = useState<Record<string, StoredMessage[]>>({});
@@ -156,31 +159,62 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     };
   }, [identity?.nodeId]);
 
-  // Dériver l'identité dès que le wallet est disponible
+  // Dériver l'identité dès que le wallet est disponible, sinon charger/générer une identité éphémère
   useEffect(() => {
-    if (mnemonic && !identity) {
-      try {
-        const id = deriveMeshIdentity(mnemonic);
-        
-        // Charger le display name depuis la DB
-        getUserProfile().then(profile => {
+    if (identity) return; // déjà initialisé
+
+    const initIdentity = async () => {
+      // 1) Si un wallet existe, utiliser l'identité dérivée (legacy)
+      if (mnemonic) {
+        try {
+          const id = deriveMeshIdentity(mnemonic);
+          const profile = await getUserProfile();
           if (profile?.displayName) {
             id.displayName = profile.displayName;
             console.log('[Messages] Display name chargé:', profile.displayName);
           }
           setIdentity(id);
-        }).catch((e) => {
-          console.warn('[Messages] getUserProfile failed:', e);
-          setIdentity(id);
-        });
-        
-        if (__DEV__) console.log('[Messages] Identité dérivée:', id.nodeId);
-
-      } catch (err) {
-        console.log('[Messages] Erreur dérivation identité:', err);
+          if (__DEV__) console.log('[Messages] Identité dérivée du wallet:', id.nodeId);
+        } catch (err) {
+          console.log('[Messages] Erreur dérivation identité wallet:', err);
+        }
+        return;
       }
-    }
 
+      // 2) Sinon, charger ou générer une identité éphémère MeshCore (LoRa-only)
+      try {
+        const EPHEMERAL_KEY = 'meshcore_ephemeral_identity_v1';
+        const stored = await SecureStore.getItemAsync(EPHEMERAL_KEY);
+        let id: MeshIdentity;
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          id = {
+            nodeId: parsed.nodeId,
+            displayName: parsed.displayName ?? null,
+            pubkeyHex: parsed.pubkeyHex,
+            privkeyHex: parsed.privkeyHex,
+            pubkeyBytes: hexToBytes(parsed.pubkeyHex),
+            privkeyBytes: hexToBytes(parsed.privkeyHex),
+          };
+        } else {
+          id = generateRandomMeshIdentity();
+          await SecureStore.setItemAsync(EPHEMERAL_KEY, JSON.stringify({
+            nodeId: id.nodeId,
+            displayName: id.displayName,
+            pubkeyHex: id.pubkeyHex,
+            privkeyHex: id.privkeyHex,
+          }));
+        }
+        const profile = await getUserProfile();
+        if (profile?.displayName) id.displayName = profile.displayName;
+        setIdentity(id);
+        if (__DEV__) console.log('[Messages] Identité éphémère MeshCore:', id.nodeId);
+      } catch (err) {
+        console.warn('[Messages] Erreur identité éphémère:', err);
+      }
+    };
+
+    initIdentity();
   }, [mnemonic, identity]);
 
   // Annoncer notre présence sur le mesh dès connexion BLE (MeshCore Companion standard)
@@ -946,7 +980,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   // ── Réabonnement Nostr aux forums quand la connexion est rétablie ────────────
 
   useEffect(() => {
-    if (!nostrConnected) {
+    if (!nostrConnected || isLoRaMode) {
       // Déconnecter proprement les subs Nostr
       for (const unsub of nostrChannelUnsubs.current.values()) unsub();
       nostrChannelUnsubs.current.clear();
@@ -966,7 +1000,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       nostrChannelUnsubs.current.set(channelName, unsub);
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
     }
-  }, [nostrConnected]);
+  }, [nostrConnected, isLoRaMode]);
 
   // ── Nostr DMs : Les DMs Nostr entrants (NIP-17 + NIP-04) sont gérés par
   // MessagingBus (utils/messaging-bus.ts) qui souscrit via subscribeDMs() et
@@ -1209,12 +1243,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       // Broadcast LoRa (flood) via MeshCore Companion — CMD_SEND_CHAN_MSG (0x03)
       // msgId est passé pour que RESP_SENT puisse marquer le message « sent »
       // (les messages canal n'ont pas d'ACK distant, donc pas de transition « delivered »).
-      if (ble.connected) {
+      if ((isLoRaMode || isBridgeMode) && ble.connected) {
         try {
           await ble.sendChannelMessage(text, msgId);
           console.log('[MeshCore] Broadcast flood canal LoRa:', channelName);
         } catch (bleErr) {
-          console.warn('[MeshCore] Flood BLE échoué (Nostr fallback):', bleErr);
+          console.warn('[MeshCore] Flood BLE échoué:', bleErr);
         }
       }
 
@@ -1225,7 +1259,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         : text;
 
       // Nostr (NIP-28 kind:42 sur channel déterministe)
-      if (nostrClient.isConnected) {
+      if ((isInternetMode || isBridgeMode) && nostrClient.isConnected) {
         try {
           const channelId = deriveChannelId(channelName);
           await nostrClient.publishChannelMessage(channelId, payload);
@@ -1264,8 +1298,8 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     // DM normal (sans chunking)
     const conv = conversations.find(c => c.id === convId);
 
-    // Envoi NIP-17 via Nostr si connecté (parallèle ou exclusif selon BLE)
-    if (nostrClient.isConnected && conv?.peerPubkey) {
+    // Envoi NIP-17 via Nostr si connecté et mode le permet
+    if ((isInternetMode || isBridgeMode) && nostrClient.isConnected && conv?.peerPubkey) {
       // Convertir pubkey hex 66 chars (compressée 02/03) → 64 chars (x-only Nostr)
       const nostrPubkey64 = conv.peerPubkey.length === 66
         ? conv.peerPubkey.slice(2)
@@ -1275,12 +1309,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
           await nostrClient.publishDMSealed(nostrPubkey64, text);
           console.log('[Messages] DM NIP-17 envoyé via Nostr à:', convId);
         } catch (nostrErr) {
-          console.warn('[Messages] NIP-17 échoué, fallback BLE si disponible:', nostrErr);
+          console.warn('[Messages] NIP-17 échoué:', nostrErr);
         }
       }
     }
 
-    if (ble.connected) {
+    if ((isLoRaMode || isBridgeMode) && ble.connected) {
       if (!conv?.peerPubkey) {
         throw new Error('Pair hors ligne — clé publique introuvable. Attendez que le pair se connecte via LoRa.');
       }
@@ -1291,7 +1325,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[MeshCore] DM envoyé via CMD_SEND_TXT_MSG → Companion:', convId);
       const enc = encryptDM(text, id.privkeyBytes, conv.peerPubkey);
       publishAndStore(msgId, convId, text, enc, 'meshcore/dm/' + convId, ts, type, id);
-    } else if (!nostrClient.isConnected) {
+    } else if (!(isInternetMode || isBridgeMode) || !nostrClient.isConnected) {
       throw new Error('Non connecté — activez le Bluetooth (LoRa) ou Nostr');
     } else {
       // Nostr-only : sauvegarder localement sans BLE
@@ -1309,7 +1343,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         c.id === convId ? { ...c, lastMessage: text.slice(0, 50), lastMessageTime: ts } : c
       ));
     }
-  }, [identity, conversations, publishAndStore, ble.connected]); // ✅ Toutes les dépendances
+  }, [identity, conversations, publishAndStore, ble.connected, isInternetMode, isLoRaMode, isBridgeMode]); // ✅ Toutes les dépendances
 
   // Envoyer un message vocal (base64 m4a)
   // ✅ OPTIMISATION: useCallback avec dépendances complètes
@@ -1319,6 +1353,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     durationMs: number
   ): Promise<void> => {
     if (!identity) throw new Error('Identité non disponible');
+    if (isLoRaMode) throw new Error('Audio non disponible en mode LoRa-only — passez en mode Bridge ou Internet');
     if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
 
     const totalSec = Math.floor(durationMs / 1000);
@@ -1363,7 +1398,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: audioLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations]); // ✅ nostrClient retiré - utilisation de la méthode statique
+  }, [identity, conversations, isLoRaMode]); // ✅ nostrClient retiré - utilisation de la méthode statique
 
   // Envoyer une image (base64 jpeg/png)
   // ✅ OPTIMISATION: useCallback avec dépendances complètes
@@ -1373,6 +1408,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     mime: string
   ): Promise<void> => {
     if (!identity) throw new Error('Identité non disponible');
+    if (isLoRaMode) throw new Error('Image non disponible en mode LoRa-only — passez en mode Bridge ou Internet');
     if (!nostrClient.isConnected) throw new Error('Non connecté — activez Nostr');
 
     const imagePayload = `IMAGE:${mime}|${base64}`;
@@ -1414,7 +1450,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     setConversations(prev => prev.map(c =>
       c.id === convId ? { ...c, lastMessage: imageLabel, lastMessageTime: ts } : c
     ));
-  }, [identity, conversations]); // ✅ nostrClient retiré - utilisation de la méthode statique
+  }, [identity, conversations, isLoRaMode]); // ✅ nostrClient retiré - utilisation de la méthode statique
 
   // Envoyer un Cashu token
   // ✅ OPTIMISATION: useCallback avec dépendance stable
@@ -1492,15 +1528,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[Forum] PSK sauvegardée pour:', channelName);
     }
 
-    // Nostr : publier kind:40 uniquement si nouveau forum (pas si on rejoint un forum découvert)
-    if (nostrClient.isConnected && !skipAnnounce) {
+    // Nostr : publier kind:40 uniquement si mode le permet
+    if ((isInternetMode || isBridgeMode) && nostrClient.isConnected && !skipAnnounce) {
       nostrClient.createChannel(channelName, description || `Forum ${channelName}`)
         .then(() => console.log('[Forum] kind:40 publié:', channelName))
         .catch((err) => console.warn('[Forum] Impossible de publier kind:40:', err));
     }
 
-    // Nostr : souscrire au channel déterministe si connecté
-    if (nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {
+    // Nostr : souscrire au channel déterministe si mode le permet
+    if ((isInternetMode || isBridgeMode) && nostrClient.isConnected && !nostrChannelUnsubs.current.has(channelName)) {
       const channelId = deriveChannelId(channelName);
       const unsub = nostrClient.subscribeChannel(channelId, (event) => {
         // ✅ FIX STALE CLOSURE: utilise le ref pour toujours avoir le handler avec identity à jour
@@ -1535,7 +1571,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   // handleIncomingNostrChannelMessage retiré des deps car on utilise le ref (nostrChannelHandlerRef)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations]);
+  }, [conversations, isInternetMode, isBridgeMode]);
 
   // ✅ NOUVEAU : Mettre à jour le display name
   // ✅ OPTIMISATION: useCallback avec dépendances complètes
@@ -1656,6 +1692,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     if (!identity) return;
 
     const unsub = messagingBus.subscribe(async (msg) => {
+      if (isLoRaMode) return; // Ignorer les messages Nostr entrants en mode LoRa-only
       if (msg.type !== 'dm') return;
 
       const fromId = msg.from; // nodeId MESH-XXXX ou pubkey hex si pas de tag meshcore-from
@@ -1851,7 +1888,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     });
 
     return unsub;
-  }, [identity]);
+  }, [identity, isLoRaMode]);
 
   // Bridge Nostr → LoRa : reçoit les paquets LoRa relayés via Nostr (type='lora')
   // et les réinjecte dans le pipeline handleIncomingMeshCorePacket.

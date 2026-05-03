@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { useWalletStore } from '@/stores/walletStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useAppSettings } from '@/providers/AppSettingsProvider';
 import {
   nostrClient,
   deriveNostrKeypair,
@@ -152,9 +153,11 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
 
   // ── Auto-connexion / déconnexion ─────────────────────────────────────────
 
+  const { isLoRaMode } = useAppSettings();
+
   useEffect(() => {
-    if (!isInitialized || !mnemonic) {
-      // Wallet supprimé ou non initialisé → déconnecter
+    if (!isInitialized || !mnemonic || isLoRaMode) {
+      // Wallet supprimé, non initialisé, ou mode LoRa-only → déconnecter
       if (isConnected || isConnecting) {
         nostrClient.disconnect();
         if (mountedRef.current) {
@@ -221,7 +224,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     return () => {
       cancelled = true;
     };
-  }, [isInitialized, mnemonic, keypair, getActiveRelayUrls]);
+  }, [isInitialized, mnemonic, keypair, getActiveRelayUrls, isLoRaMode]);
 
   // ── DMs ──────────────────────────────────────────────────────────────────
 
