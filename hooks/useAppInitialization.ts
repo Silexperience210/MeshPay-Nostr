@@ -9,7 +9,6 @@
  */
 import { useEffect, useState } from 'react';
 import { getDatabase, migrateFromAsyncStorage, updateMessageStatusDB } from '@/utils/database';
-import { isMigrationNeeded, runMigration } from '@/services/MigrationService';
 import { getMessageRetryService } from '@/services/MessageRetryService';
 import { getAckService } from '@/services/AckService';
 import { runIntegrationCheck } from '@/utils/integration-check';
@@ -34,25 +33,9 @@ export function useAppInitialization(): InitState {
         console.log('[Init] Initialisation de la base de données...');
         await getDatabase();
 
-        // 1.5 Migrer les données depuis AsyncStorage si nécessaire
+        // 1.5 Migrer les données depuis AsyncStorage si nécessaire (idempotent)
         console.log('[Init] Vérification migration AsyncStorage...');
         await migrateFromAsyncStorage();
-
-        // 2. Vérifier si migration nécessaire
-        const needsMigration = await isMigrationNeeded();
-        if (needsMigration) {
-          console.log('[Init] Migration des données nécessaire...');
-          setState(prev => ({ ...prev, isMigrating: true }));
-          
-          const result = await runMigration();
-          if (result.success) {
-            console.log(`[Init] Migration réussie: ${result.migrated} éléments migrés`);
-          } else {
-            console.error('[Init] Échec de la migration');
-          }
-          
-          setState(prev => ({ ...prev, isMigrating: false }));
-        }
 
         // 3. Initialiser les services
         console.log('[Init] Initialisation des services...');

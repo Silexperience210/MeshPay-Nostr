@@ -176,10 +176,10 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
           let products: ShopProduct[] = JSON.parse(productsRaw);
           // Migration : corriger sellerPubkey si c'était le nodeId MeshCore (non-hex, < 64 chars)
           if (myPubkey) {
-            const needsFix = products.some((p) => p.sellerPubkey.length < 64);
+            const needsFix = products.some((p) => (p.sellerPubkey?.length ?? 0) < 64);
             if (needsFix) {
               products = products.map((p) =>
-                p.sellerPubkey.length < 64 ? { ...p, sellerPubkey: myPubkey } : p,
+                (p.sellerPubkey?.length ?? 0) < 64 ? { ...p, sellerPubkey: myPubkey } : p,
               );
               AsyncStorage.setItem(PRODUCTS_KEY, JSON.stringify(products)).catch(() => {});
             }

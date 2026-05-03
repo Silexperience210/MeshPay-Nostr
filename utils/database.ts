@@ -890,6 +890,18 @@ export async function incrementRetryCount(id: string, error?: string): Promise<v
   `, toSQLiteParams([error || null, id]));
 }
 
+// ✅ CORRECTION: Fonction dédiée pour incrémenter le retryCount des Cashu tokens
+// (évite de cibler la mauvaise table pending_messages)
+export async function incrementCashuTokenRetryCount(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`
+    UPDATE cashu_tokens 
+    SET retryCount = retryCount + 1,
+        lastCheckAt = strftime('%s', 'now') * 1000
+    WHERE id = ?
+  `, toSQLiteParams([id]));
+}
+
 // --- Suppression manuelle ---
 
 export async function deleteMessageDB(msgId: string): Promise<void> {

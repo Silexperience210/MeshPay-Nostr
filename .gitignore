@@ -51,6 +51,9 @@ build_apk.ps1
 build-and-test.ps1
 android/
 
+# iOS build outputs
+dist-ios/
+
 # Claude worktrees
 .claude/worktrees/
 

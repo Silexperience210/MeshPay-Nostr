@@ -30,7 +30,7 @@ export async function syncPendingMessages(): Promise<number> {
     let sent = 0;
     for (const msg of pending.slice(0, 5)) {
       try {
-        await client.sendPacket(msg.packet as any);
+        await client.sendRawPacket(msg.packet as Uint8Array);
         await removePendingMessage(msg.id);
         sent++;
       } catch { /* continuer */ }

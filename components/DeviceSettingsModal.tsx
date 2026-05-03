@@ -101,6 +101,8 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
     setAdvertName(info.name || '');
     if (info.advLat) setLat(info.advLat.toFixed(6));
     if (info.advLon) setLon(info.advLon.toFixed(6));
+    // NOTE: floodRegion n'est pas lu depuis le device (pas exposé dans BleDeviceInfo)
+    // L'utilisateur doit le re-saisir à chaque ouverture du modal.
   }, [info, visible]);
 
   const handleSaveRadio = useCallback(async () => {
@@ -235,7 +237,7 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
           {info && (
             <View style={styles.infoRow}>
               <Text style={styles.infoName}>{info.name}</Text>
-              <Text style={styles.infoPubkey}>{info.publicKey.slice(0, 16)}...</Text>
+              <Text style={styles.infoPubkey}>{info.publicKey?.slice(0, 16) ?? 'N/A'}...</Text>
               {ble.batteryVolts != null && (
                 <View style={styles.battBadge}>
                   <Zap size={10} color={Colors.green} />

@@ -25,7 +25,7 @@ import {
   generateMsgId,
   updateMessageStatus,
 } from '@/utils/messages-store';
-import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
+import { cleanupOldMessages, getUserProfile, setUserProfile, saveCashuToken, getUnverifiedCashuTokens, markCashuTokenVerified, incrementCashuTokenRetryCount, deleteMessageDB, deleteConversationDB, saveContact, getContacts, deleteContact, isContact, toggleContactFavorite, type DBContact } from '@/utils/database';
 import { deriveMeshIdentity, type MeshIdentityFull as MeshIdentity } from '@/utils/identity';
 import { messagingBus } from '@/utils/messaging-bus';
 import { MeshRouter } from '@/utils/mesh-routing';
@@ -821,7 +821,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
     if (newConvs.length > 0) {
       for (const conv of newConvs) {
-        saveConversation(conv);
+        saveConversation(conv).catch((e) => {
+          console.error('[MessagesProvider] Erreur saveConversation auto-créée:', e);
+        });
       }
       setConversations(prev => {
         const newIds = new Set(newConvs.map(c => c.id));
@@ -981,14 +983,24 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   // ✅ NOUVEAU : Cleanup automatique des messages > 24h toutes les heures
   useEffect(() => {
-    // Cleanup immédiat au démarrage
-    cleanupOldMessages();
-    
-    // Puis toutes les heures
-    const interval = setInterval(() => {
+    const CUTOFF_MS = 24 * 60 * 60 * 1000;
+    const doCleanup = () => {
       cleanupOldMessages();
-    }, 60 * 60 * 1000); // 1 heure
-    
+      // Nettoyer aussi le React state pour éviter les messages fantômes
+      setMessagesByConv(prev => {
+        const now = Date.now();
+        const next: Record<string, StoredMessage[]> = {};
+        for (const convId of Object.keys(prev)) {
+          const filtered = prev[convId].filter(m => now - m.timestamp < CUTOFF_MS);
+          if (filtered.length > 0) next[convId] = filtered;
+        }
+        return next;
+      });
+    };
+    // Cleanup immédiat au démarrage
+    doCleanup();
+    // Puis toutes les heures
+    const interval = setInterval(doCleanup, 60 * 60 * 1000);
     return () => clearInterval(interval);
   }, []); // ✅ Aucune dépendance - fonctionne au montage uniquement
 
@@ -1015,12 +1027,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             await markCashuTokenVerified(token.id);
             console.log('[Cashu] Token vérifié avec succès:', token.id);
           } else {
-            await incrementRetryCount(token.id);
+            await incrementCashuTokenRetryCount(token.id);
             if (!verification.valid) console.log('[Cashu] Token invalide:', token.id, verification.error);
           }
         } catch (err) {
           console.log('[Cashu] Erreur vérif token:', token.id, err);
-          await incrementRetryCount(token.id);
+          await incrementCashuTokenRetryCount(token.id);
         }
       }));
     } catch (err) {
@@ -1214,8 +1226,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
       // Nostr (NIP-28 kind:42 sur channel déterministe)
       if (nostrClient.isConnected) {
-        const channelId = deriveChannelId(channelName);
-        await nostrClient.publishChannelMessage(channelId, payload);
+        try {
+          const channelId = deriveChannelId(channelName);
+          await nostrClient.publishChannelMessage(channelId, payload);
+        } catch (pubErr) {
+          console.warn('[Messages] Échec publishChannelMessage:', pubErr);
+        }
       }
       // Sauvegarder localement (mes propres messages ne reviennent pas via subscribeChannel)
       const msg: StoredMessage = {
@@ -1313,10 +1329,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
     // Envoi NIP-17 via Nostr
     const conv = conversations.find(c => c.id === convId);
+    let publishOk = false;
     if (conv?.peerPubkey) {
       const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
       if (pk.length === 64) {
-        await nostrClient.publishDMSealed(pk, voicePayload);
+        try {
+          await nostrClient.publishDMSealed(pk, voicePayload);
+          publishOk = true;
+        } catch (pubErr) {
+          console.warn('[Messages] Échec publishDMSealed audio:', pubErr);
+        }
       }
     }
 
@@ -1359,10 +1381,16 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const ts = Date.now();
 
     const conv = conversations.find(c => c.id === convId);
+    let publishOk = false;
     if (conv?.peerPubkey) {
       const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
       if (pk.length === 64) {
-        await nostrClient.publishDMSealed(pk, imagePayload);
+        try {
+          await nostrClient.publishDMSealed(pk, imagePayload);
+          publishOk = true;
+        } catch (pubErr) {
+          console.warn('[Messages] Échec publishDMSealed image:', pubErr);
+        }
       }
     }
 
@@ -1377,7 +1405,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       imageMime: mime,
       timestamp: ts,
       isMine: true,
-      status: 'sent',
+      status: publishOk ? 'sent' : 'failed',
       transport: 'nostr',
     };
     await saveMessage(msg);
@@ -1677,7 +1705,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
                   id: fromId, name: fromId, isForum: false, peerPubkey: msg.fromPubkey,
                   lastMessage: audioLabel, lastMessageTime: msg.ts, unreadCount: 1, online: true,
                 };
-                saveConversation(newConv);
+                saveConversation(newConv).catch((e) => {
+                  console.error('[MessagesProvider] Erreur saveConversation audio:', e);
+                });
                 return [newConv, ...prev];
               }
               return prev.map(c => c.id !== fromId ? c : {
@@ -1722,7 +1752,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
                   id: fromId, name: fromId, isForum: false, peerPubkey: msg.fromPubkey,
                   lastMessage: '📷 Image', lastMessageTime: msg.ts, unreadCount: 1, online: true,
                 };
-                saveConversation(newConv);
+                saveConversation(newConv).catch((e) => {
+                  console.error('[MessagesProvider] Erreur saveConversation image:', e);
+                });
                 return [newConv, ...prev];
               }
               return prev.map(c => c.id !== fromId ? c : {
@@ -1797,7 +1829,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             unreadCount: 1,
             online: true,
           };
-          saveConversation(newConv);
+          saveConversation(newConv).catch((e) => {
+            console.error('[MessagesProvider] Erreur saveConversation Nostr DM:', e);
+          });
           return [newConv, ...prev];
         }
         return prev.map(c => {
