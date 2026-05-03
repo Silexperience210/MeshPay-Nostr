@@ -48,4 +48,11 @@ node_modules
 bitmesh.keystore
 credentials.json
 build_apk.ps1
+build-and-test.ps1
 android/
+
+# Claude worktrees
+.claude/worktrees/
+
+# Android bugreports
+bugreport-*.zip

@@ -8,7 +8,7 @@
  * 4. Les handlers sont enregistrés
  */
 import { useEffect, useState } from 'react';
-import { getDatabase, migrateFromAsyncStorage } from '@/utils/database';
+import { getDatabase, migrateFromAsyncStorage, updateMessageStatusDB } from '@/utils/database';
 import { isMigrationNeeded, runMigration } from '@/services/MigrationService';
 import { getMessageRetryService } from '@/services/MessageRetryService';
 import { getAckService } from '@/services/AckService';
@@ -57,21 +57,27 @@ export function useAppInitialization(): InitState {
         // 3. Initialiser les services
         console.log('[Init] Initialisation des services...');
         
-        // Configurer le service de retry
+        // Configurer le service de retry avec persistance SQLite
         const retryService = getMessageRetryService((msgId, status) => {
           console.log(`[Init] Message ${msgId}: ${status}`);
-          // TODO: Mettre à jour l'UI si nécessaire
+          // ✅ Persister le statut en SQLite pour qu'il survive au redémarrage
+          if (status === 'sent' || status === 'failed') {
+            updateMessageStatusDB(msgId, status).catch((err) =>
+              console.warn('[Init] Retry status DB update failed:', err)
+            );
+          }
         });
         
-        // Configurer le service ACK
+        // Configurer le service ACK (deprecated — firmware natif gère les ACK)
+        // Gardé pour compatibilité avec integration-check
         const ackService = getAckService(
           (msgId) => {
-            console.log(`[Init] ACK reçu pour ${msgId}`);
-            // TODO: Mettre à jour le statut du message dans l'UI
+            console.log(`[Init] ACK legacy reçu pour ${msgId}`);
+            updateMessageStatusDB(msgId, 'delivered').catch(() => {});
           },
           (msgId) => {
-            console.log(`[Init] Timeout ACK pour ${msgId}`);
-            // TODO: Marquer le message comme failed dans l'UI
+            console.log(`[Init] Timeout ACK legacy pour ${msgId}`);
+            updateMessageStatusDB(msgId, 'failed').catch(() => {});
           }
         );
 

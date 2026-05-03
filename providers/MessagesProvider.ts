@@ -621,10 +621,18 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         if (ackInfo) {
           console.log('[MeshCore] ACK reçu pour message', ackInfo.originalMessageId, 'depuis', fromNodeId);
 
+          // ✅ FIX: Persister le statut delivered en SQLite (pas seulement React state)
+          const msgId = `mc-${ackInfo.originalMessageId}`;
+          try {
+            const { updateMessageStatusDB } = await import('@/utils/database');
+            await updateMessageStatusDB(msgId, 'delivered');
+          } catch (dbErr) {
+            console.warn('[MessagesProvider] Erreur DB update delivered (ACK):', dbErr);
+          }
+
           // ✅ FIX: Chercher dans TOUTES les conversations, pas seulement prev[fromNodeId].
           // La conversation peut avoir été résolue sous un ID différent du fromNodeId brut
           // (ex: conversation créée avec un nodeId résolu via peerPubkey ou contact BLE).
-          const msgId = `mc-${ackInfo.originalMessageId}`;
           setMessagesByConv(prev => {
             const next = { ...prev };
             let found = false;

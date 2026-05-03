@@ -45,6 +45,25 @@ let initAttempts = 0;
 const MAX_INIT_ATTEMPTS = 3;
 let initPromise: Promise<SQLite.SQLiteDatabase> | null = null; // ✅ VERROU pour éviter les appels simultanés
 
+/**
+ * Ferme proprement la connexion à la base de données.
+ * À appeler lors du teardown de l'application (ex: reload dev, logout).
+ */
+export async function closeDatabase(): Promise<void> {
+  if (db) {
+    try {
+      await db.closeAsync();
+      console.log('[Database] Connexion fermée');
+    } catch (err) {
+      console.warn('[Database] Erreur fermeture:', err);
+    } finally {
+      db = null;
+      initPromise = null;
+      initAttempts = 0;
+    }
+  }
+}
+
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   // ✅ VERROU: Si une initialisation est déjà en cours, attendre qu'elle termine
   if (initPromise) {
@@ -1012,7 +1031,7 @@ export async function markCashuTokenUnspent(id: string): Promise<void> {
     const database = await getDatabase();
     await database.runAsync(`
       UPDATE cashu_tokens 
-      SET state = 'unspent', pending = 0
+      SET state = 'unspent'
       WHERE id = ?
     `, toSQLiteParams([id]));
     console.log('[DB] Cashu token remis à unspent:', id);

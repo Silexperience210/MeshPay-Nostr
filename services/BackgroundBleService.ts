@@ -12,7 +12,7 @@
 
 import { AppState, type AppStateStatus } from 'react-native';
 import { getBleGatewayClient } from '@/utils/ble-gateway';
-import { getPendingMessages, removePendingMessage } from '@/utils/database';
+import { getPendingMessages, removePendingMessage, updateMessageStatusDB } from '@/utils/database';
 
 const POLL_INTERVAL_MS = 15_000;    // Toutes les 15 secondes en foreground
 const MAX_MESSAGES_PER_CYCLE = 5;
@@ -86,8 +86,12 @@ class BackgroundBleService {
         try {
           await client.sendRawPacket(msg.packet as Uint8Array);
           await removePendingMessage(msg.id);
-        } catch {
-          // Continuer avec le suivant
+          // ✅ Mettre à jour le statut du message en DB
+          await updateMessageStatusDB(msg.id, 'sent').catch(() => {});
+        } catch (err) {
+          console.error('[BackgroundBLE] Échec envoi message:', msg.id, err);
+          // ✅ Mettre à jour le statut en failed si max retries atteint ?
+          // On laisse MessageRetryService gérer les retries et le statut final
         }
       }
     } catch (error) {

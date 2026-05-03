@@ -17,8 +17,7 @@
  * NE PAS utiliser pour de nouveaux développements — implémentait un ACK
  * échoé over-the-air incompatible avec le format firmware natif.
  */
-import { MeshCorePacket, MeshCoreMessageType, createTextMessageSync, nodeIdToUint64, uint64ToNodeId } from '@/utils/meshcore-protocol';
-import { getBleGatewayClient } from '@/utils/ble-gateway';
+import { MeshCorePacket, createTextMessageSync } from '@/utils/meshcore-protocol';
 import { updateMessageStatusDB } from '@/utils/database';
 
 interface PendingAck {
@@ -42,7 +41,8 @@ class AckService {
   }
 
   /**
-   * Envoie un message et attend l'ACK
+   * @deprecated Le firmware MeshCore Companion fournit un ACK natif.
+   * Cette méthode est un no-op pour éviter toute interaction avec le BLE.
    */
   async sendWithAck(
     packet: MeshCorePacket,
@@ -50,70 +50,23 @@ class AckService {
     conversationId: string,
     timeoutMs: number = 30000
   ): Promise<boolean> {
-    const client = getBleGatewayClient();
-    
-    return new Promise((resolve) => {
-      // Envoyer le message
-      client.sendPacket(packet).catch(() => {
-        resolve(false);
-      });
-
-      // Mettre en attente d'ACK
-      const timeout = setTimeout(async () => {
-        this.pendingAcks.delete(originalMsgId);
-        await updateMessageStatusDB(originalMsgId, 'failed');
-        this.onAckTimeout?.(originalMsgId);
-        resolve(false);
-      }, timeoutMs);
-
-      this.pendingAcks.set(originalMsgId, {
-        msgId: originalMsgId,
-        conversationId,
-        timestamp: Date.now(),
-        timeout,
-      });
-
-      // Mettre à jour le statut
-      updateMessageStatusDB(originalMsgId, 'sending').catch(err => {
-        console.error('[AckService] Erreur mise à jour statut:', err);
-      });
-    });
+    console.warn('[AckService] sendWithAck est deprecated — utiliser BleProvider directement');
+    return false;
   }
 
   /**
-   * Traite un ACK reçu
+   * @deprecated Le firmware gère les ACK natifs.
    */
   async handleIncomingAck(packet: MeshCorePacket): Promise<void> {
-    const ackMsgId = packet.payload[0]?.toString(); // Simplifié
-    
-    if (!ackMsgId) return;
-
-    const pending = this.pendingAcks.get(ackMsgId);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this.pendingAcks.delete(ackMsgId);
-      
-      // ✅ CORRECTION: try/catch pour updateMessageStatusDB
-      try {
-        await updateMessageStatusDB(ackMsgId, 'delivered');
-        this.onAckReceived?.(ackMsgId);
-        console.log('[AckService] ACK reçu pour:', ackMsgId);
-      } catch (err) {
-        console.error('[AckService] Erreur mise à jour statut ACK:', err);
-      }
-    }
+    // no-op — les ACK sont gérés par BleGatewayClient + BleProvider
   }
 
   /**
-   * Crée un paquet ACK
+   * @deprecated
    */
   createAckPacket(originalMsgId: string, toNodeId: string): MeshCorePacket {
-    // Utiliser l'identité du wallet si disponible, sinon fallback
+    console.warn('[AckService] createAckPacket est deprecated');
     const myNodeId = 'MESH-0000';
-    
-    const encoder = new TextEncoder();
-    const payload = encoder.encode(originalMsgId);
-    
     return createTextMessageSync(myNodeId, toNodeId, originalMsgId);
   }
 
