@@ -1159,7 +1159,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
         convId,
         async (packet) => {
           if (ble.connected) {
-            await ble.sendPacket(packet);
+            await ble.sendPacket(packet, undefined, msgId);
           } else {
             throw new Error('BLE non connecté');
           }
@@ -1354,7 +1354,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       audioDuration: durationMs,
       timestamp: ts,
       isMine: true,
-      status: 'sent',
+      status: publishOk ? 'sent' : 'failed',
       transport: 'nostr',
     };
     await saveMessage(msg);

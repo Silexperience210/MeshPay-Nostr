@@ -15,7 +15,10 @@ import { SerialConnection } from '@liamcottle/meshcore.js';
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.length === 66 ? hex.slice(2) : hex;
   if (clean.length % 2 !== 0) throw new Error('Invalid hex string');
-  return new Uint8Array(clean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+  if (!/^[0-9a-fA-F]+$/.test(clean)) throw new Error('Invalid hex characters');
+  const bytes = new Uint8Array(clean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+  if (bytes.some(b => Number.isNaN(b))) throw new Error('Hex parsing produced NaN');
+  return bytes;
 }
 
 // SerialConnection est une classe abstraite dans meshcore.js.

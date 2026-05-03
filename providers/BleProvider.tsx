@@ -45,7 +45,7 @@ interface BleState {
 interface BleContextValue extends BleState {
   connectToGateway: (deviceId: string) => Promise<void>;
   disconnectGateway: () => Promise<void>;
-  sendPacket: (packet: MeshCorePacket, timeoutMs?: number) => Promise<void>;
+  sendPacket: (packet: MeshCorePacket, timeoutMs?: number, localMsgId?: string) => Promise<void>;
   onPacket: (handler: (packet: MeshCorePacket) => void) => void;
   confirmLoraActive: () => void;
   // Protocole natif MeshCore Companion — messages
@@ -395,9 +395,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const sendPacket = async (packet: MeshCorePacket, timeoutMs = 10000) => {
+  const sendPacket = async (packet: MeshCorePacket, timeoutMs = 10000, localMsgId?: string) => {
     if (!clientRef.current || !state.connected) {
-      const msgId = `pending-${Date.now()}`;
+      const msgId = localMsgId || `pending-${Date.now()}`;
       await retryServiceRef.current.queueMessage(msgId, packet);
       console.log(`[BleProvider] Message mis en file d'attente persistante: ${msgId}`);
       return;
@@ -411,7 +411,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         )
       ]);
     } catch (error) {
-      const msgId = `retry-${Date.now()}`;
+      const msgId = localMsgId || `retry-${Date.now()}`;
       await retryServiceRef.current.queueMessage(msgId, packet);
       console.log(`[BleProvider] Échec envoi, message en file d'attente: ${msgId}`);
       throw error;

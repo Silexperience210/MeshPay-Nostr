@@ -23,6 +23,11 @@ export interface DBMessage {
   cashuToken?: string;
   btcAmount?: number;
   compressed?: boolean;
+  audioData?: string;
+  audioDuration?: number;
+  imageData?: string;
+  imageMime?: string;
+  transport?: 'nostr' | 'ble' | 'lora';
 }
 
 export interface DBContact {
@@ -40,10 +45,16 @@ export interface DBCashuToken {
   token: string;
   amount: number;
   mintUrl: string;
-  status: 'unspent' | 'spent' | 'pending';
-  messageId?: string;
-  createdAt: number;
+  proofs: string;
+  keysetId?: string;
+  receivedAt: number;
+  state: 'unspent' | 'spent' | 'pending' | 'unverified';
   spentAt?: number;
+  source?: string;
+  memo?: string;
+  unverified?: number;
+  retryCount?: number;
+  lastCheckAt?: number;
 }
 
 export interface DBSubMesh {
@@ -79,7 +90,7 @@ export async function deleteConversationDB(_convId: string): Promise<void> {}
 export async function cleanupOldMessages(_maxAgeMs?: number): Promise<number> { return 0; }
 export async function getUserProfile(): Promise<{ displayName: string } | null> { return null; }
 export async function setUserProfile(_profile: { displayName: string }): Promise<void> {}
-export async function saveCashuToken(_token: Omit<DBCashuToken, 'createdAt'>): Promise<void> {}
+export async function saveCashuToken(_token: Omit<DBCashuToken, 'receivedAt'>): Promise<void> {}
 export async function getUnverifiedCashuTokens(): Promise<DBCashuToken[]> { return []; }
 export async function markCashuTokenVerified(_id: string): Promise<void> {}
 export async function markCashuTokenSpent(_id: string): Promise<void> {}
@@ -87,7 +98,8 @@ export async function markCashuTokenPending(_id: string): Promise<void> {}
 export async function markCashuTokenUnspent(_id: string): Promise<void> {}
 export async function getCashuBalance(): Promise<{ total: number; byMint: Record<string, number> }> { return { total: 0, byMint: {} }; }
 export async function getUnspentCashuTokens(): Promise<DBCashuToken[]> { return []; }
-export async function incrementRetryCount(_msgId: string): Promise<number> { return 0; }
+export async function incrementRetryCount(_msgId: string, _error?: string): Promise<void> {}
+export async function incrementCashuTokenRetryCount(_id: string): Promise<void> {}
 export async function saveContact(_contact: Omit<DBContact, 'addedAt' | 'updatedAt'>): Promise<void> {}
 export async function getContacts(): Promise<DBContact[]> { return []; }
 export async function deleteContact(_nodeId: string): Promise<void> {}
