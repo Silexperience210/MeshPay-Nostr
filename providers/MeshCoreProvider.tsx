@@ -9,8 +9,17 @@ import React, { createContext, useContext, useState, useRef, useCallback } from 
 import { Platform } from 'react-native';
 import { UsbSerialManager } from 'react-native-usb-serialport-for-android';
 // @ts-ignore - meshcore.js n'a pas de types
-import SerialConnection from '@liamcottle/meshcore.js/src/connection/serial_connection.js';
+import { SerialConnection } from '@liamcottle/meshcore.js';
 
+// Helper: convertir une chaîne hex en Uint8Array
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.length === 66 ? hex.slice(2) : hex;
+  if (clean.length % 2 !== 0) throw new Error('Invalid hex string');
+  return new Uint8Array(clean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+}
+
+// SerialConnection est une classe abstraite dans meshcore.js.
+// On l'étend concrètement avec notre adapter React Native USB.
 const BaseSerialConnection = SerialConnection as unknown as { new (): any };
 
 class ReactNativeSerialConnection extends BaseSerialConnection {
@@ -94,7 +103,7 @@ interface MeshCoreContextValue extends MeshCoreState {
   sendRawData: (data: Uint8Array) => Promise<void>;
   syncNextMessage: () => Promise<any>;
   getChannel: (channelIdx: number) => Promise<MeshCoreChannel | null>;
-  setChannel: (channelIdx: number, name: string, secret: string) => Promise<void>;
+  setChannel: (channelIdx: number, name: string, secret: string | Uint8Array) => Promise<void>;
   getBatteryVoltage: () => Promise<number | null>;
   queryDevice: () => Promise<any>;
   setAdvertName: (name: string) => Promise<void>;
@@ -178,14 +187,17 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
 
-        meshConnection.on('connected', () => {
+        meshConnection.once('connected', () => {
           clearTimeout(timeout);
           resolve();
         });
 
-        meshConnection.on('error', (err: any) => {
+        // Note: la classe Connection de meshcore.js n'émet pas d'événement 'error'.
+        // On s'appuie sur le timeout pour gérer les échecs de connexion.
+        // Si le device se déconnecte avant 'connected', on rejette:
+        meshConnection.once('disconnected', () => {
           clearTimeout(timeout);
-          reject(err);
+          reject(new Error('Device disconnected before handshake'));
         });
 
         meshConnection.connect();
@@ -270,7 +282,8 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
       const txtType = 0;
       const attempt = 0;
       const senderTimestamp = Math.floor(Date.now() / 1000);
-      const pubKeyPrefix = publicKey.slice(0, 12);
+      const pubKeyBytes = hexToBytes(publicKey);
+      const pubKeyPrefix = pubKeyBytes.slice(0, 6);
 
       await connectionRef.current.sendCommandSendTxtMsg(
         txtType,
@@ -380,13 +393,15 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.connected]);
 
-  const setChannel = useCallback(async (channelIdx: number, name: string, secret: string) => {
+  const setChannel = useCallback(async (channelIdx: number, name: string, secret: string | Uint8Array) => {
     if (!connectionRef.current || !state.connected) {
       throw new Error('Not connected');
     }
 
     try {
-      await connectionRef.current.sendCommandSetChannel(channelIdx, name, secret);
+      // secret peut être une chaîne hex (64 chars) ou un Uint8Array
+      const secretBytes = typeof secret === 'string' ? hexToBytes(secret) : secret;
+      await connectionRef.current.sendCommandSetChannel(channelIdx, name, secretBytes);
       console.log('[MeshCore] Channel set:', channelIdx, name);
     } catch (err) {
       console.error('[MeshCore] Set channel error:', err);
@@ -445,7 +460,11 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      await connectionRef.current.sendCommandSetAdvertLatLon(lat, lon);
+      // meshcore.js attend des entiers int32LE (×1e6), pas des floats
+      await connectionRef.current.sendCommandSetAdvertLatLon(
+        Math.round(lat * 1e6),
+        Math.round(lon * 1e6)
+      );
       console.log('[MeshCore] Advert lat/lon set:', lat, lon);
     } catch (err) {
       console.error('[MeshCore] Set advert lat/lon error:', err);
@@ -531,7 +550,7 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      await connectionRef.current.sendCommandRemoveContact(pubKey);
+      await connectionRef.current.sendCommandRemoveContact(hexToBytes(pubKey));
       console.log('[MeshCore] Contact removed:', pubKey.slice(0, 16));
       const contacts = await connectionRef.current.getContacts();
       setState(prev => ({ ...prev, contacts }));
@@ -547,7 +566,7 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      await connectionRef.current.sendCommandShareContact(pubKey);
+      await connectionRef.current.sendCommandShareContact(hexToBytes(pubKey));
       console.log('[MeshCore] Contact shared:', pubKey.slice(0, 16));
     } catch (err) {
       console.error('[MeshCore] Share contact error:', err);
@@ -561,7 +580,7 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      await connectionRef.current.sendCommandSendLogin(publicKey, password);
+      await connectionRef.current.sendCommandSendLogin(hexToBytes(publicKey), password);
       console.log('[MeshCore] Login sent to:', publicKey.slice(0, 16));
     } catch (err) {
       console.error('[MeshCore] Login error:', err);
@@ -575,7 +594,7 @@ export function MeshCoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
-      const result = await connectionRef.current.sendCommandSendTelemetryReq(publicKey);
+      const result = await connectionRef.current.sendCommandSendTelemetryReq(hexToBytes(publicKey));
       return result;
     } catch (err) {
       console.error('[MeshCore] Telemetry error:', err);

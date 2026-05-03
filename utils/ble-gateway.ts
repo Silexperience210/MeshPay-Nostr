@@ -1,11 +1,11 @@
 /**
- * BLE Gateway Client — MeshCore Companion Protocol v1.13
+ * BLE Gateway Client — MeshCore Companion Protocol (v1.13 / v1.14 / v1.15)
  *
  * Bibliothèque : react-native-ble-manager (v12+)
  *
  * Sources de vérité :
  *   https://github.com/zjs81/meshcore-open         (Flutter officiel)
- *   meshcore_firmware/examples/companion_radio/MyMesh.cpp
+ *   meshcore_firmware/examples/companion_radio/MyMesh.cpp (tag companion-v1.15.0)
  *   meshcore_firmware/docs/companion_protocol.md
  *
  * ╔══════════════════════════════════════════════════════════════════════╗
@@ -69,6 +69,7 @@ const CMD_SET_FLOOD_SCOPE    = 54;  // Définir la portée flood (hops max)
 const CMD_GET_STATS          = 56;  // Statistiques device (core/radio/paquets)
 const CMD_GET_CHANNEL        = 31;  // Lire config canal N
 const CMD_SET_CHANNEL        = 32;  // Écrire config canal N
+const CMD_SEND_CHANNEL_DATA  = 62;  // Envoyer des données binaires sur un canal (v1.15.0)
 
 // ── Response / push codes (Device → App) ──────────────────────────────
 const RESP_OK               = 0;
@@ -91,7 +92,10 @@ const RESP_CHANNEL_MSG_V3   = 0x11; // PACKET_CHANNEL_MSG_RECV_V3
 const RESP_CHANNEL_INFO     = 18;  // Info canal N
 const RESP_CUSTOM_VARS      = 21;  // Variables custom
 const RESP_STATS            = 24;  // Statistiques device (core/radio/packets)
-const RESP_RADIO_SETTINGS   = 25;  // Paramètres radio
+const RESP_AUTOADD_CONFIG   = 25;  // RESP_CODE_AUTOADD_CONFIG (firmware v1.13+) — anciennement mal nommé "RADIO_SETTINGS"
+const RESP_ALLOWED_REPEAT_FREQ = 26; // v1.15 — fréquences répéteur autorisées
+const RESP_CHANNEL_DATA_RECV = 27; // Données binaires reçues sur un canal (v1.15.0)
+const RESP_DEFAULT_FLOOD_SCOPE = 28; // v1.15 — scope flood par défaut
 const PUSH_ADVERT           = 0x80; // Advertisement nœud reçu
 const PUSH_PATH_UPDATED     = 0x81; // Route mise à jour vers un contact
 const PUSH_SEND_CONFIRMED   = 0x82; // Livraison LoRa confirmée
@@ -103,10 +107,21 @@ const PUSH_STATUS_RESPONSE  = 0x87; // Statut d'un contact (réponse ping)
 const PUSH_TRACE_DATA       = 0x89; // Données trace path
 const PUSH_NEW_ADVERT       = 0x8A; // Nouveau nœud découvert
 const PUSH_BINARY_RESPONSE  = 0x8C; // Réponse binaire (voisins, télémétrie)
+const PUSH_PATH_DISCOVERY_RESPONSE = 0x8D; // Réponse path discovery (firmware v1.13+)
+const PUSH_CONTROL_DATA     = 0x8E; // Données de contrôle (v8+ firmware, v1.15)
+const PUSH_CONTACT_DELETED  = 0x8F; // Contact supprimé par le firmware (auto-add overflow, v1.15)
+const PUSH_CONTACTS_FULL    = 0x90; // Stockage contacts plein (v1.15)
 
 // Types de requêtes binaires (CMD_SEND_BINARY_REQ)
 const BINARY_REQ_NEIGHBOURS = 0x06;
 
+// app_target_ver envoyé dans CMD_DEVICE_QUERY (cmd_frame[1]).
+// Le firmware MeshCore utilise « app_target_ver >= 3 » pour décider d'envoyer
+// les messages au format V3 (RESP_DIRECT_MSG_V3 = 0x10 / RESP_CHANNEL_MSG_V3 = 0x11)
+// qui incluent le SNR de la radio. Avec une valeur < 3, on bascule sur les codes
+// legacy (7 / 8) qui n'ont pas de SNR. MeshPay implémente les deux parsers, mais
+// les V3 sont préférés car ils remontent les métadonnées radio à l'UI.
+// (meshcore.js utilise 1 mais ne parse pas les V3 — divergence volontaire.)
 const APP_PROTOCOL_VERSION = 3;
 const RAW_PUSH_HEADER_SIZE = 3;   // [snr:int8][rssi:int8][reserved:uint8]
 const BLE_MAX_WRITE        = 169; // MTU 172 − 3 ATT overhead
@@ -741,6 +756,15 @@ export class BleGatewayClient {
   async sendPacket(packet: MeshCorePacket): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
     const encoded = encodeMeshCorePacket(packet);
+    await this.sendRawPacket(encoded);
+  }
+
+  /**
+   * Envoie des données brutes déjà encodées via CMD_SEND_RAW (0x19).
+   * Utilisé par les services de retry qui stockent les paquets en binaire.
+   */
+  async sendRawPacket(encoded: Uint8Array): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
     const payload = new Uint8Array(1 + encoded.length);
     payload[0] = 0x00; // path_length = 0 (broadcast)
     payload.set(encoded, 1);
@@ -755,7 +779,7 @@ export class BleGatewayClient {
   async sendDirectMessage(pubkeyHex: string, text: string, attempt = 0): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté à un device MeshCore');
 
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
     const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
     const textBytes   = new TextEncoder().encode(text);
     const ts          = Math.floor(Date.now() / 1000);
@@ -810,6 +834,26 @@ export class BleGatewayClient {
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
     await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
+  }
+
+  /**
+   * Envoie des données binaires sur un canal (v1.15.0+).
+   * Format officiel : [channel_idx:1][path_len:1][path...][data_type:2LE][payload...]
+   */
+  async sendChannelData(channelIdx: number, dataType: number, payload: Uint8Array, path: Uint8Array = new Uint8Array(0)): Promise<void> {
+    if (!this.connectedId) throw new Error('Non connecté');
+    if (payload.length > 150) throw new Error(`Payload trop long: ${payload.length}B (max 150)`);
+
+    const frame = new Uint8Array(1 + 1 + path.length + 2 + payload.length);
+    let i = 0;
+    frame[i++] = channelIdx & 0xFF;
+    frame[i++] = path.length & 0xFF;
+    frame.set(path, i);       i += path.length;
+    new DataView(frame.buffer).setUint16(i, dataType, true); i += 2;
+    frame.set(payload, i);
+
+    console.log(`[BleGateway] sendChannelData ch=${channelIdx} type=${dataType} (${payload.length}B)`);
+    await this.sendFrame(CMD_SEND_CHANNEL_DATA, frame);
   }
 
   async syncNextMessage(): Promise<void> {
@@ -912,28 +956,40 @@ export class BleGatewayClient {
     console.log(`[BleGateway] SetAdvertLatLon: ${lat.toFixed(6)}, ${lon.toFixed(6)}`);
   }
 
+  /** Normalise une clé publique hex (gère les clés compressées secp256k1 66 chars en loggant un warning) */
+  private normalizePubkeyHex(pubkeyHex: string): string {
+    if (pubkeyHex.length === 66) {
+      console.warn('[BleGateway] Clé publique compressée (66 hex) détectée — slice(2) appliqué. ATTENTION: MeshCore attend un hash de 32 bytes (64 hex), pas une clé secp256k1 brute.');
+      return pubkeyHex.slice(2);
+    }
+    if (pubkeyHex.length !== 64) {
+      console.warn(`[BleGateway] Clé publique de taille inattendue: ${pubkeyHex.length} hex (attendu: 64)`);
+    }
+    return pubkeyHex;
+  }
+
   /** Réinitialiser la route vers un contact (pubkey hex 64) */
   async resetPath(pubkeyHex: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
-    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-    await this.sendFrame(CMD_RESET_PATH, prefix);
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_RESET_PATH, pubkeyBytes);
     console.log(`[BleGateway] ResetPath: ${hexClean.slice(0, 12)}...`);
   }
 
   /** Supprimer un contact (pubkey hex 64) */
   async removeContact(pubkeyHex: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
-    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-    await this.sendFrame(CMD_REMOVE_CONTACT, prefix);
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_REMOVE_CONTACT, pubkeyBytes);
     console.log(`[BleGateway] RemoveContact: ${hexClean.slice(0, 12)}...`);
   }
 
   /** Exporter un contact (binaire) — réponse via onExportContact */
   async exportContact(pubkeyHex: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
     const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
     await this.sendFrame(CMD_EXPORT_CONTACT, pubkeyBytes);
   }
@@ -953,15 +1009,32 @@ export class BleGatewayClient {
   /** Redémarrer le device */
   async reboot(): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    await this.sendFrame(CMD_REBOOT, new Uint8Array(0));
+    // Le firmware attend la string "reboot" après le cmd (cohérent avec meshcore.js)
+    await this.sendFrame(CMD_REBOOT, new TextEncoder().encode('reboot'));
     console.log('[BleGateway] Reboot envoyé');
   }
 
-  /** Définir la portée flood (0=local, 1=single-hop, N=N-hops) */
-  async setFloodScope(scope: number): Promise<void> {
+  /**
+   * Définir la région/scope par défaut pour les flood packets (v1.15.0+).
+   * La transportKey est dérivée du nom de région via SHA-256 (comme dans meshcore.js).
+   * Si aucune région n'est fournie, le scope est désactivé (traffic non-scopé).
+   */
+  async setFloodScope(regionName: string | null): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    await this.sendFrame(CMD_SET_FLOOD_SCOPE, new Uint8Array([scope & 0xFF]));
-    console.log(`[BleGateway] SetFloodScope: ${scope}`);
+    if (!regionName) {
+      // Désactiver le scope : envoyer une transportKey vide (32 zéros)
+      await this.sendFrame(CMD_SET_FLOOD_SCOPE, new Uint8Array(33)); // [0] + 32 zéros
+      console.log('[BleGateway] SetFloodScope: désactivé');
+      return;
+    }
+    const name = regionName.startsWith('#') ? regionName : `#${regionName}`;
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(name));
+    const transportKey = new Uint8Array(hash);
+    const payload = new Uint8Array(1 + 32);
+    payload[0] = 0; // byte obligatoire (vérifié par firmware v8+)
+    payload.set(transportKey, 1);
+    await this.sendFrame(CMD_SET_FLOOD_SCOPE, payload);
+    console.log(`[BleGateway] SetFloodScope: région="${name}"`);
   }
 
   /** Statistiques device — type: 0=core, 1=radio, 2=packets. Réponse via onStats */
@@ -976,24 +1049,24 @@ export class BleGatewayClient {
     await this.sendFrame(CMD_SEND_BINARY_REQ, new Uint8Array([BINARY_REQ_NEIGHBOURS]));
   }
 
-  /** Connexion à un room server via mot de passe — [prefix:6][password...] */
+  /** Connexion à un room server via mot de passe — [pubkey:32][password...] */
   async sendLogin(pubkeyHex: string, password: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
-    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
     const passBytes = new TextEncoder().encode(password);
-    const payload = new Uint8Array(6 + passBytes.length);
-    payload.set(prefix, 0);
-    payload.set(passBytes, 6);
+    const payload = new Uint8Array(32 + passBytes.length);
+    payload.set(pubkeyBytes, 0);
+    payload.set(passBytes, 32);
     await this.sendFrame(CMD_SEND_LOGIN, payload);
   }
 
   /** Ping statut d'un contact — réponse via onStatusResponse */
   async sendStatusReq(pubkeyHex: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const hexClean = pubkeyHex.length === 66 ? pubkeyHex.slice(2) : pubkeyHex;
-    const prefix = new Uint8Array(hexClean.slice(0, 12).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-    await this.sendFrame(CMD_SEND_STATUS_REQ, prefix);
+    const hexClean = this.normalizePubkeyHex(pubkeyHex);
+    const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    await this.sendFrame(CMD_SEND_STATUS_REQ, pubkeyBytes);
   }
 
   // ── Callbacks publics ────────────────────────────────────────────
@@ -1064,8 +1137,7 @@ export class BleGatewayClient {
         break;
 
       case PUSH_NEW_ADVERT:
-        // Advertisement (~46B), pas un contact complet (147B) — utiliser parsePushAdvert
-        this.parsePushAdvert(payload);
+        this.parseNewAdvert(payload);
         break;
 
       case RESP_END_CONTACTS:
@@ -1143,6 +1215,12 @@ export class BleGatewayClient {
         this.parseChannelMsgV3(payload);
         break;
 
+      case RESP_CHANNEL_DATA_RECV:
+        // PACKET_CHANNEL_DATA_RECV (0x1B) — firmware v1.15.0
+        // [SNR:1][reserved:1][reserved:1][channelIdx:1][path_len:1][data_type:2LE][data_len:1][data...]
+        this.parseChannelDataRecv(payload);
+        break;
+
       case RESP_CHANNEL_INFO:
         this.parseChannelInfo(payload);
         break;
@@ -1151,12 +1229,20 @@ export class BleGatewayClient {
         console.log('[BleGateway] RESP_CUSTOM_VARS reçu');
         break;
 
-      case RESP_RADIO_SETTINGS:
-        console.log('[BleGateway] RESP_RADIO_SETTINGS reçu');
+      case RESP_AUTOADD_CONFIG:
+        console.log('[BleGateway] RESP_AUTOADD_CONFIG reçu');
+        break;
+
+      case RESP_ALLOWED_REPEAT_FREQ:
+        console.log('[BleGateway] RESP_ALLOWED_REPEAT_FREQ reçu (v1.15)');
+        break;
+
+      case RESP_DEFAULT_FLOOD_SCOPE:
+        console.log('[BleGateway] RESP_DEFAULT_FLOOD_SCOPE reçu (v1.15)');
         break;
 
       case PUSH_ADVERT:
-        this.parsePushAdvert(payload);
+        this.parseAdvert(payload);
         break;
 
       case PUSH_PATH_UPDATED:
@@ -1197,6 +1283,34 @@ export class BleGatewayClient {
 
       case PUSH_BINARY_RESPONSE:
         this.parseBinaryResponse(payload);
+        break;
+
+      case PUSH_PATH_DISCOVERY_RESPONSE:
+        // [pub_key_prefix:6][out_path_len:1][out_path][in_path_len:1][in_path]
+        console.log(`[BleGateway] PUSH_PATH_DISCOVERY_RESPONSE: ${payload.length}B`);
+        break;
+
+      case PUSH_CONTROL_DATA:
+        // v8+ firmware (v1.15) — données de contrôle, format dépendant de l'app
+        console.log(`[BleGateway] PUSH_CONTROL_DATA: ${payload.length}B`);
+        break;
+
+      case PUSH_CONTACT_DELETED:
+        // v1.15 — firmware a supprimé un contact (auto-add overflow)
+        // Payload format = writeContactRespFrame() : [pub_key:32][type:1][flags:1][out_path_len:1][out_path:64][name:32][last_advert:4][lat:4][lon:4][lastmod:4]
+        if (payload.length >= 32) {
+          const pubkeyHex = Array.from(payload.slice(0, 32))
+            .map((b) => b.toString(16).padStart(2, '0')).join('');
+          const pubkeyPrefix = pubkeyHex.slice(0, 12);
+          console.log(`[BleGateway] PUSH_CONTACT_DELETED: ${pubkeyPrefix}`);
+          // Retire ce contact du buffer en cours d'agrégation si présent
+          this.pendingContacts = this.pendingContacts.filter((c) => c.pubkeyPrefix !== pubkeyPrefix);
+        }
+        break;
+
+      case PUSH_CONTACTS_FULL:
+        // v1.15 — stockage contacts plein côté firmware
+        console.warn('[BleGateway] PUSH_CONTACTS_FULL — stockage contacts saturé sur le device');
         break;
 
       case PUSH_RAW_DATA:
@@ -1345,6 +1459,27 @@ export class BleGatewayClient {
     this.deliverCompanionTextPacket('', text, true, channelIdx);
   }
 
+  private parseChannelDataRecv(payload: Uint8Array): void {
+    // [SNR:1][reserved:1][reserved:1][channelIdx:1][path_len:1][data_type:2LE][data_len:1][data...]
+    if (payload.length < 8) {
+      console.warn('[BleGateway] RESP_CHANNEL_DATA_RECV trop court:', payload.length);
+      return;
+    }
+    const snr        = (payload[0] << 24 >> 24) / 4;
+    const channelIdx = payload[3];
+    const pathLen    = payload[4];
+    const dataType   = new DataView(payload.buffer, payload.byteOffset).getUint16(5, true);
+    const dataLen    = payload[7];
+    const data       = payload.slice(8, 8 + dataLen);
+
+    console.log(`[BleGateway] ChannelDataRecv ch=${channelIdx} type=${dataType} len=${dataLen} SNR=${snr}`);
+    // Pour l'instant on route comme un message canal texte vide (ou on pourrait ajouter un type 'channelData' à MeshCoreIncomingMsg)
+    const msg: MeshCoreIncomingMsg = {
+      type: 'channel', channelIdx, senderPubkeyPrefix: '', pathLen, txtType: 0, timestamp: Math.floor(Date.now() / 1000), text: `[ChannelData type=${dataType}]`, snr,
+    };
+    this.incomingMessageCallback?.(msg);
+  }
+
   private parseDirectMsgLegacy(payload: Uint8Array): void {
     // Format library v1.11 (code=7) : [pubKeyPrefix:6][pathLen:1][txtType:1][timestamp:4LE][text...]
     if (payload.length < 12) {
@@ -1428,12 +1563,11 @@ export class BleGatewayClient {
     const raw: Record<string, number> = {};
 
     if (typeIdx === 0) {
-      // CORE: [type:1][battery_mv:2 uint16][uptime_secs:4 uint32][err_flags:2 uint16][queue_len:1 uint8]
-      // Total payload: 10 bytes
+      // CORE: [type:1][battery_mv:2 uint16][uptime_secs:4 uint32][queue_len:1 uint8]
+      // Total payload: 8 bytes (source de vérité: meshcore.js v1.13)
       if (payload.length >= 3)  raw['battery_mv']   = view.getUint16(1, true);
       if (payload.length >= 7)  raw['uptime_secs']  = view.getUint32(3, true);
-      if (payload.length >= 9)  raw['err_flags']    = view.getUint16(7, true);
-      if (payload.length >= 10) raw['queue_len']    = payload[9];
+      if (payload.length >= 8)  raw['queue_len']    = payload[7];
     } else if (typeIdx === 1) {
       // RADIO: [type:1][noise_floor:2 int16][last_rssi:1 int8][last_snr:1 int8][tx_air_secs:4 uint32][rx_air_secs:4 uint32]
       // Total payload: 13 bytes
@@ -1456,98 +1590,142 @@ export class BleGatewayClient {
   }
 
   /**
-   * Réponse binaire (CMD_SEND_BINARY_REQ) — type encodé dans premier byte
-   * GetNeighbours (0x06) : [type:1][count:1][entry...] par entry:
-   *   [pubkey_prefix:6][snr:int8][rssi:int8][tx_power:1][last_heard:4LE]
+   * Source : MyMesh.cpp:662-668 — out_frame layout pour PUSH_CODE_BINARY_RESPONSE (0x8C) :
+   *   [0] PUSH_CODE_BINARY_RESPONSE
+   *   [1] reserved = 0
+   *   [2..5] tag (uint32 LE — doit matcher `tag` retourné par RESP_CODE_SENT)
+   *   [6..] response data (du nœud distant, données déjà dé-taggées : data[4..])
+   * → payload (code strippé) : [reserved:1][tag:4][data...]
+   *
+   * Le type de requête (neighbours/telemetry) n'est PAS dans la réponse — l'app
+   * doit le déduire du `tag` qu'elle a envoyé (stocké lors du CMD_SEND_BINARY_REQ).
+   * Pour l'instant on tente un parsing "voisins" si la taille correspond au format.
    */
   private parseBinaryResponse(payload: Uint8Array): void {
-    if (payload.length < 2) return;
-    const reqType = payload[0];
+    if (payload.length < 5) return;
+    const view = new DataView(payload.buffer, payload.byteOffset);
+    const tag  = view.getUint32(1, true);
+    const data = payload.slice(5);
 
-    if (reqType === BINARY_REQ_NEIGHBOURS) {
-      const count = payload[1];
-      const neighbours: MeshCoreNeighbour[] = [];
-      let off = 2;
-      for (let i = 0; i < count && off + 12 <= payload.length; i++) {
-        const prefix = Array.from(payload.slice(off, off + 6))
-          .map((b) => b.toString(16).padStart(2, '0')).join('');
-        off += 6;
-        const snr      = (payload[off++] << 24 >> 24) / 4;
-        const rssi     = payload[off++] << 24 >> 24;
-        const txPower  = payload[off++];
-        const lastHeard = off + 3 < payload.length
-          ? new DataView(payload.buffer, payload.byteOffset + off).getUint32(0, true) : 0;
-        off += 4;
-        neighbours.push({ pubkeyPrefix: prefix, name: `Node-${prefix.slice(0, 6).toUpperCase()}`, snr, rssi, txPower, lastHeard });
+    // Format voisins : [count:1][entry × count] où entry = [prefix:6][snr:i8][rssi:i8][tx_pwr:1][last_heard:4LE] = 13B
+    // Heuristique : si data.length >= 1 et (data.length - 1) divisible par 13, probablement des voisins
+    if (data.length >= 1 && (data.length - 1) % 13 === 0) {
+      const count = data[0];
+      const entrySize = 13;
+      if (count * entrySize === data.length - 1) {
+        const neighbours: MeshCoreNeighbour[] = [];
+        for (let i = 0; i < count; i++) {
+          const off = 1 + i * entrySize;
+          const prefix = Array.from(data.slice(off, off + 6))
+            .map((b) => b.toString(16).padStart(2, '0')).join('');
+          const snr     = (data[off + 6] << 24 >> 24) / 4;
+          const rssi    = data[off + 7] << 24 >> 24;
+          const txPower = data[off + 8];
+          const lastHeard = new DataView(data.buffer, data.byteOffset + off + 9).getUint32(0, true);
+          neighbours.push({
+            pubkeyPrefix: prefix,
+            name: `Node-${prefix.slice(0, 6).toUpperCase()}`,
+            snr, rssi, txPower, lastHeard,
+          });
+        }
+        console.log(`[BleGateway] Voisins (${neighbours.length}) tag=0x${tag.toString(16)}`);
+        this.neighboursCallback?.(neighbours);
+        return;
       }
-      console.log(`[BleGateway] Voisins (${neighbours.length}):`, neighbours.map((n) => n.pubkeyPrefix));
-      this.neighboursCallback?.(neighbours);
-    } else {
-      console.log(`[BleGateway] BinaryResponse type=0x${reqType.toString(16)} (${payload.length}B)`);
     }
+
+    console.log(`[BleGateway] BinaryResponse tag=0x${tag.toString(16)} data=${data.length}B`);
   }
 
   private parseStatusResponse(payload: Uint8Array): void {
-    if (payload.length < 6) return;
-    const prefix = Array.from(payload.slice(0, 6))
+    // Source : MyMesh.cpp:640-646 — out_frame layout :
+    //   [0] PUSH_CODE_STATUS_RESPONSE
+    //   [1] reserved = 0
+    //   [2..7] contact pub_key_prefix (6 bytes)
+    //   [8..] response data (original packet payload[4..], tag-stripped)
+    // → payload (code strippé) : [reserved:1][prefix:6][data...]
+    if (payload.length < 7) return;
+    const prefix = Array.from(payload.slice(1, 7))
       .map((b) => b.toString(16).padStart(2, '0')).join('');
+    // data[] après prefix est le contenu brut de la réponse status du nœud distant.
+    // Pour un TelemetryResponse classique le premier champ est souvent battery_mv (uint16 LE).
     let batteryVoltage: number | undefined;
     let text: string | undefined;
-    if (payload.length >= 10) {
-      const v = new DataView(payload.buffer, payload.byteOffset).getFloat32(6, true);
-      if (v > 0 && v < 20) batteryVoltage = v; // valeur raisonnable en volts
+    if (payload.length >= 9) {
+      const mv = new DataView(payload.buffer, payload.byteOffset).getUint16(7, true);
+      if (mv > 1000 && mv < 20000) batteryVoltage = mv / 1000; // 1V..20V plausible
     }
-    if (payload.length > 10) {
-      text = new TextDecoder().decode(payload.slice(10)).replace(/\0/g, '').trim();
+    if (payload.length > 9) {
+      // Essayer de décoder le reste comme UTF-8 (souvent du CLI output)
+      text = new TextDecoder().decode(payload.slice(7)).replace(/\0/g, '').trim();
     }
     console.log(`[BleGateway] StatusResponse ${prefix}: batt=${batteryVoltage?.toFixed(2)}V`);
     this.statusResponseCallback?.({ pubkeyPrefix: prefix, batteryVoltage, text, rawPayload: payload });
   }
 
-  private parsePushAdvert(payload: Uint8Array): void {
+  /** PUSH_ADVERT (0x80) — format court : uniquement la pubkey (32 bytes) */
+  private parseAdvert(payload: Uint8Array): void {
     if (payload.length < 32) return;
     const pubkeyBytes  = payload.slice(0, 32);
     const pubkeyHex    = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
     const pubkeyPrefix = pubkeyHex.slice(0, 12);
-
-    // Layout PUSH_ADVERT / PUSH_NEW_ADVERT :
-    // [pubkey:32][type:1][txPower:1][maxTxPower:1][advLat:4LE int32][advLon:4LE int32][reserved:2][name:null-terminated]
-    // Name commence à l'offset 45
-    const NAME_OFFSET = 45;
-    let name = `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
-    if (payload.length > NAME_OFFSET) {
-      const parsed = new TextDecoder().decode(payload.slice(NAME_OFFSET)).replace(/\0/g, '').trim();
-      if (parsed.length > 0) name = parsed;
-    }
-
-    let lat: number | undefined;
-    let lng: number | undefined;
-    if (payload.length >= 43) {
-      const view = new DataView(payload.buffer, payload.byteOffset);
-      const latRaw = view.getInt32(35, true);
-      const lonRaw = view.getInt32(39, true);
-      if (latRaw !== 0) lat = latRaw / 1e6;
-      if (lonRaw !== 0) lng = lonRaw / 1e6;
-    }
+    const name = `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
 
     console.log(`[BleGateway] PUSH_ADVERT: "${name}" ${pubkeyPrefix}...`);
     const contact: MeshCoreContact = {
       publicKey: pubkeyBytes, pubkeyHex, pubkeyPrefix, name,
       lastSeen: Math.floor(Date.now() / 1000),
-      lat, lng,
     };
     this.contactDiscoveredCallback?.(contact);
   }
 
+  /** PUSH_NEW_ADVERT (0x8A) — format complet (même layout que RESP_CONTACT) :
+   * [pubkey:32][type:1][flags:1][outPathLen:1][outPath:64][advName:32][lastAdvert:4LE][advLat:4LE][advLon:4LE][lastMod:4LE] = 147 bytes
+   */
+  private parseNewAdvert(payload: Uint8Array): void {
+    if (payload.length < 147) {
+      console.warn('[BleGateway] PUSH_NEW_ADVERT trop court:', payload.length);
+      return;
+    }
+    const pubkeyBytes  = payload.slice(0, 32);
+    const pubkeyHex    = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+    const pubkeyPrefix = pubkeyHex.slice(0, 12);
+    const nameBytes    = payload.slice(99, 131);
+    const name         = new TextDecoder().decode(nameBytes).replace(/\0/g, '').trim()
+      || `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
+    const view         = new DataView(payload.buffer, payload.byteOffset);
+    const lastSeen     = view.getUint32(131, true);
+    const latRaw       = view.getInt32(135, true);
+    const lonRaw       = view.getInt32(139, true);
+    const contact: MeshCoreContact = {
+      publicKey: pubkeyBytes, pubkeyHex, pubkeyPrefix, name, lastSeen,
+      lat: latRaw !== 0 ? latRaw / 1e6 : undefined,
+      lng: lonRaw !== 0 ? lonRaw / 1e6 : undefined,
+    };
+    this.contactDiscoveredCallback?.(contact);
+    console.log(`[BleGateway] PUSH_NEW_ADVERT: "${name}" ${pubkeyPrefix}`);
+  }
+
   private parseSendConfirmed(payload: Uint8Array): void {
-    // Format firmware : [result:1][round_trip_ms:4LE] — total 5 bytes (rtt optionnel)
-    if (payload.length < 1) return;
-    const ackCode     = payload[0];
-    const roundTripMs = payload.length >= 5
-      ? new DataView(payload.buffer, payload.byteOffset).getUint32(1, true)
-      : 0;
-    console.log(`[BleGateway] PUSH_SEND_CONFIRMED result=${ackCode} RTT:${roundTripMs}ms`);
-    this.sendConfirmedCallback?.(ackCode, roundTripMs);
+    // Source : MyMesh.cpp:393-397 processAck() — 9 bytes total dont code=0x82
+    //   out_frame[0] = PUSH_CODE_SEND_CONFIRMED;
+    //   memcpy(&out_frame[1], data, 4);              // 4-byte ACK hash
+    //   memcpy(&out_frame[5], &trip_time, 4);        // uint32 LE trip_time ms
+    // → payload (code strippé) : [ack_hash:4][trip_time:4] = 8 bytes
+    // L'ACK hash identifie quel message a été livré — doit être comparé au
+    // `expected_ack` reçu dans RESP_CODE_SENT (CMD_SEND_TXT_MSG response).
+    if (payload.length < 8) {
+      console.warn('[BleGateway] PUSH_SEND_CONFIRMED trop court:', payload.length);
+      return;
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset);
+    const ackHash = Array.from(payload.slice(0, 4))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+    const roundTripMs = view.getUint32(4, true);
+    // Convertir hex 4-byte en uint32 (little-endian, comme `expected_ack` côté firmware)
+    const ackHashUint32 = view.getUint32(0, true);
+    console.log(`[BleGateway] PUSH_SEND_CONFIRMED ack=${ackHash} RTT:${roundTripMs}ms`);
+    this.sendConfirmedCallback?.(ackHashUint32, roundTripMs);
   }
 
   private parseContact(payload: Uint8Array): void {

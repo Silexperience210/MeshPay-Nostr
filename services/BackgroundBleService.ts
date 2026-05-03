@@ -84,7 +84,7 @@ class BackgroundBleService {
 
       for (const msg of pending.slice(0, MAX_MESSAGES_PER_CYCLE)) {
         try {
-          await client.sendPacket(msg.packet as any);
+          await client.sendRawPacket(msg.packet as Uint8Array);
           await removePendingMessage(msg.id);
         } catch {
           // Continuer avec le suivant

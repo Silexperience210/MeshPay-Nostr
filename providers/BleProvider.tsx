@@ -50,6 +50,7 @@ interface BleContextValue extends BleState {
   // Protocole natif MeshCore Companion — messages
   sendDirectMessage: (pubkeyHex: string, text: string) => Promise<void>;
   sendChannelMessage: (text: string) => Promise<void>; // utilise currentChannel
+  sendChannelData: (dataType: number, payload: Uint8Array) => Promise<void>; // v1.15.0+
   setChannel: (idx: number) => void;
   syncContacts: () => Promise<void>;
   sendSelfAdvert: () => Promise<void>;
@@ -59,7 +60,7 @@ interface BleContextValue extends BleState {
   setTxPower: (dbm: number) => Promise<void>;
   setRadioParams: (freqHz: number, bwHz: number, sf: number, cr: number) => Promise<void>;
   setAdvertLatLon: (lat: number, lon: number) => Promise<void>;
-  setFloodScope: (scope: number) => Promise<void>;
+  setFloodScope: (region: string | null) => Promise<void>;
   reboot: () => Promise<void>;
   getBattery: () => Promise<void>;
   getStats: (type?: 0 | 1 | 2) => Promise<void>;
@@ -408,6 +409,12 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
   };
 
+  const sendChannelData = async (dataType: number, payload: Uint8Array) => {
+    if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
+    await clientRef.current.sendChannelData(state.currentChannel, dataType, payload);
+    setState((prev) => prev.loraActive ? prev : { ...prev, loraActive: true });
+  };
+
   const setChannel = (idx: number) => {
     setState((prev) => ({ ...prev, currentChannel: idx }));
     console.log(`[BleProvider] Channel → ch${idx}`);
@@ -449,9 +456,9 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     await clientRef.current.setAdvertLatLon(lat, lon);
   };
 
-  const setFloodScope = async (scope: number) => {
+  const setFloodScope = async (region: string | null) => {
     if (!clientRef.current || !state.connected) throw new Error('BLE non connecté');
-    await clientRef.current.setFloodScope(scope);
+    await clientRef.current.setFloodScope(region);
   };
 
   const reboot = async () => {
@@ -515,6 +522,7 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
     confirmLoraActive,
     sendDirectMessage,
     sendChannelMessage,
+    sendChannelData,
     setChannel,
     syncContacts,
     sendSelfAdvert,

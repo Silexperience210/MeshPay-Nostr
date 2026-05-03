@@ -36,8 +36,13 @@ export async function listMeshCoreDevices(): Promise<MeshCoreUsbDevice[]> {
  * Crée un adapter meshcore.js compatible
  */
 export async function createMeshCoreAdapter(deviceId: number): Promise<MeshCoreAdapter> {
-  // Ouvrir le port série
-  const serial: UsbSerial = await (UsbSerialManager as any).open(deviceId);
+  // Ouvrir le port série avec les paramètres par défaut MeshCore (115200 8N1)
+  const serial: UsbSerial = await UsbSerialManager.open(deviceId, {
+    baudRate: 115200,
+    dataBits: 8,
+    stopBits: 1,
+    parity: 0, // Parity.None
+  });
   
   // Buffer pour accumuler les données reçues
   let dataCallback: ((data: Uint8Array) => void) | null = null;
@@ -45,22 +50,24 @@ export async function createMeshCoreAdapter(deviceId: number): Promise<MeshCoreA
   // Configurer le listener de données
   serial.onReceived((event: any) => {
     if (dataCallback) {
-      const data = new Uint8Array(event.data);
-      dataCallback(data);
+      // event.data est une chaîne hexadécimale (format de react-native-usb-serialport-for-android)
+      const hexStr = event.data as string;
+      const bytes = new Uint8Array(hexStr.match(/.{1,2}/g)!.map((b: string) => parseInt(b, 16)));
+      dataCallback(bytes);
     }
   });
   
   return {
     write: async (data: Uint8Array) => {
-      // Convertir Uint8Array en format attendu par la librairie
-      const arr = Array.from(data);
-      await serial.send(String.fromCharCode(...arr));
+      // Convertir Uint8Array en chaîne hexadécimale (format attendu par react-native-usb-serialport-for-android)
+      const hexStr = Array.from(data).map(b => b.toString(16).padStart(2, '0')).join('');
+      await serial.send(hexStr);
     },
-    
+
     onData: (callback: (data: Uint8Array) => void) => {
       dataCallback = callback;
     },
-    
+
     close: async () => {
       dataCallback = null;
       await serial.close();

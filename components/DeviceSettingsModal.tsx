@@ -62,9 +62,9 @@ const SF_VALUES = [7, 8, 9, 10, 11, 12];
 // Coding rates
 const CR_VALUES = [{ label: '4/5', v: 5 }, { label: '4/6', v: 6 }, { label: '4/7', v: 7 }, { label: '4/8', v: 8 }];
 
-// Flood scope presets (0-5 officiels + custom jusqu'à 21)
-const FLOOD_SCOPE_PRESETS = [0, 1, 2, 3, 4, 5, 7, 10, 15, 21];
-const floodLabel = (n: number) => n === 0 ? 'Local' : `${n} hop${n > 1 ? 's' : ''}`;
+// Région/scope pour flood packets (v1.15.0+)
+// La commande SetFloodScope définit une région (string), pas un nombre de hops.
+const DEFAULT_REGION = '';
 
 export default function DeviceSettingsModal({ visible, onClose }: DeviceSettingsModalProps) {
   const ble = useBle();
@@ -87,9 +87,8 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
   const [lat, setLat] = useState('');
   const [lon, setLon] = useState('');
 
-  // Flood
-  const [floodScope, setFloodScope] = useState(3);
-  const [floodCustom, setFloodCustom] = useState('');
+  // Flood region (v1.15.0+ — définit le scope/région par défaut)
+  const [floodRegion, setFloodRegion] = useState('');
 
   // Init depuis deviceInfo
   useEffect(() => {
@@ -172,23 +171,21 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
       Alert.alert('Erreur', 'Gateway non connecté — reconnectez via le scanner BLE');
       return;
     }
-    // Valeur custom en priorité si saisie
-    const customVal = parseInt(floodCustom, 10);
-    const scopeToSend = (!isNaN(customVal) && floodCustom.trim() !== '') ? customVal : floodScope;
-    if (scopeToSend < 0 || scopeToSend > 127) {
-      Alert.alert('Flood', 'Valeur hors limites (0-127)');
-      return;
-    }
+    const region = floodRegion.trim();
     setSaving(true);
     try {
-      await ble.setFloodScope(scopeToSend);
-      Alert.alert('Flood appliqué', `Portée : ${floodLabel(scopeToSend)}`);
+      await ble.setFloodScope(region || null);
+      if (region) {
+        Alert.alert('Région appliquée', `Tous les flood packets seront scopés à "${region}".`);
+      } else {
+        Alert.alert('Scope désactivé', 'Les flood packets ne seront plus scopés à une région.');
+      }
     } catch (e: any) {
-      Alert.alert('Erreur flood', e.message || String(e));
+      Alert.alert('Erreur scope', e.message || String(e));
     } finally {
       setSaving(false);
     }
-  }, [ble, floodScope, floodCustom]);
+  }, [ble, floodRegion]);
 
   const handleReboot = useCallback(() => {
     Alert.alert(
@@ -405,37 +402,22 @@ export default function DeviceSettingsModal({ visible, onClose }: DeviceSettings
             {/* ── Flood scope ── */}
             {tab === 'flood' && (
               <View>
-                <Text style={styles.sectionLabel}>Portée des messages broadcast</Text>
+                <Text style={styles.sectionLabel}>Région par défaut (scope flood)</Text>
                 <Text style={styles.hint}>
-                  Nombre de sauts LoRa max pour les flood (canal public). Plus c'est haut, plus loin — mais consomme plus d'énergie. Valeur active : <Text style={{ color: Colors.accent, fontWeight: '700' }}>{floodCustom.trim() !== '' ? floodCustom : floodScope} hop(s)</Text>
+                  Définissez une région pour scoper tous les flood packets (adverts, DMs sans path connu, etc.). Laissez vide pour désactiver le scoping.
                 </Text>
-                <View style={styles.floodGrid}>
-                  {FLOOD_SCOPE_PRESETS.map((val) => (
-                    <TouchableOpacity
-                      key={val}
-                      style={[styles.floodBtn, floodScope === val && floodCustom === '' && styles.floodBtnActive]}
-                      onPress={() => { setFloodScope(val); setFloodCustom(''); }}
-                    >
-                      <Text style={[styles.floodBtnText, floodScope === val && floodCustom === '' && styles.floodBtnTextActive]}>
-                        {floodLabel(val)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <Text style={styles.sectionLabel}>Valeur personnalisée (0–127)</Text>
                 <TextInput
                   style={styles.input}
-                  value={floodCustom}
-                  onChangeText={setFloodCustom}
-                  placeholder="Ex: 21"
+                  value={floodRegion}
+                  onChangeText={setFloodRegion}
+                  placeholder="Ex: alsace"
                   placeholderTextColor={Colors.textMuted}
-                  keyboardType="numeric"
-                  maxLength={3}
+                  autoCapitalize="none"
                 />
-                <Text style={styles.hint}>Laissez vide pour utiliser la valeur sélectionnée ci-dessus</Text>
+                <Text style={styles.hint}>Laissez vide pour désactiver le scope régional</Text>
                 <TouchableOpacity style={styles.saveBtn} onPress={handleSaveFlood} disabled={saving || !ble.connected}>
                   {saving ? <ActivityIndicator color="#000" size="small" /> : <Wifi size={16} color="#000" />}
-                  <Text style={styles.saveBtnText}>Appliquer flood</Text>
+                  <Text style={styles.saveBtnText}>Appliquer la région</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -634,34 +616,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: Colors.border,
     marginVertical: 20,
-  },
-  floodGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginVertical: 12,
-  },
-  floodBtn: {
-    flex: 1,
-    minWidth: '30%',
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surfaceHighlight,
-    alignItems: 'center',
-  },
-  floodBtnActive: {
-    borderColor: Colors.accent,
-    backgroundColor: Colors.accentDim,
-  },
-  floodBtnText: {
-    color: Colors.textMuted,
-    fontSize: 12,
-  },
-  floodBtnTextActive: {
-    color: Colors.accent,
-    fontWeight: '700',
   },
   warnRow: {
     backgroundColor: Colors.redDim,
