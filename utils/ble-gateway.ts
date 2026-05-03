@@ -553,10 +553,11 @@ export class BleGatewayClient {
       await this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION])).catch(() => {});
       const gotRetry = await this.waitForSelfInfo(4000);
       if (!gotRetry) {
-        console.warn('[BleGateway] SelfInfo toujours absent après relance — firmware incompatible ?');
+        console.warn('[BleGateway] SelfInfo toujours absent — mode pin-only Companion détecté, handshake optionnel');
         this.awaitingSelfInfo = false;
         this.clearSelfInfoRetry();
-        throw new Error('MeshCore handshake failed: SelfInfo not received (firmware unresponsive)');
+        // ✅ FIX: ne pas throw — certains Companion pin-only ne répondent pas au handshake
+        // mais sont pleinement fonctionnels une fois le BLE bondé.
       }
     }
     // Handshake réussi — arrêter la boucle interval de retry en filet de sécurité.
@@ -695,17 +696,12 @@ export class BleGatewayClient {
       }
       if (this.selfInfoRetryCount >= BleGatewayClient.SELF_INFO_MAX_RETRIES) {
         console.warn(
-          `[BleGateway] SelfInfo: ${BleGatewayClient.SELF_INFO_MAX_RETRIES} retries épuisés — handshake abandonné`,
+          `[BleGateway] SelfInfo: ${BleGatewayClient.SELF_INFO_MAX_RETRIES} retries épuisés — handshake optionnel (pin-only Companion)`,
         );
         this.awaitingSelfInfo = false;
         this.clearSelfInfoRetry();
-        // Déconnecter pour que l'UI propose un rescan/retry manuel au lieu de
-        // laisser l'utilisateur devant une connexion fantôme.
-        if (this.connectedId) {
-          BleManager.disconnect(this.connectedId).catch(() => { /* cleanup: ignore */ });
-          this.connectedId = null;
-          this.disconnectCallback?.();
-        }
+        // ✅ FIX: ne pas déconnecter — les devices pin-only Companion ne répondent pas au handshake
+        // mais restent connectés via BLE bondé. Laisser l'utilisateur utiliser le device.
         return;
       }
       this.selfInfoRetryCount++;
