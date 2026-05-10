@@ -1602,3 +1602,6 @@ const cashuStyles = StyleSheet.create({
     paddingVertical: 16, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center',
   },
+  sendBtnDisabled: { backgroundColor: Colors.surfaceLight },
+  sendBtnText: { color: Colors.black, fontSize: 16, fontWeight: '700' },
+});
