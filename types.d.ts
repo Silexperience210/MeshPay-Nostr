@@ -1,12 +1,6 @@
-declare module "expo-camera";
-declare module "tiny-secp256k1";
-declare module "@testing-library/react-native" {
-  export function renderHook<T>(callback: () => T, options?: any): {
-    result: { current: T };
-    rerender: (props?: any) => void;
-    unmount: () => void;
-    waitForNextUpdate: () => Promise<void>;
-  };
-  export function act(callback: () => void | Promise<void>): Promise<void>;
-  export function waitFor(callback: () => void, options?: any): Promise<void>;
-}
+// Les types natifs des packages suivants sont gérés par leurs déclarations
+// internes ou par @types/* — ne PAS surcharger ici pour éviter les conflits.
+//
+// - "expo-camera" : possède ses propres déclarations TypeScript
+// - "tiny-secp256k1" : utilise @types/tiny-secp256k1
+// - "@testing-library/react-native" : possède ses propres déclarations TypeScript

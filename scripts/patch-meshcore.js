@@ -2,12 +2,24 @@
 /**
  * Patch meshcore.js pour React Native
  * Supprime les imports qui nécessitent des modules Node.js ('net', 'stream')
+ *
+ * Usage :
+ *   node scripts/patch-meshcore.js
+ *
+ * Ce script vérifie que le fichier cible existe avant de tenter de patcher.
+ * Si meshcore.js n'est pas installé, le script se termine silencieusement.
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const indexPath = path.join(__dirname, '../node_modules/@liamcottle/meshcore.js/src/index.js');
+
+// Vérifier que le module meshcore.js est installé avant de patcher
+if (!fs.existsSync(path.join(__dirname, '../node_modules/@liamcottle/meshcore.js'))) {
+  console.log('[patch-meshcore] Module meshcore.js non installé, skip');
+  process.exit(0);
+}
 
 if (!fs.existsSync(indexPath)) {
   console.log('[patch-meshcore] Fichier non trouvé, skip');

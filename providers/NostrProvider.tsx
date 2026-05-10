@@ -154,6 +154,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
   // ── Auto-connexion / déconnexion ─────────────────────────────────────────
 
   const { isLoRaMode } = useAppSettings();
+  const isConnectingRef = useRef(false);
 
   useEffect(() => {
     if (!isInitialized || !mnemonic || isLoRaMode) {
@@ -181,7 +182,13 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     let cancelled = false;
 
     const init = async () => {
+      // Guard contre les connexions simultanées
+      if (isConnectingRef.current) {
+        console.warn('[NostrProvider] Connexion déjà en cours, on ignore');
+        return;
+      }
       try {
+        isConnectingRef.current = true;
         if (mountedRef.current) setIsConnecting(true);
         nostrClient.setKeypair(keypair);
 
@@ -216,6 +223,8 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
         if (!cancelled && mountedRef.current) {
           setIsConnecting(false);
         }
+      } finally {
+        isConnectingRef.current = false;
       }
     };
 
@@ -223,6 +232,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
 
     return () => {
       cancelled = true;
+      nostrClient.disconnect();
     };
   }, [isInitialized, mnemonic, keypair, getActiveRelayUrls, isLoRaMode]);
 
@@ -315,6 +325,7 @@ export const [NostrContext, useNostr] = createContextHook((): NostrState => {
     if (!isInitialized || !mnemonic) return;
     try {
       if (mountedRef.current) setIsConnecting(true);
+      await nostrClient.disconnect();  // Réinitialise l'état avant reconnexion
       await nostrClient.connect(getActiveRelayUrls());
       if (mountedRef.current) setIsConnecting(false);
     } catch (err) {

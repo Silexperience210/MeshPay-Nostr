@@ -224,7 +224,7 @@ function NodeDetailModal({ peer, visible, onClose }: { peer: RadarPeer | null; v
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await startConversation(peer.nodeId, peer.name);
     onClose();
-    router.push(`/(messages)/${encodeURIComponent(peer.nodeId)}` as never);
+    router.push(`/(messages)/${encodeURIComponent(peer.nodeId)}` as `/(messages)/${string}`);
   };
 
   const signalColor = peer.signalStrength > 70 ? Colors.green : peer.signalStrength > 40 ? Colors.accent : Colors.red;
@@ -613,16 +613,32 @@ export default function MeshScreen() {
     }
   }, [filter, radarPeers]);
 
+  const isScanningRef = useRef(isScanning);
+  isScanningRef.current = isScanning;
+  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+        scanTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const handleScan = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const currentlyScanning = isScanningRef.current;
     setIsScanning((prev) => !prev);
-    if (!isScanning) {
-      setTimeout(() => {
+    if (!currentlyScanning) {
+      if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+      scanTimeoutRef.current = setTimeout(() => {
         setIsScanning(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        scanTimeoutRef.current = null;
       }, 6000);
     }
-  }, [isScanning]);
+  }, []);
 
   const handleNodePress = useCallback((peer: RadarPeer) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

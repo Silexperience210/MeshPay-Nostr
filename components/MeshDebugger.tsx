@@ -82,6 +82,7 @@ const TEST_SUITES = {
 // ── Composant ──────────────────────────────────────────────────────────
 
 export default function MeshDebugger({ visible, onClose }: MeshDebuggerProps) {
+  if (!__DEV__) return null;
   const {
     connected,
     device,

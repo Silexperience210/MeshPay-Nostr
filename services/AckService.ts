@@ -11,8 +11,7 @@
  *   - MessagesProvider listener → MAJ React state messagesByConv
  *
  * Ce service est conservé uniquement pour l'API externe `getAckService`
- * référencée par useAppInitialization et integration-check, mais ses méthodes
- * sont des no-op. À supprimer une fois ces deux call-sites nettoyés.
+ * référencée par useAppInitialization et integration-check.
  *
  * NE PAS utiliser pour de nouveaux développements — implémentait un ACK
  * échoé over-the-air incompatible avec le format firmware natif.
@@ -25,6 +24,8 @@ interface PendingAck {
   conversationId: string;
   timestamp: number;
   timeout: ReturnType<typeof setTimeout>;
+  acknowledged: boolean;
+  onAck?: () => void;
 }
 
 class AckService {
@@ -42,6 +43,77 @@ class AckService {
 
   /**
    * @deprecated Le firmware MeshCore Companion fournit un ACK natif.
+   * Enregistre un ACK en attente et retourne une fonction pour résoudre l'ACK.
+   */
+  registerAck(
+    msgId: string,
+    conversationId: string,
+    timeoutMs: number = 30000,
+    onAck?: () => void
+  ): () => void {
+    // Nettoyer un ACK précédent pour ce msgId si existant
+    this.cancelAck(msgId);
+
+    const timeout = setTimeout(() => {
+      const pending = this.pendingAcks.get(msgId);
+      if (pending && !pending.acknowledged) {
+        this.pendingAcks.delete(msgId);
+        this.onAckTimeout?.(msgId);
+        updateMessageStatusDB(msgId, 'failed').catch(err => {
+          console.error('[AckService] Erreur mise à jour statut timeout:', err);
+        });
+      }
+    }, timeoutMs);
+
+    const pending: PendingAck = {
+      msgId,
+      conversationId,
+      timestamp: Date.now(),
+      timeout,
+      acknowledged: false,
+      onAck,
+    };
+    this.pendingAcks.set(msgId, pending);
+
+    // Retourne une fonction pour résoudre manuellement l'ACK
+    return () => {
+      this.handleAck(msgId);
+    };
+  }
+
+  /**
+   * Traite un ACK reçu — met acknowledged à true et invoque onAck
+   */
+  handleAck(msgId: string): void {
+    const pending = this.pendingAcks.get(msgId);
+    if (!pending) {
+      console.warn(`[AckService] handleAck: ACK reçu pour msgId inconnu: ${msgId}`);
+      return;
+    }
+
+    if (pending.acknowledged) {
+      console.warn(`[AckService] handleAck: ACK déjà traité pour msgId: ${msgId}`);
+      return;
+    }
+
+    // ✅ FIX: Marquer comme acknowledged et invoquer le callback
+    pending.acknowledged = true;
+    clearTimeout(pending.timeout);
+
+    console.log(`[AckService] ACK reçu pour msgId: ${msgId}`);
+
+    // Invoquer le callback spécifique à cet ACK
+    pending.onAck?.();
+
+    // Invoquer le callback global
+    this.onAckReceived?.(msgId);
+
+    // Nettoyer
+    this.pendingAcks.delete(msgId);
+  }
+
+  /**
+   * @deprecated Le firmware gère les ACK natifs.
    * Cette méthode est un no-op pour éviter toute interaction avec le BLE.
    */
   async sendWithAck(
@@ -55,10 +127,10 @@ class AckService {
   }
 
   /**
-   * @deprecated Le firmware gère les ACK natifs.
+   * @deprecated Utiliser handleAck(msgId) directement.
    */
   async handleIncomingAck(packet: MeshCorePacket): Promise<void> {
-    // no-op — les ACK sont gérés par BleGatewayClient + BleProvider
+    console.warn('[AckService] handleIncomingAck est deprecated — utiliser handleAck(msgId)');
   }
 
   /**
@@ -96,7 +168,7 @@ class AckService {
     const maxAge = 5 * 60 * 1000; // 5 minutes
 
     for (const [msgId, pending] of this.pendingAcks) {
-      if (now - pending.timestamp > maxAge) {
+      if (now - pending.timestamp > maxAge && !pending.acknowledged) {
         clearTimeout(pending.timeout);
         this.pendingAcks.delete(msgId);
         // ✅ FIX: Gérer l'erreur de updateMessageStatusDB (Promise non await)

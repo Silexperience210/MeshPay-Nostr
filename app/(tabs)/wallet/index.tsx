@@ -444,12 +444,21 @@ function CashuBalanceCard({
   const [cashuBalance, setCashuBalance] = useState<{ total: number; byMint: Record<string, number> }>({ total: 0, byMint: {} });
   const [tokens, setTokens] = useState<DBCashuToken[]>([]);
   
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   useEffect(() => {
     async function loadCashuBalance() {
+      if (!mountedRef.current) return;
       try {
         const balance = await getCashuBalance();
+        if (!mountedRef.current) return;
         setCashuBalance(balance);
         const unspent = await getUnspentCashuTokens();
+        if (!mountedRef.current) return;
         setTokens(unspent);
       } catch (err) {
         console.log('[Cashu] Erreur chargement solde:', err);

@@ -50,8 +50,6 @@ export const DEFAULT_RELAYS: string[] = [
 
 const OFFLINE_QUEUE_MAX = 100;
 const CONNECT_TIMEOUT_MS = 5_000;
-/** Clé AsyncStorage pour la persistance de la queue offline */
-const OFFLINE_QUEUE_STORAGE_KEY = 'nostr_offline_queue_v1';
 
 // ─── Event kinds ─────────────────────────────────────────────────────────────
 
@@ -205,6 +203,9 @@ export class NostrClient {
   private _keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private _intentionalDisconnect = false;
   private _isReconnecting = false;
+  private _isConnecting = false;
+  private _reconnectAttempts = 0;
+  private readonly _maxReconnectAttempts = 10;
   // Active subscriptions for auto-resubscription after reconnect
   private _activeSubscriptions: Array<{
     filters: Filter[];
@@ -247,60 +248,78 @@ export class NostrClient {
   // ── Connexion ──────────────────────────────────────────────────────────────
 
   async connect(relays: string[] = DEFAULT_RELAYS): Promise<void> {
-    this.relayUrls = relays;
-    for (const url of relays) {
-      this.relayStatus.set(url, 'connecting');
+    // Empêcher les appels simultanés (race condition)
+    if (this._isConnecting) {
+      console.log('[Nostr] Connexion déjà en cours, ignoré');
+      return;
     }
-    this._notifyStatus();
+    this._isConnecting = true;
+    this._reconnectAttempts = 0; // Reset counter on successful connection path
 
-    // Ping léger : subscribe à 1 event pour établir les connexions WS
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        // Timeout → on considère quand même connecté (certains relays sont lents)
-        for (const url of this.relayUrls) {
-          if (this.relayStatus.get(url) === 'connecting') {
-            this.relayStatus.set(url, 'connected');
+    try {
+      this.relayUrls = relays;
+      for (const url of relays) {
+        this.relayStatus.set(url, 'connecting');
+      }
+      this._notifyStatus();
+
+      // Ping léger : subscribe à 1 event pour établir les connexions WS
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            // Timeout → ne PAS forcer le statut à connected (relays potentiellement morts)
+            // Laisser le statut tel quel (connecting/error selon ce qui s'est passé)
+            console.warn('[Nostr] Timeout connexion relays — certains relays peuvent être lents');
+            resolve();
+          }
+        }, CONNECT_TIMEOUT_MS);
+
+        try {
+          // NB: `onevent` est obligatoire même si on ne consomme pas l'event,
+          // sinon nostr-tools log "onevent() callback not defined for subscription".
+          // On utilise ce sub uniquement comme handshake WS ; on ferme dès l'EOSE.
+          const sub = this.pool.subscribeMany(
+            this.relayUrls,
+            { kinds: [Kind.Text], limit: 1 },
+            {
+              onevent: () => { /* ping handshake — on ignore le payload */ },
+              oneose: () => {
+                if (!resolved) {
+                  resolved = true;
+                  clearTimeout(timeout);
+                  for (const url of this.relayUrls) {
+                    this.relayStatus.set(url, 'connected');
+                  }
+                  this._notifyStatus();
+                  sub.close();
+                  resolve();
+                }
+              },
+            },
+          );
+        } catch {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            for (const url of this.relayUrls) {
+              this.relayStatus.set(url, 'error');
+            }
+            this._notifyStatus();
+            resolve(); // Ne pas bloquer le démarrage de l'app
           }
         }
-        this._notifyStatus();
-        resolve();
-      }, CONNECT_TIMEOUT_MS);
+      });
 
-      try {
-        // NB: `onevent` est obligatoire même si on ne consomme pas l'event,
-        // sinon nostr-tools log "onevent() callback not defined for subscription".
-        // On utilise ce sub uniquement comme handshake WS ; on ferme dès l'EOSE.
-        const sub = this.pool.subscribeMany(
-          this.relayUrls,
-          { kinds: [Kind.Text], limit: 1 },
-          {
-            onevent: () => { /* ping handshake — on ignore le payload */ },
-            oneose: () => {
-              clearTimeout(timeout);
-              for (const url of this.relayUrls) {
-                this.relayStatus.set(url, 'connected');
-              }
-              this._notifyStatus();
-              sub.close();
-              resolve();
-            },
-          },
-        );
-      } catch {
-        clearTimeout(timeout);
-        for (const url of this.relayUrls) {
-          this.relayStatus.set(url, 'error');
-        }
-        this._notifyStatus();
-        resolve(); // Ne pas bloquer le démarrage de l'app
-      }
-    });
+      // Renvoyer les events en attente
+      await this._drainOfflineQueue();
 
-    // Renvoyer les events en attente
-    await this._drainOfflineQueue();
-
-    // Lancer le keep-alive : ping toutes les 30s, reconnecte si mort
-    this._startKeepAlive();
+      // Lancer le keep-alive : ping toutes les 30s, reconnecte si mort
+      this._startKeepAlive();
+    } finally {
+      this._isConnecting = false;
+    }
   }
 
   disconnect(): void {
@@ -338,10 +357,19 @@ export class NostrClient {
 
   private _scheduleReconnect(): void {
     if (this._reconnectTimer || this._intentionalDisconnect) return;
+
+    // Limite max de tentatives pour éviter reconnexion infinie
+    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+      console.error(`[Nostr] Nombre max de reconnexions (${this._maxReconnectAttempts}) atteint — arrêt`);
+      this._notifyStatus();
+      return;
+    }
+
     const delay = this._reconnectDelay;
     // Backoff exponentiel : 2s → 4s → 8s → 16s → 30s max
     this._reconnectDelay = Math.min(this._reconnectDelay * 2, 30000);
-    console.log(`[Nostr] Reconnexion dans ${delay / 1000}s…`);
+    this._reconnectAttempts++;
+    console.log(`[Nostr] Reconnexion dans ${delay / 1000}s… (tentative ${this._reconnectAttempts}/${this._maxReconnectAttempts})`);
     this._reconnectTimer = setTimeout(async () => {
       this._reconnectTimer = null;
       if (this._intentionalDisconnect || this.isConnected) return;
@@ -356,8 +384,9 @@ export class NostrClient {
         }
         this._notifyStatus();
         await this.connect(this.relayUrls);
-        // Reconnexion réussie : reset delay
+        // Reconnexion réussie : reset delay et compteur
         this._reconnectDelay = 2000;
+        this._reconnectAttempts = 0;
         console.log('[Nostr] Reconnexion réussie');
         // Réabonner automatiquement aux subscriptions actives
         this._resubscribeAll();
@@ -476,9 +505,13 @@ export class NostrClient {
     }
 
     const publishPromises = this.pool.publish(this.relayUrls, event);
-    await Promise.any(publishPromises).catch(() => {
+    try {
+      await Promise.any(publishPromises);
+    } catch {
+      // Tous les relays ont échoué
       console.warn('[Nostr] Aucun relay n\'a accepté l\'event kind:', event.kind);
-    });
+      throw new Error(`[Nostr] Échec publication — aucun relay n\'a accepté l\'event kind: ${event.kind}`);
+    }
 
     console.log('[Nostr] Publié — kind:', event.kind, 'id:', event.id.slice(0, 12) + '…');
     return event;
@@ -517,10 +550,13 @@ export class NostrClient {
   /**
    * Envoie un DM chiffré NIP-44 à une clé publique Nostr.
    * NIP-44 = ChaCha20-Poly1305 + HKDF + padding longueur (remplace NIP-04).
+   *
+   * @deprecated NIP-04 est obsolète. Utilisez {@link publishDMSealed} (NIP-17) pour une meilleure confidentialité.
    */
   async publishDM(recipientPubKey: string, content: string): Promise<NostrEvent> {
     if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
 
+    console.warn('[Nostr] publishDM (NIP-04) est obsolète — utilisez publishDMSealed (NIP-17)');
     const ciphertext = nip44Encrypt(this.keypair.secretKey, recipientPubKey, content);
     return this.publish({
       kind: Kind.EncryptedDM,
@@ -574,12 +610,17 @@ export class NostrClient {
     if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
     if (!this.isConnected) throw new Error('[Nostr] Hors ligne — Gift Wrap nécessite une connexion active');
 
-    // wrapManyEvents crée automatiquement : [copy_for_sender, copy_for_recipient]
-    const wraps: NostrEvent[] = nip17.wrapManyEvents(
+    // Créer le sealed event (rumor) puis le wrap individuel
+    // nip17.wrapEvent crée un gift wrap chiffré pour le destinataire
+    const recipientPubkeyHex = recipientPubKey;
+
+    // Créer le wrap pour le destinataire
+    const sealedEvent = nip17.wrapEvent(
       this.keypair.secretKey,
-      [{ publicKey: recipientPubKey }],
+      recipientPubkeyHex,
       content,
     );
+    const wraps = [sealedEvent];
 
     // Publier tous les wraps en parallèle (ne pas bloquer si un relay refuse)
     await Promise.all(
@@ -591,8 +632,7 @@ export class NostrClient {
     );
 
     console.log('[Nostr] Gift Wrap envoyé — kind:1059, destinataire:', recipientPubKey.slice(0, 12) + '…');
-    // Retourner le wrap destinataire (index 1 — index 0 est la copie expéditeur)
-    return wraps[1] ?? wraps[0];
+    return sealedEvent;
   }
 
   /**
@@ -871,22 +911,31 @@ export class NostrClient {
 
   /**
    * Restaure des templates depuis AsyncStorage (appelé au démarrage).
-   * Les re-queue comme de nouvelles promesses silencieuses (fire-and-forget).
+   * Les re-queue comme de nouvelles promesses avec resolve/reject réels.
    */
-  restoreOfflineQueue(templates: EventTemplate[]): void {
-    if (templates.length === 0) return;
+  restoreOfflineQueue(templates: EventTemplate[]): Promise<NostrEvent>[] {
+    if (templates.length === 0) return [];
     const available = OFFLINE_QUEUE_MAX - this.offlineQueue.length;
     const toRestore = templates.slice(0, available);
+    const promises: Promise<NostrEvent>[] = [];
     for (const template of toRestore) {
-      // Promesses orphelines — le résultat ne sera pas observé mais l'event sera publié
+      // Promesses réelles — seront résolues/rejetées quand l'event sera publié
+      let resolveFn: (event: NostrEvent) => void = () => {};
+      let rejectFn: (err: Error) => void = () => {};
+      const promise = new Promise<NostrEvent>((resolve, reject) => {
+        resolveFn = resolve;
+        rejectFn = reject;
+      });
+      promises.push(promise);
       this.offlineQueue.push({
         template,
-        resolve: () => {},
-        reject: () => {},
+        resolve: resolveFn,
+        reject: rejectFn,
       });
     }
     console.log('[Nostr] Queue restaurée depuis stockage persistant:', toRestore.length, 'events');
     this.onQueueChanged?.(this.getOfflineQueueTemplates());
+    return promises;
   }
 
   private _notifyStatus(): void {

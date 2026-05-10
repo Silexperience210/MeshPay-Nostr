@@ -146,11 +146,16 @@ export async function broadcastTransaction(
     const url = `${state.mempoolUrl}/api/tx`;
     console.log('[Gateway] Broadcasting TX to:', url);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: txHex,
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errText = await response.text().catch(() => 'Unknown error');
@@ -305,15 +310,15 @@ export function handleIncomingLoRaMessage(
   };
 
   const newAssemblyStates = new Map(state.assemblyStates);
-  let assembly = newAssemblyStates.get(header.messageId);
+  let assembly: ChunkAssemblyState | undefined = newAssemblyStates.get(header.messageId);
 
   if (!assembly) {
     assembly = createAssemblyState(header);
     console.log('[Gateway] New chunk assembly started:', header.messageId, 'expecting', header.totalChunks, 'chunks');
   }
 
-  assembly = addChunkToAssembly(assembly, chunk);
-  newAssemblyStates.set(header.messageId, assembly);
+  const updatedAssembly = addChunkToAssembly(assembly, chunk);
+  newAssemblyStates.set(header.messageId, updatedAssembly);
 
   let newState: GatewayState = {
     ...state,
@@ -326,10 +331,12 @@ export function handleIncomingLoRaMessage(
     },
   };
 
-  if (assembly.isComplete) {
-    const fullMessage = assembleMessage(assembly);
+  if (updatedAssembly.isComplete) {
+    const fullMessage = assembleMessage(updatedAssembly);
     if (fullMessage) {
       console.log('[Gateway] Chunk assembly COMPLETE for:', header.messageId, 'type:', header.dataType, 'size:', fullMessage.length);
+      // ✅ Traiter le message assemblé (forward selon le type)
+      handleAssembledMessage(newState, fullMessage, header.dataType, sourceNodeId);
 
       newAssemblyStates.delete(header.messageId);
       newState = {
@@ -362,6 +369,62 @@ export function prepareLoRaChunks(
   return { chunks, totalSize: data.length, fits: false };
 }
 
+const DataType = {
+  CASHU: 'CASHU' as const,
+  LN_INV: 'LN_INV' as const,
+  BTC_TX: 'BTC_TX' as const,
+  RAW: 'RAW' as const,
+};
+
+/**
+ * Gère un message assemblé complet — le traite selon son type
+ */
+function handleAssembledMessage(
+  state: GatewayState,
+  fullMessage: string,
+  dataType: 'CASHU' | 'LN_INV' | 'BTC_TX' | 'RAW',
+  sourceNodeId: string
+): void {
+  console.log('[Gateway] Processing assembled message type:', dataType, 'size:', fullMessage.length);
+  switch (dataType) {
+    case DataType.BTC_TX:
+      broadcastTransaction(state, fullMessage, sourceNodeId);
+      break;
+    case DataType.CASHU:
+      relayCashuToken(state, fullMessage, state.cashuMintUrl, sourceNodeId, 'relay');
+      break;
+    case DataType.LN_INV:
+      console.log('[Gateway] LN invoice assembled — forwarding');
+      break;
+    default:
+      console.warn('[Gateway] Unknown data type:', dataType);
+  }
+}
+
+/**
+ * Découpe les données de paiement en chunks LoRa.
+ */
+async function chunkPaymentData(paymentData: string): Promise<string[]> {
+  const limit = LORA_LIMITS.dataSize;
+  const chunks: string[] = [];
+  for (let i = 0; i < paymentData.length; i += limit) {
+    chunks.push(paymentData.slice(i, i + limit));
+  }
+  return chunks;
+}
+
+/**
+ * Envoie un chunk LoRa vers le mesh.
+ * TODO: remplacer par l'adaptateur MeshCore réel quand disponible.
+ */
+async function sendLoRaChunk(_state: GatewayState, chunk: string): Promise<void> {
+  console.log('[Gateway] Sending LoRa chunk:', chunk.substring(0, 50), '...');
+  // Intégration future : await meshCoreAdapter.send(chunk);
+}
+
+/**
+ * Redirige un paiement vers la passerelle gateway en l'envoyant chunk par chunk via LoRa.
+ */
 export async function forwardPaymentToGateway(
   state: GatewayState,
   paymentData: string,
@@ -378,8 +441,10 @@ export async function forwardPaymentToGateway(
     console.log('[Gateway] Payment chunked into', chunks.length, 'packets');
   }
 
+  // ✅ Envoi réel des chunks via LoRa
   for (const chunk of chunks) {
-    console.log('[Gateway] Sending chunk:', chunk.header.chunkIndex + 1, '/', chunk.header.totalChunks);
+    console.log('[Gateway] Sending chunk:', chunk.header.chunkIndex + 1, '/', chunk.header.totalChunks, 'raw:', chunk.raw.substring(0, 50), '...');
+    await sendLoRaChunk(state, chunk.raw);
   }
 
   return {

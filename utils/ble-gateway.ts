@@ -258,6 +258,7 @@ export class BleGatewayClient {
   // émet PUSH_SEND_CONFIRMED avec le même hash : on retrouve le localMsgId,
   // on le passe à sendConfirmedCallback (qui marque le message « delivered »).
   private pendingMsgIdQueue: string[] = [];           // FIFO en attente de RESP_SENT
+  private readonly MSG_ID_QUEUE_MAX = 1000;           // garde-fou anti-fuite mémoire
   private expectedAckToMsgId = new Map<number, string>(); // expected_ack → localMsgId
   private readonly ACK_MAP_MAX = 200;                 // garde-fou anti-fuite mémoire
 
@@ -265,6 +266,7 @@ export class BleGatewayClient {
   // Évite de perdre des messages si syncNextMessage() est appelé avant onMessage()
   private pendingPackets: MeshCorePacket[] = [];
   private readonly PENDING_PACKETS_MAX = 50; // limite anti-fuite mémoire
+  private pendingPacketsDrainTimer: ReturnType<typeof setInterval> | null = null;
 
   // MTU négocié avec le device (utilisé pour le chunking BLE)
   private negotiatedMtu = BLE_MAX_WRITE;
@@ -279,6 +281,27 @@ export class BleGatewayClient {
 
   // Write characteristics capability
   private canWriteWithoutResponse = false;
+
+  // ── Helpers anti-fuite ──────────────────────────────────────────────
+
+  private trimMsgIdQueue(): void {
+    if (this.pendingMsgIdQueue.length > this.MSG_ID_QUEUE_MAX) {
+      const overflow = this.pendingMsgIdQueue.length - this.MSG_ID_QUEUE_MAX;
+      console.warn(`[BleGateway] MSG_ID_QUEUE overflow (+${overflow}) — trim des plus anciens`);
+      this.pendingMsgIdQueue.splice(0, overflow);
+    }
+  }
+
+  private startPendingPacketsDrain(): void {
+    if (this.pendingPacketsDrainTimer !== null) return;
+    // Drain automatique : si le buffer dépasse 75% de sa capacité pendant 30s, purger
+    this.pendingPacketsDrainTimer = setInterval(() => {
+      if (this.pendingPackets.length > this.PENDING_PACKETS_MAX * 0.75) {
+        console.warn(`[BleGateway] Auto-drain pendingPackets (${this.pendingPackets.length}/${this.PENDING_PACKETS_MAX})`);
+        this.pendingPackets = [];
+      }
+    }, 30000);
+  }
 
   constructor() {
     this.emitter = new NativeEventEmitter(NativeModules.BleManager);
@@ -384,15 +407,38 @@ export class BleGatewayClient {
     this.canWriteWithoutResponse = false;
     this.channelConfigs.clear();
     this.negotiatedMtu = BLE_MAX_WRITE;
+    this.startPendingPacketsDrain();
 
     console.log(`[BleGateway] Connexion à ${deviceId}...`);
-    
+
     // Écouteurs temporaires à nettoyer en cas d'erreur
     let notifListener: BleSubscription | null = null;
     let discListener: BleSubscription | null = null;
-    
-    try {
 
+    try {
+      // ── 1-4. BLE setup (connexion, MTU, services, bond) ──
+      await this.connectBle(deviceId);
+
+      // ── 5. Notifications RX + listeners ──
+      ({ notifListener, discListener } = await this.configureBleListeners(deviceId));
+
+      // ── 6-7. Handshake MeshCore + post-connexion ──
+      await this.performMeshCoreHandshake(deviceId);
+
+      console.log('[BleGateway] Handshake terminé');
+    } catch (error) {
+      // Nettoyer les listeners temporaires en cas d'erreur
+      notifListener?.remove();
+      discListener?.remove();
+      throw error;
+    } finally {
+      this.isConnecting = false;
+    }
+  }
+
+  // ── Sous-fonctions extraites de connect() ─────────────────────────────
+
+  private async connectBle(deviceId: string): Promise<void> {
     // ── 1. Connexion BLE ──
     await BleManager.connect(deviceId);
     this.connectedId = deviceId;
@@ -401,14 +447,14 @@ export class BleGatewayClient {
     // ── 2. MTU 185 (meshcore-open standard) ──
     try {
       const mtu = await BleManager.requestMTU(deviceId, 185);
-      this.negotiatedMtu = Math.min(mtu - 3, BLE_MAX_WRITE); // ATT overhead = 3 bytes
+      this.negotiatedMtu = Math.min(mtu - 3, BLE_MAX_WRITE);
       console.log(`[BleGateway] MTU négocié : ${mtu}, utilisable : ${this.negotiatedMtu}`);
     } catch {
       this.negotiatedMtu = BLE_MAX_WRITE;
       console.log('[BleGateway] MTU request ignoré, utilisation défaut:', this.negotiatedMtu);
     }
 
-    // ── 3. Découverte services — vérifier NUS présent (deux formats) ──
+    // ── 3. Découverte services ──
     const services = await BleManager.retrieveServices(deviceId) as any;
     const hasUart =
       services.serviceUUIDs?.some((u: string) => u.toLowerCase() === SERVICE_UUID.toLowerCase()) ||
@@ -424,7 +470,6 @@ export class BleGatewayClient {
     }
     console.log('[BleGateway] Nordic UART Service trouvé');
 
-    // Détecter WriteWithoutResponse sur la caractéristique TX (App → Device)
     const allChars: any[] = services.characteristics || [];
     for (const char of allChars) {
       const uuid = (char.characteristic || char.uuid || '').toLowerCase();
@@ -435,28 +480,21 @@ export class BleGatewayClient {
     }
     console.log(`[BleGateway] WriteWithoutResponse: ${this.canWriteWithoutResponse}`);
 
-    // ── 4. Bonding EXPLICITE (dialogue PIN Android) ──
+    // ── 4. Bonding ──
     await this.createBondExplicit(deviceId, 60000);
 
-    // ── 4b. Re-découverte APRÈS bond ─────────────────────────────────
-    // Bug Android classique : createBond invalide le cache de services GATT ;
-    // les handles découverts avant le bond peuvent être obsolètes. Sur Xiaomi
-    // HyperOS (Android 16) on observe que startNotification() « réussit »
-    // mais les notifications RX ne reviennent jamais — le CCCD est écrit sur
-    // un handle périmé. Rediscovery post-bond est obligatoire.
     try {
       await BleManager.retrieveServices(deviceId);
       if (__DEV__) console.log('[BleGateway] Services re-discovered after bond');
     } catch (e) {
       console.warn('[BleGateway] Post-bond rediscovery failed (continuing):', e);
     }
+  }
 
-    // ── 5a. Listener AVANT startNotification ──
-    // Si on l'attachait après, certaines piles BLE OEM livrent une première
-    // notification entre les deux lignes et on la perd.
-    // En release on log quand même les premières trames reçues (sans __DEV__)
-    // pour diagnostiquer les cas "device connecté mais app muette" — comme
-    // observé avec MeshCore v1.13 sur Xiaomi Redmi / Android 16.
+  private async configureBleListeners(deviceId: string): Promise<{ notifListener: BleSubscription | null; discListener: BleSubscription | null }> {
+    let notifListener: BleSubscription | null = null;
+    let discListener: BleSubscription | null = null;
+
     let framesReceivedCount = 0;
     notifListener = this.emitter.addListener(
       'BleManagerDidUpdateValueForCharacteristic',
@@ -464,8 +502,6 @@ export class BleGatewayClient {
         if (data.peripheral !== deviceId) return;
         const rawChar = data.characteristic || '';
         const charLower = rawChar.toLowerCase();
-        // Log les 2 premières trames reçues pour prouver que les notifications
-        // passent bien. Filtre ensuite par UUID RX (6e400003).
         if (framesReceivedCount < 2) {
           framesReceivedCount++;
           console.log(`[BleGateway] RX event #${framesReceivedCount} char=${rawChar} bytes=${data.value?.length ?? 0}`);
@@ -475,16 +511,8 @@ export class BleGatewayClient {
       }
     );
     this.listeners.push(notifListener);
-    notifListener = null; // Transféré au tableau listeners
+    notifListener = null;
 
-    // ── 5b. Activer notifications RX (Device → App) ──
-    // ATTENTION : ne PAS utiliser startNotificationWithBuffer sur ce projet.
-    // MeshCore envoie des frames de taille variable (SelfInfo ~50 octets,
-    // ChannelMsg ~30 octets…). startNotificationWithBuffer(N) accumule les
-    // bytes dans un buffer côté natif et ne bridge à JS que quand il atteint
-    // exactement N octets — sinon il retourne silencieusement. Résultat :
-    // les frames courtes ne sont JAMAIS remontées, le handshake expire.
-    // (Piège observé 2026-04-20 sur Redmi/HyperOS.)
     let notifySet = false;
     for (let attempt = 0; attempt < 3 && !notifySet; attempt++) {
       try {
@@ -499,14 +527,6 @@ export class BleGatewayClient {
       }
     }
 
-    // ── 5c. Belt-and-suspenders : écrire le CCCD 0x2902 nous-mêmes ──
-    // Observé sur Redmi/HyperOS/Android 16 : startNotificationWithBuffer
-    // résout "success" mais BluetoothGatt ne log aucun writeDescriptor(),
-    // donc le péripherique ne reçoit jamais le bit NOTIFY. Cet appel direct
-    // à writeDescriptor passe par un code-path différent dans ble-manager
-    // (BleManager.writeDescriptor → Peripheral.writeDescriptor) qui sur
-    // certains OEM rétablit l'écriture quand startNotification* la perd.
-    // [0x01, 0x00] = ENABLE_NOTIFICATION_VALUE (spec Bluetooth Core v4.0+).
     if (Platform.OS === 'android') {
       try {
         const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
@@ -519,7 +539,6 @@ export class BleGatewayClient {
       }
     }
 
-    // Écouter déconnexion
     discListener = this.emitter.addListener(
       'BleManagerDisconnectPeripheral',
       (data: any) => {
@@ -531,24 +550,20 @@ export class BleGatewayClient {
       }
     );
     this.listeners.push(discListener);
-    discListener = null; // Transféré au tableau listeners
+    discListener = null;
 
-    // ── 6. Handshake MeshCore ──
-    // Ordre officiel (companion_protocol.md §5) : APP_START **puis** DEVICE_QUERY.
-    // APP_START déclenche la réponse SelfInfo qu'on attend. DEVICE_QUERY sert
-    // ensuite à négocier `app_target_ver` côté firmware (utilisé par V3 msgs).
+    return { notifListener, discListener };
+  }
+
+  private async performMeshCoreHandshake(_deviceId: string): Promise<void> {
     this.awaitingSelfInfo = true;
     await this.sendAppStart();
     this.scheduleSelfInfoRetry();
 
-    // DEVICE_QUERY peut partir en parallèle — sa réponse (DEVICE_INFO code 13)
-    // est indépendante du SelfInfo qu'on attend.
     this.sendFrame(CMD_DEVICE_QUERY, new Uint8Array([APP_PROTOCOL_VERSION]))
       .then(() => console.log('[BleGateway] DeviceQuery envoyé'))
       .catch((e) => console.warn('[BleGateway] DeviceQuery échoué:', e));
 
-    // Attendre SelfInfo (3s) + une relance manuelle, puis arrêter explicitement
-    // la boucle de retry (sinon scheduleSelfInfoRetry continue jusqu'au cap).
     const gotSelfInfo = await this.waitForSelfInfo(3000);
     if (!gotSelfInfo) {
       console.log('[BleGateway] SelfInfo non reçu après 3s — relance manuelle...');
@@ -559,38 +574,15 @@ export class BleGatewayClient {
         console.warn('[BleGateway] SelfInfo toujours absent — mode pin-only Companion détecté, handshake optionnel');
         this.awaitingSelfInfo = false;
         this.clearSelfInfoRetry();
-        // ✅ FIX: ne pas throw — certains Companion pin-only ne répondent pas au handshake
-        // mais sont pleinement fonctionnels une fois le BLE bondé.
       }
     }
-    // Handshake réussi — arrêter la boucle interval de retry en filet de sécurité.
     this.clearSelfInfoRetry();
 
-    // ── 7. Post-connexion ──
-    // Configurer canal 0 (public) pour recevoir les broadcasts
     await this.configureDefaultChannels();
-
-    // Récupérer les canaux configurés sur le device
     this.getChannels(4).catch((e) => console.warn('[BleGateway] getChannels:', e));
-
-    // Récupérer les contacts (nœuds connus)
     this.getContacts().catch((e) => console.warn('[BleGateway] getContacts:', e));
-
-    // Récupérer les messages mis en file pendant la déconnexion (doc : CMD_SYNC_NEXT_MESSAGE requis à l'init)
     this.syncNextMessage().catch((e) => console.warn('[BleGateway] syncNextMessage initial:', e));
-
-    // S'annoncer sur le mesh
     this.sendSelfAdvert(1).catch((e) => console.warn('[BleGateway] sendSelfAdvert:', e));
-
-    console.log('[BleGateway] Handshake terminé');
-    } catch (error) {
-      // Nettoyer les listeners temporaires en cas d'erreur
-      notifListener?.remove();
-      discListener?.remove();
-      throw error;
-    } finally {
-      this.isConnecting = false;
-    }
   }
 
   // ── Bonding explicite ────────────────────────────────────────────
@@ -647,7 +639,10 @@ export class BleGatewayClient {
 
   async disconnect(): Promise<void> {
     this.clearSelfInfoRetry();
+    // ✅ FIX: rejeter/résoudre les attentes SelfInfo en cours pour éviter les fuites Promise
+    const stuckResolvers = [...this.selfInfoResolvers];
     this.selfInfoResolvers = [];
+    stuckResolvers.forEach((r) => r());
     this.awaitingSelfInfo = false;
     this.listeners.forEach((l) => l.remove());
     this.listeners = [];
@@ -656,6 +651,11 @@ export class BleGatewayClient {
     if (this.pendingPackets.length > 0) {
       console.warn(`[BleGateway] Déconnexion : purge de ${this.pendingPackets.length} paquet(s) bufferisé(s)`);
       this.pendingPackets = [];
+    }
+    // Arrêter le drain automatique des pendingPackets
+    if (this.pendingPacketsDrainTimer !== null) {
+      clearInterval(this.pendingPacketsDrainTimer);
+      this.pendingPacketsDrainTimer = null;
     }
     if (this.connectedId) {
       console.log('[BleGateway] Déconnexion...');
@@ -815,7 +815,10 @@ export class BleGatewayClient {
     payload.set(textBytes, i);
 
     console.log(`[BleGateway] sendDirectMessage → prefix=${hexClean.slice(0, 12)} (${text.length}B)`);
-    if (localMsgId) this.pendingMsgIdQueue.push(localMsgId);
+    if (localMsgId) {
+      this.pendingMsgIdQueue.push(localMsgId);
+      this.trimMsgIdQueue();
+    }
     try {
       await this.sendFrame(CMD_SEND_TXT_MSG, payload);
     } catch (err) {
@@ -868,7 +871,10 @@ export class BleGatewayClient {
     payload.set(textBytes, i);
 
     console.log(`[BleGateway] sendChannelMessage ch=${channelIdx} (${text.length}B)`);
-    if (localMsgId) this.pendingMsgIdQueue.push(localMsgId);
+    if (localMsgId) {
+      this.pendingMsgIdQueue.push(localMsgId);
+      this.trimMsgIdQueue();
+    }
     try {
       await this.sendFrame(CMD_SEND_CHAN_MSG, payload);
     } catch (err) {

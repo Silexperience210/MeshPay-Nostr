@@ -11,6 +11,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ActivityIndicator, View, Text, AppState, AppStateStatus } from "react-native";
 import Colors from "@/constants/colors";
 
+// ─── i18n ────────────────────────────────────────────────────────────────────
+import { setLanguage } from "@/locales";
+
 // ─── Stores Zustand (nouveau) ────────────────────────────────────────────────
 import { useWalletStore } from "@/stores/walletStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -79,10 +82,19 @@ function useStoreHydration() {
 
 function AppContent() {
   const { isHydrated } = useStoreHydration();
+  const settingsLanguage = useSettingsStore((state) => state.language);
   const [onboardingDone, setOnboardingDone] = useState<boolean | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const pathname = usePathname();
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ─── i18n : synchroniser la langue du store avec le système de traduction ───
+  useEffect(() => {
+    if (isHydrated && settingsLanguage) {
+      setLanguage(settingsLanguage);
+      console.log('[Layout] i18n language initialized:', settingsLanguage);
+    }
+  }, [isHydrated, settingsLanguage]);
 
   // Vérifier l'état de l'onboarding
   const checkOnboarding = useCallback(async () => {
@@ -188,7 +200,7 @@ function AppContent() {
   if (!isHydrated || onboardingDone === null) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background, padding: 20 }}>
-        <ActivityIndicator size="large" color={Colors.tint} />
+        <ActivityIndicator size="large" color={Colors.accent} />
         <Text style={{ marginTop: 16, color: Colors.textMuted }}>
           Chargement...
         </Text>

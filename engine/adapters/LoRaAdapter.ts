@@ -47,11 +47,12 @@ export class LoRaAdapter implements ProtocolAdapter {
   private config: LoRaAdapterConfig;
   private engine: HermesEngine;
   private bleClient: BleGatewayClient;
-  private messageHandler?: (event: HermesEvent) => void;
   private _isConnected = false;
   private unsubCallbacks: Array<() => void> = [];
   private _bridgeCounter = 0;
   private _msgIdCounter = 0;
+  private disconnectRegistered = false;
+  private messageHandlers: Array<(event: HermesEvent) => void> = [];
   
   // Gestion des contacts connus
   private contacts = new Map<string, MeshCoreContact>();
@@ -85,13 +86,16 @@ export class LoRaAdapter implements ProtocolAdapter {
   // ─── Cycle de vie ─────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    // Écouter l'état de connexion BLE
-    this.bleClient.onDisconnect(() => {
-      if (this._isConnected) {
-        this._isConnected = false;
-        this.emitConnectionEvent(false);
-      }
-    });
+    // Écouter l'état de connexion BLE (une seule fois)
+    if (!this.disconnectRegistered) {
+      this.bleClient.onDisconnect(() => {
+        if (this._isConnected) {
+          this._isConnected = false;
+          this.emitConnectionEvent(false);
+        }
+      });
+      this.disconnectRegistered = true;
+    }
 
     // Purge périodique des partial messages expirés
     if (!this.partialSweepTimer) {
@@ -148,12 +152,12 @@ export class LoRaAdapter implements ProtocolAdapter {
 
   async connect(deviceId: string): Promise<void> {
     await this.bleClient.connect(deviceId);
-    this._isConnected = true;
     this.config.lastDeviceId = deviceId;
     
-    // Configurer les listeners
+    // Configurer les listeners AVANT de marquer connecté
     this.setupListeners();
     
+    this._isConnected = true;
     this.emitConnectionEvent(true);
     console.log('[LoRaAdapter] Connecté à:', deviceId);
   }
@@ -279,8 +283,11 @@ export class LoRaAdapter implements ProtocolAdapter {
   // ─── Réception ────────────────────────────────────────────────────────────
 
   onMessage(handler: (event: HermesEvent) => void): () => void {
-    this.messageHandler = handler;
-    return () => { this.messageHandler = undefined; };
+    this.messageHandlers.push(handler);
+    return () => {
+      const idx = this.messageHandlers.indexOf(handler);
+      if (idx > -1) this.messageHandlers.splice(idx, 1);
+    };
   }
 
   private handleIncomingMessage(msg: MeshCoreIncomingMsg): void {
@@ -341,7 +348,9 @@ export class LoRaAdapter implements ProtocolAdapter {
       },
     };
 
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[LoRaAdapter] Handler error:', e); }
+    }
 
     // Bridge automatique vers Nostr si activé
     if (this.config.autoBridgeToNostr) {
@@ -365,7 +374,9 @@ export class LoRaAdapter implements ProtocolAdapter {
       meta: {},
     };
 
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[LoRaAdapter] Handler error:', e); }
+    }
   }
 
   private bridgeToNostr(loraEvent: MessageEvent): void {
@@ -387,7 +398,9 @@ export class LoRaAdapter implements ProtocolAdapter {
     };
 
     // Dispatch locally for subscribers
-    this.messageHandler?.(bridgeEvent);
+    for (const h of this.messageHandlers) {
+      try { h(bridgeEvent); } catch (e) { console.error('[LoRaAdapter] Handler error:', e); }
+    }
 
     // Route to NostrAdapter.send() if available
     const nostrAdapter = this.engine.getAdapter(Transport.NOSTR);
@@ -433,7 +446,9 @@ export class LoRaAdapter implements ProtocolAdapter {
       },
       meta: {},
     };
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[LoRaAdapter] Handler error:', e); }
+    }
   }
 
   // ─── API Publique Spécifique ──────────────────────────────────────────────
@@ -447,10 +462,4 @@ export class LoRaAdapter implements ProtocolAdapter {
   }
 
   async setChannel(channelIdx: number, name: string, secret: Uint8Array): Promise<void> {
-    await this.bleClient.setChannel(channelIdx, name, secret);
-  }
-
-  getDeviceInfo() {
-    return this.bleClient.getDeviceInfo();
-  }
-}
+    await this.bleClient.setChann

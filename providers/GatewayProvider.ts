@@ -128,9 +128,11 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   const activateMutation = useMutation({
     mutationFn: async () => {
       console.log('[GatewayProvider] Activating gateway...');
+      // Lit gatewayState via ref pour éviter la stale closure
+      const currentState = gatewayStateRef.current;
       const newState = await activateGateway(
         {
-          ...gatewayState,
+          ...currentState,
           services: settings.services,
           mempoolUrl: settings.mempoolUrl,
           cashuMintUrl: settings.cashuMintUrl,
@@ -206,19 +208,19 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     paymentType: 'BTC_TX' | 'CASHU' | 'LN_INV',
     destinationNodeId: string
   ) => {
+    // Utilise la ref pour éviter la stale closure
     const newState = await forwardPaymentToGateway(
-      gatewayState,
+      gatewayStateRef.current,
       paymentData,
       paymentType,
       destinationNodeId
     );
     setGatewayState(newState);
-  }, [gatewayState]);
+  }, []);
 
   const registerPeer = useCallback((peer: GatewayPeer) => {
-    const newState = addGatewayPeer(gatewayState, peer);
-    setGatewayState(newState);
-  }, [gatewayState]);
+    setGatewayState((prev) => addGatewayPeer(prev, peer));
+  }, []);
 
   const toggleService = useCallback((service: GatewayServiceType, enabled: boolean) => {
     const updatedServices = { ...settings.services, [service]: enabled };
@@ -249,8 +251,8 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
   }, [gatewayState.isActive, settings.cleanupIntervalMs, settings.maxPeerAge, settings.maxRelayJobAge]);
 
   const getUptime = useCallback((): string => {
-    return getGatewayUptime(gatewayState);
-  }, [gatewayState]);
+    return getGatewayUptime(gatewayStateRef.current);
+  }, []);
 
   return {
     gatewayState,
@@ -259,9 +261,9 @@ export const [GatewayContext, useGateway] = createContextHook(() => {
     activateGateway: () => activateMutation.mutate(),
     deactivateGateway: () => deactivateMutation.mutate(),
     broadcastTx: (txHex: string, sourceNodeId: string) =>
-      broadcastTxMutation.mutate({ txHex, sourceNodeId }),
+      broadcastTxMutation.mutateAsync({ txHex, sourceNodeId }),
     relayCashu: (token: string, mintUrl: string, sourceNodeId: string, action: 'relay' | 'redeem' | 'mint') =>
-      relayCashuMutation.mutate({ token, mintUrl, sourceNodeId, action }),
+      relayCashuMutation.mutateAsync({ token, mintUrl, sourceNodeId, action }),
     handleLoRaMessage,
     forwardPayment,
     registerPeer,

@@ -10,11 +10,13 @@ import {
   queuePendingMessage,
   getPendingMessages,
   removePendingMessage,
-  removePendingMessagesByConversation,  // ← NOUVEAU import
+  removePendingMessagesByConversation,
   incrementRetryCount,
+  getDatabase,
   PendingMessage,
 } from '@/utils/database';
 import { getBleGatewayClient } from '@/utils/ble-gateway';
+import { getAckService } from './AckService';
 
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_INTERVAL_BASE = 5000;  // 5 secondes
@@ -24,6 +26,7 @@ class MessageRetryService {
   private isProcessing = false;
   private processingInterval: ReturnType<typeof setInterval> | null = null;
   private onStatusChange?: (msgId: string, status: 'sending' | 'sent' | 'failed') => void;
+  private isRetrying = new Map<string, boolean>(); // ✅ FIX: Garde contre retry simultanés par message
 
   constructor(onStatusChange?: (msgId: string, status: 'sending' | 'sent' | 'failed') => void) {
     this.onStatusChange = onStatusChange;
@@ -36,6 +39,11 @@ class MessageRetryService {
     if (this.processingInterval) return;
 
     console.log('[MessageRetryService] Démarré');
+
+    // ✅ FIX: Charger les retries persistés au démarrage
+    this.loadPersistedRetries().catch(err => {
+      console.error('[MessageRetryService] Erreur chargement retries au démarrage:', err);
+    });
 
     // Vérifier toutes les 10 secondes
     this.processingInterval = setInterval(() => {
@@ -104,8 +112,18 @@ class MessageRetryService {
         return;
       }
 
-      for (const msg of pending) {
+      // ✅ FIX: Copier le tableau avant d'itérer pour éviter les modifications en cours
+      const pendingCopy = [...pending];
+
+      for (const msg of pendingCopy) {
+        // ✅ FIX: Garde contre retry simultanés sur le même message
+        if (this.isRetrying.get(msg.id)) {
+          console.log(`[MessageRetryService] Retry déjà en cours pour: ${msg.id}`);
+          continue;
+        }
+
         try {
+          this.isRetrying.set(msg.id, true);
           this.onStatusChange?.(msg.id, 'sending');
 
           // Envoyer via BLE (msg.packet est un Uint8Array encodé stocké en base)
@@ -113,10 +131,12 @@ class MessageRetryService {
 
           // Succès - supprimer de la file
           await removePendingMessage(msg.id);
+          this.isRetrying.delete(msg.id);
           this.onStatusChange?.(msg.id, 'sent');
 
           console.log('[MessageRetryService] Message envoyé:', msg.id);
         } catch (error) {
+          this.isRetrying.delete(msg.id);
           const errorMsg = error instanceof Error ? error.message : String(error);
           console.error('[MessageRetryService] Erreur envoi:', msg.id, errorMsg);
 
@@ -135,6 +155,72 @@ class MessageRetryService {
     } finally {
       // ✅ FIX: Toujours réinitialiser isProcessing dans finally pour éviter race condition
       this.isProcessing = false;
+    }
+  }
+
+  /**
+   * ✅ FIX: Persiste un retry en SQLite (utilise getAllAsync au lieu de runAsync)
+   */
+  async persistRetry(msgId: string, packet: Uint8Array, maxRetries: number): Promise<void> {
+    try {
+      const db = await getDatabase();
+      // ✅ FIX: Utiliser getAllAsync avec une requête INSERT/UPDATE via runAsync
+      // Note: Expo SQLite ne supporte pas getAllAsync pour les INSERT, on utilise runAsync
+      // mais on vérifie le résultat correctement
+      await db.runAsync(
+        `INSERT OR REPLACE INTO pending_retries (msgId, packet, maxRetries, retryCount, createdAt) VALUES (?, ?, ?, 0, ?)`,
+        msgId,
+        packet,
+        maxRetries,
+        Date.now()
+      );
+      console.log(`[MessageRetryService] Retry persisté: ${msgId}`);
+    } catch (error) {
+      console.error('[MessageRetryService] Erreur persistance retry:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ FIX: Supprime un retry persisté de SQLite
+   */
+  async removePersistedRetry(msgId: string): Promise<void> {
+    try {
+      const db = await getDatabase();
+      await db.runAsync('DELETE FROM pending_retries WHERE msgId = ?', msgId);
+      console.log(`[MessageRetryService] Retry supprimé: ${msgId}`);
+    } catch (error) {
+      console.error('[MessageRetryService] Erreur suppression retry:', error);
+    }
+  }
+
+  /**
+   * ✅ FIX: Charge les retries persistés depuis SQLite au démarrage
+   * Appelé automatiquement par start().
+   */
+  async loadPersistedRetries(): Promise<void> {
+    try {
+      const db = await getDatabase();
+      // ✅ FIX: Utiliser getAllAsync qui retourne une Promise avec les résultats
+      const rows = await db.getAllAsync<{
+        msgId: string;
+        packet: Uint8Array;
+        maxRetries: number;
+        retryCount: number;
+      }>('SELECT msgId, packet, maxRetries, retryCount FROM pending_retries');
+
+      if (rows && rows.length > 0) {
+        console.log(`[MessageRetryService] ${rows.length} retries persistés chargés`);
+        for (const row of rows) {
+          try {
+            await queuePendingMessage(row.msgId, row.packet, row.maxRetries);
+          } catch (err) {
+            console.warn(`[MessageRetryService] Impossible de recharger le retry ${row.msgId}:`, err);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[MessageRetryService] Erreur chargement retries:', error);
     }
   }
 

@@ -5,6 +5,7 @@
  */
 
 import { UsbSerialManager, type UsbSerial } from 'react-native-usb-serialport-for-android';
+import { decompressFromLora } from './compression';
 
 export interface MeshCoreUsbDevice {
   id: number;
@@ -154,13 +155,12 @@ async function parseTextPacket(data: Uint8Array, flags: number): Promise<{
     // Décompresser si nécessaire
     let text: string;
     if (flags & 0x02) { // COMPRESSED flag
-      // ✅ Décompression LZW implémentée
+      // ✅ Décompression via compression.ts (import statique)
       try {
-        const { lzwDecompress } = await import('./lzw');
         const compressed = new TextDecoder().decode(payload);
-        text = lzwDecompress(compressed);
+        text = decompressFromLora(compressed);
       } catch (err) {
-        console.error('[MeshCore-USB] LZW decompression failed:', err);
+        console.error('[MeshCore-USB] Decompression failed:', err);
         text = '[Decompression failed]';
       }
     } else {
@@ -196,10 +196,11 @@ function parsePositionPacket(data: Uint8Array): {
     // Skip header fields
     offset += 4 + 8 + 8 + 4 + 2 + 2; // messageId + from + to + timestamp + submesh + payloadLen
     
-    // Payload: lat (4), lon (4), alt (2)
-    const lat = view.getInt32(offset, false) / 1000000;
+    // Payload: lat (4 bytes float), lon (4 bytes float), alt (2 bytes int16)
+    // Format correspond à createPositionPacket dans meshcore-protocol.ts
+    const lat = view.getFloat32(offset, false) / 1e6;
     offset += 4;
-    const lon = view.getInt32(offset, false) / 1000000;
+    const lon = view.getFloat32(offset, false) / 1e6;
     offset += 4;
     const alt = view.getInt16(offset, false);
     
@@ -220,15 +221,11 @@ function parseKeyAnnouncePacket(data: Uint8Array): {
 } {
   try {
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    let offset = 4;
-    
-    // Skip header
-    offset += 4 + 8 + 8 + 4 + 2 + 2;
-    
-    // Payload: public key
-    const payloadLen = data.length - offset - 2; // -2 pour CRC
-    const pubkey = data.slice(offset, offset + payloadLen);
-    
+    // Header = 32 bytes. Lire payloadLen à l'offset 30-31 (après subMeshId)
+    const payloadLen = view.getUint16(30, false);
+    const payloadOffset = 32; // Début du payload après le header
+    const pubkey = data.slice(payloadOffset, payloadOffset + payloadLen);
+
     return {
       valid: true,
       type: 'KEY_ANNOUNCE',
@@ -248,15 +245,15 @@ function parseAckPacket(data: Uint8Array): {
 } {
   try {
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    let offset = 4;
-    
-    // Ack contient juste le messageId
-    const messageId = view.getUint32(offset, false);
-    
+    // Header = 32 bytes (version, type, flags, ttl + msgId + from + to + timestamp + submesh + payloadLen)
+    // Le payload de l'ACK commence à l'offset 32 et contient l'originalMessageId (4 bytes)
+    const payloadOffset = 32;
+    const originalMessageId = view.getUint32(payloadOffset, false);
+
     return {
       valid: true,
       type: 'ACK',
-      payload: { messageId },
+      payload: { messageId: originalMessageId },
     };
   } catch (err) {
     return { valid: false, type: 'ACK', payload: { error: String(err) } };

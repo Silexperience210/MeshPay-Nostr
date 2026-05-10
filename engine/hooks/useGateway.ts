@@ -1,70 +1,69 @@
 /**
  * useGateway - Hook React pour le GatewayManager
- * 
+ *
  * Phase 3.2: Remplace le GatewayProvider legacy
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { gatewayManager, type GatewayStatus } from '../gateway/GatewayManager';
-import { Transport } from '../types';
+import { hermes } from '../HermesEngine';
+import { EventType } from '../types';
 
 export interface UseGatewayReturn {
   /** Statut du gateway */
   status: GatewayStatus;
-  
+
   /** Forcer un bridge manuel */
   bridgeMessage: (payload: string, from: 'lora' | 'nostr', to: 'lora' | 'nostr') => Promise<void>;
-  
-  /** Activer/désactiver un bridge */
+
+  /** Activer/desactiver un bridge */
   setBridgeEnabled: (direction: 'loraToNostr' | 'nostrToLora', enabled: boolean) => void;
-  
-  /** Démarrer le gateway */
+
+  /** Demarrer le gateway */
   start: () => Promise<void>;
-  
-  /** Arrêter le gateway */
+
+  /** Arreter le gateway */
   stop: () => Promise<void>;
-  
+
   /** Reset les statistiques */
   resetStats: () => void;
 }
 
 export function useGateway(): UseGatewayReturn {
   const [status, setStatus] = useState<GatewayStatus>(gatewayManager.getStatus());
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Démarrer automatiquement au montage
+  // Demarrer automatiquement au montage + souscription aux evenements
   useEffect(() => {
     gatewayManager.start();
-    
-    // Polling pour les stats (5 secondes)
-    intervalRef.current = setInterval(() => {
+
+    // Souscription aux evenements de bridge pour mise a jour en temps reel
+    const unsubBridge = hermes.on(EventType.BRIDGE_LORA_TO_NOSTR, () => {
       setStatus(gatewayManager.getStatus());
-    }, 5000);
-    
+    });
+    const unsubBridge2 = hermes.on(EventType.BRIDGE_NOSTR_TO_LORA, () => {
+      setStatus(gatewayManager.getStatus());
+    });
+
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
+      unsubBridge();
+      unsubBridge2();
       gatewayManager.stop();
     };
   }, []);
 
   const bridgeMessage = useCallback(async (
-    payload: string, 
-    from: 'lora' | 'nostr', 
+    payload: string,
+    from: 'lora' | 'nostr',
     to: 'lora' | 'nostr'
   ) => {
-    const fromTransport = from === 'lora' ? Transport.LORA : Transport.NOSTR;
-    const toTransport = to === 'lora' ? Transport.LORA : Transport.NOSTR;
-    
-    await gatewayManager.bridgeMessage(payload, fromTransport, toTransport);
-    
-    // Mettre à jour le statut immédiatement
+    await gatewayManager.bridgeMessage(payload, from as any, to as any);
+
+    // Mettre a jour le statut immediatement
     setStatus(gatewayManager.getStatus());
   }, []);
 
   const setBridgeEnabled = useCallback((
-    direction: 'loraToNostr' | 'nostrToLora', 
+    direction: 'loraToNostr' | 'nostrToLora',
     enabled: boolean
   ) => {
     gatewayManager.setBridgeEnabled(direction, enabled);

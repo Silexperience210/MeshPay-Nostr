@@ -1,11 +1,13 @@
 /**
  * Compat Layer - Providers de compatibilité pour transition Zustand
- * 
+ *
  * Ces providers permettent une migration progressive depuis les anciens Context Providers
  * vers les stores Zustand sans casser les composants existants.
- * 
- * Usage: Remplacer les imports dans app/_layout.tsx par ceux-ci
- * puis migrer les composants un par un vers les hooks Zustand.
+ *
+ * NOTE: Ce fichier est destiné à la migration et n'est pas encore intégré dans
+ * app/_layout.tsx. Les composants utilisent actuellement directement les hooks
+ * Zustand. Pour activer la couche de compatibilité, remplacer les imports dans
+ * app/_layout.tsx par WalletCompatProvider / SettingsCompatProvider.
  */
 
 import React, { createContext, useContext, ReactNode } from 'react';
@@ -55,10 +57,10 @@ export function WalletCompatProvider({ children }: { children: ReactNode }) {
     generateError: store.generateError,
     importError: store.importError,
     generateNewWallet: (strength?: 12 | 24) => {
-      store.generateWallet(strength);
+      return store.generateWallet(strength);
     },
     importWallet: (mnemonic: string) => {
-      store.importWallet(mnemonic);
+      return store.importWallet(mnemonic);
     },
     deleteWallet: () => {
       store.deleteWallet();

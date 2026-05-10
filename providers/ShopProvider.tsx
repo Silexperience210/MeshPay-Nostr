@@ -457,21 +457,32 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       setIsLoadingBrowse(false);
     }, 15_000);
 
+    // Débouncer le flush pour éviter les re-renders à chaque event
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => {
-      // Enrichir les produits avec les infos de paiement du stall si disponibles
-      const enriched = [...foundProducts.values()].map((p) => {
-        const stall = foundStalls.get(p.stallId) ?? foundStalls.get(p.sellerPubkey);
-        if (!stall) return p;
-        return {
-          ...p,
-          sellerLightningAddress: p.sellerLightningAddress ?? stall.lightningAddress,
-          sellerBitcoinAddress: p.sellerBitcoinAddress ?? stall.bitcoinAddress,
-        };
-      });
-      setBrowseProducts(enriched);
-      // Persister le cache pour affichage immédiat au prochain lancement
-      AsyncStorage.setItem(BROWSE_CACHE_KEY, JSON.stringify(enriched)).catch(() => {});
+      if (flushTimer) clearTimeout(flushTimer);
+      flushTimer = setTimeout(() => {
+        // Enrichir les produits avec les infos de paiement du stall si disponibles
+        const enriched = [...foundProducts.values()].map((p) => {
+          const stall = foundStalls.get(p.stallId) ?? foundStalls.get(p.sellerPubkey);
+          if (!stall) return p;
+          return {
+            ...p,
+            sellerLightningAddress: p.sellerLightningAddress ?? stall.lightningAddress,
+            sellerBitcoinAddress: p.sellerBitcoinAddress ?? stall.bitcoinAddress,
+          };
+        });
+        setBrowseProducts(enriched);
+        // Persister le cache pour affichage immédiat au prochain lancement
+        AsyncStorage.setItem(BROWSE_CACHE_KEY, JSON.stringify(enriched)).catch(() => {});
+      }, 150); // 150ms debounce
     };
+
+    // Vérifier que Nostr est connecté avant de souscrire
+    if (!nostrConnected) {
+      setIsLoadingBrowse(false);
+      return;
+    }
 
     const unsub = nostrClient.subscribe(
       [
@@ -500,13 +511,14 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       () => {
         // EOSE reçu — relay a fini d'envoyer les events stockés
         clearTimeout(safetyTimer);
+        if (flushTimer) clearTimeout(flushTimer);
         flush();
         setIsLoadingBrowse(false);
       },
     );
 
     nostrSubRef.current = unsub;
-  }, []);
+  }, [nostrConnected]);
 
   useEffect(() => {
     refreshBrowse();
@@ -542,6 +554,18 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     if (!ble.connected) throw new Error('Gateway LoRa non connecté');
     const stallName = myStall?.name ?? 'Ma boutique';
     const msg = encodeLoRaProduct(product, stallName);
+    // Vérifier la taille — si > 100 bytes, utiliser le chunking
+    if (msg.length > 100) {
+      const chunkManager = getChunkManager();
+      if (chunkManager.needsChunking(msg)) {
+        await chunkManager.sendMessageWithChunking(
+          msg, 'shop-broadcast', 'shop:broadcast',
+          async (packet) => { await ble.sendPacket(packet); },
+          false
+        );
+        return;
+      }
+    }
     await ble.sendChannelMessage(msg);
   }, [ble, myStall]);
 
@@ -608,7 +632,12 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
       ...(directPayment?.txid ? { paymentRef: directPayment.txid, status: 'paid' } : {}),
     };
 
-    await publishDMSealed(product.sellerPubkey, encodeOrderDM(dmPayload));
+    try {
+      await publishDMSealed(product.sellerPubkey, encodeOrderDM(dmPayload));
+    } catch (err) {
+      console.error('[Shop] Échec envoi DM order:', err);
+      throw new Error('Échec envoi de la commande au vendeur');
+    }
 
     const updated = [order, ...orders];
     await persistOrders(updated);
@@ -635,7 +664,11 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
 
     // Notifier l'autre partie
     const recipientPubkey = order.isSale ? order.buyerPubkey : order.sellerPubkey;
-    await publishDMSealed(recipientPubkey, encodeOrderDM(dmPayload));
+    try {
+      await publishDMSealed(recipientPubkey, encodeOrderDM(dmPayload));
+    } catch (err) {
+      console.error('[Shop] Échec envoi DM confirmation:', err);
+    }
 
     const updated = orders.map((o) =>
       o.id === orderId
@@ -668,7 +701,11 @@ export function ShopProvider({ children }: { children: React.ReactNode }) {
     };
 
     const recipientPubkey = order.isSale ? order.buyerPubkey : order.sellerPubkey;
-    await publishDMSealed(recipientPubkey, encodeOrderDM(dmPayload));
+    try {
+      await publishDMSealed(recipientPubkey, encodeOrderDM(dmPayload));
+    } catch (err) {
+      console.error('[Shop] Échec envoi DM statut:', err);
+    }
 
     const updated = orders.map((o) =>
       o.id === orderId

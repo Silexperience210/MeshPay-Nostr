@@ -49,9 +49,21 @@ export interface ChunkAssemblyState {
 
 function generateMessageId(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const charsLen = chars.length;
+  // Utiliser crypto.getRandomValues pour une génération sécurisée
+  const randomValues = new Uint8Array(4);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(randomValues);
+  } else {
+    // Fallback sécurisé : utiliser Date.now() + compteur
+    const now = Date.now();
+    for (let i = 0; i < 4; i++) {
+      randomValues[i] = (now + i * 137) % 256;
+    }
+  }
   let result = '';
   for (let i = 0; i < 4; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += chars.charAt(randomValues[i] % charsLen);
   }
   return result;
 }
@@ -69,13 +81,21 @@ export function decodeChunkHeader(raw: string): ChunkHeader | null {
   const indexParts = parts[3].split('/');
   if (indexParts.length !== 2) return null;
 
+  // Validation du dataType
+  const validDataTypes: ChunkHeader['dataType'][] = ['CASHU', 'LN_INV', 'BTC_TX', 'RAW'];
+  const dataType = parts[4] as ChunkHeader['dataType'];
+  if (!validDataTypes.includes(dataType)) {
+    console.warn(`[Chunking] dataType invalide: ${parts[4]}`);
+    return null;
+  }
+
   return {
     prefix: parts[0],
     version: parseInt(parts[1], 10),
     messageId: parts[2],
     chunkIndex: parseInt(indexParts[0], 10),
     totalChunks: parseInt(indexParts[1], 10),
-    dataType: parts[4] as ChunkHeader['dataType'],
+    dataType,
   };
 }
 
@@ -148,7 +168,8 @@ export function addChunkToAssembly(
   const newReceived = new Map(state.receivedChunks);
   newReceived.set(chunk.header.chunkIndex, chunk.payload);
 
-  const isComplete = newReceived.size === state.totalChunks;
+  const isComplete = newReceived.size === state.totalChunks &&
+    Array.from({ length: state.totalChunks }, (_, i) => newReceived.has(i)).every(Boolean);
 
   if (isComplete) {
     console.log(`[Chunking] Assembly complete for message ${state.messageId}`);

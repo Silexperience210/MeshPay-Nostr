@@ -10,14 +10,12 @@ import {
   Transport, 
   EventType, 
   HermesEvent, 
-  MessageDirection,
   type MessageEvent,
 } from '../types';
 import type { Event as NostrEvent } from 'nostr-tools';
 
 // Import du client Nostr existant (singleton)
-import { nostrClient, Kind, type NostrClient } from '@/utils/nostr-client';
-import { deriveNostrKeypair, type NostrKeypair } from '@/utils/nostr-client';
+import { nostrClient, type NostrClient } from '@/utils/nostr-client';
 
 export interface NostrAdapterConfig {
   /** Auto-connect au démarrage */
@@ -45,12 +43,12 @@ export class NostrAdapter implements ProtocolAdapter {
   private nostr: NostrClient;
   private unsubs: Array<() => void> = [];
   private _pollingInterval: ReturnType<typeof setInterval> | undefined;
-  private messageHandler?: (event: HermesEvent) => void;
+  private messageHandlers: Array<(event: HermesEvent) => void> = [];
   private _isConnected = false;
-  private keypair: NostrKeypair | null = null;
 
   // Pour mapper les events Nostr → Hermès
   private eventIdMap = new Map<string, string>(); // nostrId → hermesId
+  private static readonly EVENT_ID_MAP_MAX = 5000;
 
   constructor(
     engine: HermesEngine,
@@ -143,6 +141,7 @@ export class NostrAdapter implements ProtocolAdapter {
       const nostrEvent = await this.nostr.publishDMSealed(to, payload.content);
       // Mapper l'ID
       this.eventIdMap.set(nostrEvent.id, event.id);
+      this.cleanupEventIdMap();
       console.log('[NostrAdapter] DM envoyé:', nostrEvent.id);
     } catch (err) {
       console.error('[NostrAdapter] Échec envoi DM:', err);
@@ -160,6 +159,7 @@ export class NostrAdapter implements ProtocolAdapter {
         payload.content
       );
       this.eventIdMap.set(nostrEvent.id, event.id);
+      this.cleanupEventIdMap();
       console.log('[NostrAdapter] Message channel envoyé:', nostrEvent.id);
     } catch (err) {
       console.error('[NostrAdapter] Échec envoi channel:', err);
@@ -185,8 +185,11 @@ export class NostrAdapter implements ProtocolAdapter {
   // ─── Réception ────────────────────────────────────────────────────────────
 
   onMessage(handler: (event: HermesEvent) => void): () => void {
-    this.messageHandler = handler;
-    return () => { this.messageHandler = undefined; };
+    this.messageHandlers.push(handler);
+    return () => {
+      const idx = this.messageHandlers.indexOf(handler);
+      if (idx > -1) this.messageHandlers.splice(idx, 1);
+    };
   }
 
   private startListeners(): void {
@@ -253,6 +256,7 @@ export class NostrAdapter implements ProtocolAdapter {
     encryption: 'nip04' | 'nip44'
   ): void {
     // Vérifier si c'est notre propre message (déduplication)
+    if (!this.nostr?.publicKey) return;
     if (from === this.nostr.publicKey) {
       return;
     }
@@ -279,7 +283,9 @@ export class NostrAdapter implements ProtocolAdapter {
       },
     };
 
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[NostrAdapter] Handler error:', e); }
+    }
   }
 
   private handleIncomingChannel(nostrEvent: NostrEvent): void {
@@ -303,7 +309,9 @@ export class NostrAdapter implements ProtocolAdapter {
       },
     };
 
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[NostrAdapter] Handler error:', e); }
+    }
   }
 
   private handleIncomingTxRelay(payload: any, nostrEvent: NostrEvent): void {
@@ -333,7 +341,9 @@ export class NostrAdapter implements ProtocolAdapter {
       },
     };
 
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[NostrAdapter] Handler error:', e); }
+    }
   }
 
   // ─── Utilitaires ──────────────────────────────────────────────────────────
@@ -354,7 +364,20 @@ export class NostrAdapter implements ProtocolAdapter {
       },
       meta: {},
     };
-    this.messageHandler?.(event);
+    for (const h of this.messageHandlers) {
+      try { h(event); } catch (e) { console.error('[NostrAdapter] Handler error:', e); }
+    }
+  }
+
+  private cleanupEventIdMap(): void {
+    if (this.eventIdMap.size <= NostrAdapter.EVENT_ID_MAP_MAX) return;
+    // Supprimer les entrées les plus anciennes jusqu'à retomber sous la limite
+    const keysToDelete = this.eventIdMap.size - NostrAdapter.EVENT_ID_MAP_MAX;
+    const keysIter = this.eventIdMap.keys();
+    for (let i = 0; i < keysToDelete; i++) {
+      const key = keysIter.next().value;
+      if (key !== undefined) this.eventIdMap.delete(key);
+    }
   }
 
   private generateHermesId(nostrId: string): string {

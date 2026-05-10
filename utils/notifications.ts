@@ -11,16 +11,26 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
-// Handler global : afficher la notif même si l'app est au premier plan
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+let _handlerInitialized = false;
+
+/**
+ * Initialise le handler global des notifications.
+ * Doit être appelé une seule fois au démarrage de l'app (ex: dans App.tsx).
+ */
+export function initNotifications(): void {
+  if (_handlerInitialized) return;
+  _handlerInitialized = true;
+
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 // ─── Permission ──────────────────────────────────────────────────────────────
 

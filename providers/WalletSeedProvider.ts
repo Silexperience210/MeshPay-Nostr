@@ -41,50 +41,65 @@ export interface WalletSeedState {
 // ─── Thin wrapper → Zustand walletStore ──────────────────────────────────────
 
 export const [WalletSeedContext, useWalletSeed] = createContextHook((): WalletSeedState => {
-  const store = useWalletStore();
+  // Sélecteurs granulaires pour éviter la souscription complète au store
+  const mnemonic = useWalletStore(s => s.mnemonic);
+  const walletInfo = useWalletStore(s => s.walletInfo);
+  const receiveAddresses = useWalletStore(s => s.receiveAddresses);
+  const changeAddresses = useWalletStore(s => s.changeAddresses);
+  const isInitialized = useWalletStore(s => s.isInitialized);
+  const isLoading = useWalletStore(s => s.isLoading);
+  const isGenerating = useWalletStore(s => s.isGenerating);
+  const isImporting = useWalletStore(s => s.isImporting);
+  const generateError = useWalletStore(s => s.generateError);
+  const importError = useWalletStore(s => s.importError);
+  const getFormattedAddress = useWalletStore(s => s.getFormattedAddress);
+  const generateWallet = useWalletStore(s => s.generateWallet);
+  const importWalletFn = useWalletStore(s => s.importWallet);
+  const deleteWalletFn = useWalletStore(s => s.deleteWallet);
+  const importEncryptedWalletFn = useWalletStore(s => s.importEncryptedWallet);
 
   const generateNewWallet = useCallback(async (strength?: 12 | 24) => {
-    await store.generateWallet(strength);
-  }, [store.generateWallet]);
+    await generateWallet(strength);
+  }, [generateWallet]);
 
   const importWallet = useCallback(async (mnemonic: string) => {
-    await store.importWallet(mnemonic);
-  }, [store.importWallet]);
+    await importWalletFn(mnemonic);
+  }, [importWalletFn]);
 
   const deleteWallet = useCallback(async () => {
-    await store.deleteWallet();
-  }, [store.deleteWallet]);
+    await deleteWalletFn();
+  }, [deleteWalletFn]);
 
   const exportWallet = useCallback(async (password: string) => {
-    if (!store.mnemonic) throw new Error('Aucun wallet à exporter');
-    return await exportWalletEncrypted(store.mnemonic, password);
-  }, [store.mnemonic]);
+    if (!mnemonic) throw new Error('Aucun wallet à exporter');
+    return await exportWalletEncrypted(mnemonic, password);
+  }, [mnemonic]);
 
   const importEncryptedWallet = useCallback(async (backupJson: string, password: string) => {
-    await store.importEncryptedWallet(backupJson, password);
-  }, [store.importEncryptedWallet]);
+    await importEncryptedWalletFn(backupJson, password);
+  }, [importEncryptedWalletFn]);
 
   return useMemo(() => ({
-    mnemonic: store.mnemonic,
-    walletInfo: store.walletInfo,
-    receiveAddresses: store.receiveAddresses,
-    changeAddresses: store.changeAddresses,
-    isInitialized: store.isInitialized,
-    isLoading: store.isLoading,
-    isGenerating: store.isGenerating,
-    isImporting: store.isImporting,
-    generateError: store.generateError,
-    importError: store.importError,
+    mnemonic,
+    walletInfo,
+    receiveAddresses,
+    changeAddresses,
+    isInitialized,
+    isLoading,
+    isGenerating,
+    isImporting,
+    generateError,
+    importError,
     generateNewWallet,
     importWallet,
     deleteWallet,
-    getFormattedAddress: store.getFormattedAddress,
+    getFormattedAddress,
     exportWallet,
     importEncryptedWallet,
   }), [
-    store.mnemonic, store.walletInfo, store.receiveAddresses, store.changeAddresses,
-    store.isInitialized, store.isLoading, store.isGenerating, store.isImporting,
-    store.generateError, store.importError, store.getFormattedAddress,
+    mnemonic, walletInfo, receiveAddresses, changeAddresses,
+    isInitialized, isLoading, isGenerating, isImporting,
+    generateError, importError, getFormattedAddress,
     generateNewWallet, importWallet, deleteWallet, exportWallet, importEncryptedWallet,
   ]);
 });

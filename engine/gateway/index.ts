@@ -5,6 +5,6 @@
 export {
   GatewayManager,
   GatewayManagerImpl,
-  GatewayStatus,
   gatewayManager,
 } from './GatewayManager';
+export type { GatewayStatus } from './GatewayManager';

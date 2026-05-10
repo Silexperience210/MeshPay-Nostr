@@ -17,7 +17,6 @@ import {
   Subscription,
   HermesConfig,
   DEFAULT_HERMES_CONFIG,
-  MessageDirection,
 } from './types';
 
 // ─── Génération d'ID ─────────────────────────────────────────────────────────
@@ -45,8 +44,16 @@ class DeduplicationWindow {
   add(id: string): void {
     this.cleanup();
     if (this.seen.size >= this.maxSize) {
-      const oldest = [...this.seen.entries()].sort((a, b) => a[1] - b[1])[0];
-      if (oldest) this.seen.delete(oldest[0]);
+      // Approche O(n) pour trouver l'entrée la plus ancienne
+      let oldestId: string | null = null;
+      let oldestTs = Infinity;
+      for (const [key, ts] of this.seen) {
+        if (ts < oldestTs) {
+          oldestTs = ts;
+          oldestId = key;
+        }
+      }
+      if (oldestId !== null) this.seen.delete(oldestId);
     }
     this.seen.set(id, Date.now());
   }
@@ -87,6 +94,7 @@ export class HermesEngine {
   
   // Callbacks système
   private onErrorHandlers: Array<(error: Error, context?: string) => void> = [];
+  private adapterUnsubs = new Map<Transport, () => void>();
 
   constructor(config: Partial<HermesConfig> = {}) {
     this.config = { ...DEFAULT_HERMES_CONFIG, ...config };
@@ -102,10 +110,11 @@ export class HermesEngine {
     
     this.adapters.set(adapter.name, adapter);
     
-    // Connecter l'adapter au bus
-    adapter.onMessage((event) => {
+    // Connecter l'adapter au bus et stocker l'unsubscribe
+    const unsub = adapter.onMessage((event) => {
       this.handleIncomingEvent(event, adapter.name);
     });
+    this.adapterUnsubs.set(adapter.name, unsub);
 
     this.log('Adapter enregistré:', adapter.name);
   }
@@ -113,6 +122,12 @@ export class HermesEngine {
   unregisterAdapter(name: Transport): void {
     const adapter = this.adapters.get(name);
     if (adapter) {
+      // Appeler l'unsubscribe avant de stopper
+      const unsub = this.adapterUnsubs.get(name);
+      if (unsub) {
+        unsub();
+        this.adapterUnsubs.delete(name);
+      }
       adapter.stop().catch(console.error);
       this.adapters.delete(name);
       this.log('Adapter désenregistré:', name);
@@ -311,7 +326,9 @@ export class HermesEngine {
   }
 
   private dispatchToHandlers(event: HermesEvent): void {
-    for (const sub of this.subscriptions.values()) {
+    // Copier les valeurs avant itération pour éviter la modification pendant l'itération
+    const subs = [...this.subscriptions.values()];
+    for (const sub of subs) {
       if (this.matchesFilter(event, sub.filter)) {
         // Incrémenter compteur
         sub.callCount++;
@@ -353,9 +370,11 @@ export class HermesEngine {
 
   private error(...args: unknown[]): void {
     console.error('[Hermès]', ...args);
+    const error = args[0] instanceof Error ? args[0] : new Error(String(args[0]));
+    const context = args.length > 1 ? String(args[1]) : undefined;
     this.onErrorHandlers.forEach(h => {
       try {
-        h(args[0] as Error, String(args[1]));
+        h(error, context);
       } catch {}
     });
   }

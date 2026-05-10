@@ -114,21 +114,25 @@ const secureWalletStorage = {
       if (!mnemonic) {
         const legacy = await AsyncStorage.getItem(MNEMONIC_KEY);
         if (legacy) {
-          const btc = await loadBitcoinModule();
-          if (btc && btc.validateMnemonic(legacy)) {
-            console.warn('[WalletStore] Migration : mnemonic non chiffré détecté, migration vers SecureStore...');
-            await SecureStore.setItemAsync(MNEMONIC_KEY, legacy);
-            await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
-            const written = await SecureStore.getItemAsync(MNEMONIC_KEY);
-            if (written === legacy) {
-              await AsyncStorage.removeItem(MNEMONIC_KEY);
-              await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
-              console.log('[WalletStore] Migration réussie');
-              return JSON.stringify({
-                state: { mnemonic: legacy, isInitialized: true, _hasHydrated: true },
-                version: 0,
-              });
+          try {
+            const btc = await loadBitcoinModule();
+            if (btc && btc.validateMnemonic(legacy)) {
+              console.warn('[WalletStore] Migration : mnemonic non chiffré détecté, migration vers SecureStore...');
+              await SecureStore.setItemAsync(MNEMONIC_KEY, legacy);
+              await SecureStore.setItemAsync(WALLET_INITIALIZED_KEY, 'true');
+              const written = await SecureStore.getItemAsync(MNEMONIC_KEY);
+              if (written === legacy) {
+                await AsyncStorage.removeItem(MNEMONIC_KEY);
+                await AsyncStorage.removeItem(WALLET_INITIALIZED_KEY);
+                console.log('[WalletStore] Migration réussie');
+                return JSON.stringify({
+                  state: { mnemonic: legacy, isInitialized: true, _hasHydrated: true },
+                  version: 0,
+                });
+              }
             }
+          } catch (e) {
+            console.warn('[WalletStore] Legacy migration failed:', e);
           }
         }
         return JSON.stringify({
@@ -433,8 +437,10 @@ export const useWalletStore = create<WalletState>()(
         if (error) {
           // Le storage lui-même a échoué — SecureStore corrompu ou indispo
           const err = error instanceof Error ? error : new Error(String(error));
-          useWalletStore.setState({ rehydrationError: err });
-          useWalletStore.getState().setHasHydrated(true);
+          if (state) {
+            state.rehydrationError = err;
+            state.setHasHydrated(true);
+          }
           return;
         }
         if (state) {
@@ -444,7 +450,7 @@ export const useWalletStore = create<WalletState>()(
             }).catch((e) => {
               console.warn('[WalletStore] Rehydration _setWalletData failed:', e);
               const err = e instanceof Error ? e : new Error(String(e));
-              useWalletStore.setState({ rehydrationError: err });
+              state.rehydrationError = err;
               state.setHasHydrated(true);
             });
           } else {

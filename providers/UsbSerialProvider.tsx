@@ -60,6 +60,8 @@ export function UsbSerialProvider({ children }: { children: React.ReactNode }) {
 
   const serialRef = useRef<UsbSerial | null>(null);
   const packetHandlerRef = useRef<((packet: MeshCorePacket) => void) | null>(null);
+  const availableDevicesRef = useRef(state.availableDevices);
+  availableDevicesRef.current = state.availableDevices;
 
   // Permission USB (simplifié)
   const requestPermission = async (): Promise<boolean> => {
@@ -123,7 +125,7 @@ export function UsbSerialProvider({ children }: { children: React.ReactNode }) {
       });
 
       // Trouver le device dans la liste
-      const device = state.availableDevices.find(d => d.id === deviceId);
+      const device = availableDevicesRef.current.find(d => d.id === deviceId);
       
       setState(prev => ({
         ...prev,

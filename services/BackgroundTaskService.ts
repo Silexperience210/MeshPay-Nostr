@@ -33,7 +33,9 @@ export async function syncPendingMessages(): Promise<number> {
         await client.sendRawPacket(msg.packet as Uint8Array);
         await removePendingMessage(msg.id);
         sent++;
-      } catch { /* continuer */ }
+      } catch (err) {
+        console.warn('[BgTask] Erreur envoi message:', msg.id, err);
+      }
     }
     console.log(`[BgTask] Sync in-app: ${sent}/${Math.min(pending.length, 5)} messages envoyés`);
     return sent;

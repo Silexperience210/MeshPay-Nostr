@@ -5,7 +5,7 @@
  * Compatible avec firmware MeshCore Companion
  */
 
-// Compression functions imported from compression.ts (not lzw.ts to avoid circular imports)
+// Compression functions imported from compression.ts
 import { compressWithFallback, decompressFromLora, isCompressed } from './compression';
 
 // UUIDs BLE MeshCore (Nordic UART Service standard)
@@ -47,8 +47,9 @@ export const LORA_MAX_TEXT_CHARS = 200; // caractères
 
 /**
  * Vérifie si un texte dépasse la limite LoRa
+ * (Utilisé localement — non exporté car non utilisé à l'extérieur)
  */
-export function validateMessageSize(text: string): { valid: boolean; size: number; max: number } {
+function validateMessageSize(text: string): { valid: boolean; size: number; max: number } {
   const encoder = new TextEncoder();
   const size = encoder.encode(text).length;
   return {
@@ -60,12 +61,13 @@ export function validateMessageSize(text: string): { valid: boolean; size: numbe
 
 /**
  * Interface pour un chunk de message
+ * Harmonisée avec chunking.ts — utilise Uint8Array pour les données binaires
  */
 export interface MessageChunk {
   chunkIndex: number;
   totalChunks: number;
   messageId: number;
-  data: Uint8Array;
+  data: Uint8Array; // Données binaires du chunk (header 6 bytes + payload)
 }
 
 // Flags de message (définis plus haut avec LZW)
@@ -336,7 +338,12 @@ export function createTextMessageSync(
 
   // ID aléatoire cryptographiquement sûr (évite les collisions timestamp+counter)
   const randomId = new Uint32Array(1);
-  crypto.getRandomValues(randomId);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(randomId);
+  } else {
+    // Fallback React Native / environnement sans crypto global
+    randomId[0] = Math.floor(Math.random() * 0xFFFFFFFF);
+  }
   const messageId = randomId[0];
 
   return {
@@ -360,11 +367,16 @@ export function createTextMessageSync(
  * Gère la décompression automatique
  */
 export function extractTextFromPacket(packet: MeshCorePacket): string {
+  // Early return si le payload est chiffré — ne pas tenter de décoder
+  if (packet.flags & MeshCoreFlags.ENCRYPTED) {
+    return '[Encrypted payload]';
+  }
+
   // Vérifier si compressé
   if (packet.flags & MeshCoreFlags.COMPRESSED) {
     return decompressFromLora(packet.payload);
   }
-  
+
   const decoder = new TextDecoder();
   return decoder.decode(packet.payload);
 }

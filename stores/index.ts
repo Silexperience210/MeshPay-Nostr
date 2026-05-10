@@ -35,6 +35,11 @@ export type {
 } from './settingsStore';
 
 // ─── UI Store ────────────────────────────────────────────────────────────────
+// NOTE: Les exports suivants ne sont pas encore utilisés par les composants
+// existants (useLoading, useError, useModal, useToasts, useUIActions).
+// Le store uiStore est fonctionnel et prêt à l'emploi. Pour l'activer,
+// remplacer les gestions d'état UI locales (useState pour loading/error/modal)
+// par ces hooks dans les composants concernés.
 export {
   useUIStore,
   useLoading,

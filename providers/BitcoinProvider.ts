@@ -72,6 +72,8 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
   const mnemonic = useWalletStore((s) => s.mnemonic);
   
   const [balance, setBalance] = useState(0);
+  const balanceRef = useRef(balance);
+  balanceRef.current = balance;
   const [unconfirmedBalance, setUnconfirmedBalance] = useState(0);
   const [utxos, setUtxos] = useState<MempoolUtxo[]>([]);
   const [transactions, setTransactions] = useState<BitcoinTransaction[]>([]);
@@ -79,7 +81,7 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
   const [isLoading, setIsLoading] = useState(false);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
+
   const syncIntervalRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mutex anti double-envoi : empêche deux transactions simultanées sur les mêmes UTXOs
   const isSendingRef = useRef(false);
@@ -219,7 +221,7 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
       }
 
       // Snapshot du solde au moment du lock (évite la TOCTOU)
-      const currentBalance = balance;
+      const currentBalance = balanceRef.current;
       if (amountSats > currentBalance) {
         throw new Error('Solde insuffisant');
       }
@@ -300,7 +302,7 @@ export const [BitcoinContext, useBitcoin] = createContextHook((): BitcoinState =
     } finally {
       isSendingRef.current = false;
     }
-  }, [isInitialized, receiveAddresses, changeAddresses, mnemonic, balance, utxos, refreshBalance]);
+  }, [isInitialized, receiveAddresses, changeAddresses, mnemonic, utxos, refreshBalance]);
 
   // Sync au montage
   useEffect(() => {

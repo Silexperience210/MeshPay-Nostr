@@ -17,8 +17,12 @@ if (typeof globalThis !== 'undefined' && typeof globalThis.Buffer === 'undefined
   (globalThis as any).Buffer = Buffer;
 }
 
-if (typeof global !== 'undefined' && typeof global.process === 'undefined') {
-  global.process = require('process');
+try {
+  if (typeof global !== 'undefined' && typeof global.process === 'undefined') {
+    global.process = require('process');
+  }
+} catch (e) {
+  console.warn('process polyfill failed', e);
 }
 
 export {};

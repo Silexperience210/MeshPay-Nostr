@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   View, Text, StyleSheet, FlatList, TextInput,
   TouchableOpacity, KeyboardAvoidingView, Platform,
@@ -31,7 +32,7 @@ import {
   WAVEFORM_PROFILE,
   encodeVoiceMessage,
 } from '@/utils/audio';
-import type { Audio } from 'expo-av';
+import { Audio } from 'expo-av';
 
 // ─── Quote parser ──────────────────────────────────────────────────────────
 // Format reply : "↩ NOM: texte cité\n―――\nmessage réel"
@@ -268,9 +269,17 @@ function AudioBubble({ audioData, audioDuration, isMe }: { audioData?: string; a
     }
   }, [audioData, isPlaying, audioDuration]);
 
-  useEffect(() => () => {
-    soundRef.current?.unloadAsync().catch(() => { /* cleanup: ignore */ });
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+  useEffect(() => {
+    return () => {
+      if (soundRef.current) {
+        soundRef.current.unloadAsync().catch(() => {});
+        soundRef.current = null;
+      }
+      if (progressTimerRef.current) {
+        clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+    };
   }, []);
 
   const duration = audioDuration ?? 0;
@@ -623,9 +632,27 @@ export default function ChatScreen() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   // Reply
   const [replyTo, setReplyTo] = useState<StoredMessage | null>(null);
-  // Réactions emoji : messageId → emojis (TODO: persister en base de données)
-  // NOTE: Actuellement en mémoire uniquement - sera perdu au rechargement
+  // Réactions emoji : messageId → emojis (persisté via AsyncStorage)
+  const REACTIONS_STORAGE_KEY = `reactions_${convId}`;
   const [reactions, setReactions] = useState<Record<string, string[]>>({});
+
+  // Charger les réactions depuis AsyncStorage au montage
+  useEffect(() => {
+    AsyncStorage.getItem(REACTIONS_STORAGE_KEY)
+      .then((stored) => {
+        if (stored) {
+          try {
+            setReactions(JSON.parse(stored));
+          } catch { /* ignore parse errors */ }
+        }
+      })
+      .catch(() => {});
+  }, [REACTIONS_STORAGE_KEY]);
+
+  // Sauvegarder les réactions à chaque changement
+  useEffect(() => {
+    AsyncStorage.setItem(REACTIONS_STORAGE_KEY, JSON.stringify(reactions)).catch(() => {});
+  }, [reactions, REACTIONS_STORAGE_KEY]);
   // Actions sheet (long press)
   const [actionsSheet, setActionsSheet] = useState<StoredMessage | null>(null);
   // Profile sheet (tap sender)
@@ -634,6 +661,7 @@ export default function ChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Animations ripple pour l'overlay d'enregistrement
   const ripple1 = useRef(new Animated.Value(0)).current;
   const ripple2 = useRef(new Animated.Value(0)).current;
@@ -865,6 +893,10 @@ export default function ChatScreen() {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
     }
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
     const rec = recordingRef.current;
     recordingRef.current = null;
     setIsRecording(false);
@@ -897,7 +929,8 @@ export default function ChatScreen() {
         setRecordingDuration(d => d + 1000);
       }, 1000);
       // Auto-stop à 30 secondes
-      setTimeout(() => {
+      recordingTimeoutRef.current = setTimeout(() => {
+        recordingTimeoutRef.current = null;
         if (recordingRef.current) handleMicPressOut(true);
       }, AUDIO_MAX_DURATION_MS);
     } catch {
@@ -922,7 +955,7 @@ export default function ChatScreen() {
         onReactionPress={(emoji) => handleToggleReaction(item.id, emoji)}
       />
     ),
-    [handleLongPressMessage, handleCashuTap, handleSenderTap, handleToggleReaction, contactNameMap]
+    [handleLongPressMessage, handleCashuTap, handleSenderTap, handleToggleReaction, contactNameMap, reactionsRef]
   );
 
   // ListEmptyComponent extrait pour éviter une re-création à chaque render
@@ -1569,6 +1602,3 @@ const cashuStyles = StyleSheet.create({
     paddingVertical: 16, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center',
   },
-  sendBtnDisabled: { backgroundColor: Colors.surfaceLight },
-  sendBtnText: { color: Colors.black, fontSize: 16, fontWeight: '700' },
-});

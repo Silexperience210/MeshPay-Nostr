@@ -27,7 +27,7 @@ export const Colors = {
   orangeDim: 'rgba(249, 115, 22, 0.15)',
   white: '#FFFFFF',
   black: '#000000',
-  tint: '#F7931A', // Alias pour accent
+  // tint est un alias d'accent — utiliser Colors.accent directement
 };
 
 export default Colors;

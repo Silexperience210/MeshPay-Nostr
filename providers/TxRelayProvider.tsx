@@ -80,6 +80,23 @@ export const [TxRelayContext, useTxRelay] = createContextHook((): TxRelayState =
 
   useEffect(() => {
     if (nostrConnected) {
+      // Vérifier que les paramètres utilisateur permettent de démarrer le gateway
+      const canStartGateway = () => {
+        try {
+          const settings = localStorage.getItem('bitmesh:relay_settings');
+          if (settings) {
+            const parsed = JSON.parse(settings);
+            if (parsed.enabled === false) {
+              console.log('[TxRelayProvider] Gateway désactivé par l\'utilisateur');
+              return false;
+            }
+          }
+        } catch { /* pas de settings = activé par défaut */ }
+        return true;
+      };
+
+      if (!canStartGateway()) return;
+
       // Démarrer le gateway quand Nostr est connecté
       const gateway = new TxRelayGateway(nostrClient);
       gateway.start();
@@ -87,12 +104,18 @@ export const [TxRelayContext, useTxRelay] = createContextHook((): TxRelayState =
       if (mountedRef.current) setIsGateway(true);
       console.log('[TxRelayProvider] Gateway démarrée');
 
-      // Polling léger des stats (toutes les 10s)
+      // Polling léger des stats (toutes les 10s) — compare avant set pour éviter les re-renders inutiles
       const statsInterval = setInterval(() => {
         if (mountedRef.current && gatewayRef.current) {
-          setGatewayStats({
+          const next = {
             relayedCount: gatewayRef.current.relayedCount,
             errorCount: gatewayRef.current.errorCount,
+          };
+          setGatewayStats(prev => {
+            if (prev.relayedCount === next.relayedCount && prev.errorCount === next.errorCount) {
+              return prev; // Pas de changement — retourne la référence identique
+            }
+            return next;
           });
         }
       }, 10_000);
@@ -198,18 +221,36 @@ export const [TxRelayContext, useTxRelay] = createContextHook((): TxRelayState =
       setPendingRelays(prev => [...prev, pending]);
     }
 
-    const result = await sendCashuTokenViaNostr(token, targetMint);
+    try {
+      const result = await sendCashuTokenViaNostr(token, targetMint);
 
-    if (mountedRef.current) {
-      setPendingRelays(prev =>
-        prev.map(r => r.eventId === relayId
-          ? { ...r, status: result.success ? 'confirmed' : 'failed', error: result.error }
-          : r
-        )
-      );
+      if (mountedRef.current) {
+        setPendingRelays(prev =>
+          prev.map(r => r.eventId === relayId
+            ? { ...r, status: result.success ? 'confirmed' : 'failed', error: result.error }
+            : r
+          )
+        );
+      }
+
+      return result;
+    } catch (err: any) {
+      console.error('[TxRelayProvider] sendCashuViaRelay error:', err);
+      const errorResult: RelayConfirmation = {
+        success: false,
+        relayId,
+        error: err?.message || 'Cashu relay failed',
+      };
+      if (mountedRef.current) {
+        setPendingRelays(prev =>
+          prev.map(r => r.eventId === relayId
+            ? { ...r, status: 'failed', error: errorResult.error }
+            : r
+          )
+        );
+      }
+      return errorResult;
     }
-
-    return result;
   }, []);
 
   // ── clearCompletedRelays ──────────────────────────────────────────────────

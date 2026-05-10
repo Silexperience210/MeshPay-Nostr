@@ -37,6 +37,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { hermes } from '../HermesEngine';
 import { EventType, Transport, HermesEvent, EventHandler } from '../types';
 import { useWalletStore } from '../../stores/walletStore';
+import { nostrClient } from '@/utils/nostr-client';
 
 // Relays par défaut (synchronisés avec NostrAdapter)
 const DEFAULT_RELAYS = [
@@ -191,6 +192,9 @@ export function useNostrHermes(): UseNostrHermesReturn {
     const targetRelays = customRelays ?? DEFAULT_RELAYS;
     
     try {
+      // Démarrer réellement l'adapter Nostr
+      await nostrClient.connect(targetRelays);
+
       // Émettre événement de connexion
       await hermes.createEvent(
         EventType.TRANSPORT_CONNECTED,
@@ -206,9 +210,10 @@ export function useNostrHermes(): UseNostrHermesReturn {
         setRelays(targetRelays);
       }
       
-      // Récupérer la clé publique du wallet
-      if (walletInfo?.xpub && isMountedRef.current) {
-        setPublicKey(walletInfo.xpub);
+      // Récupérer la clé publique Nostr du wallet
+      const nostrPubkey = (walletInfo as any)?.nostrPubkey;
+      if (nostrPubkey && isMountedRef.current) {
+        setPublicKey(nostrPubkey);
       }
     } catch (error) {
       console.error('[useNostrHermes] Connection error:', error);

@@ -4,17 +4,9 @@
  */
 import * as SQLite from 'expo-sqlite';
 import * as FileSystem from 'expo-file-system';
+import { bytesToBase64 as uint8ArrayToBase64, base64ToBytes as base64ToUint8Array } from './meshcore-protocol';
 
-// ✅ UTILITAIRE: Remplacer Buffer pour React Native
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const binary = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
-  return btoa(binary);
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  return Uint8Array.from(binary.split('').map(c => c.charCodeAt(0)));
-}
+// ✅ UTILITAIRE: Importé depuis meshcore-protocol.ts (pas de duplication)
 
 // ✅ UTILITAIRE: Convertir les paramètres pour SQLite avec validation stricte
 export function toSQLiteParams(params: any[]): any[] {
@@ -171,7 +163,7 @@ export async function saveMessageAndUpdateConversation(
     await database.runAsync(`
       INSERT OR REPLACE INTO messages
       (id, conversationId, fromNodeId, fromPubkey, text, type, timestamp, isMine, status, cashuAmount, cashuToken, btcAmount, compressed, audioData, audioDuration, imageData, imageMime, transport)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, toSQLiteParams(params));
     
     // 2. Mettre à jour la conversation
@@ -1108,12 +1100,12 @@ export async function getCashuBalance(): Promise<{ total: number; byMint: Record
   }
 }
 
-// ✅ NOUVEAU : Récupérer tous les mints utilisés
+// ✅ NOUVEAU : Récupérer tous les mints utilisés (sans les tokens spent)
 export async function getAllMints(): Promise<string[]> {
   try {
     const database = await getDatabase();
     const rows = await database.getAllAsync<{ mintUrl: string }>(`
-      SELECT DISTINCT mintUrl FROM cashu_tokens ORDER BY mintUrl
+      SELECT DISTINCT mintUrl FROM cashu_tokens WHERE state != 'spent' ORDER BY mintUrl
     `);
     return rows.map(r => r.mintUrl);
   } catch (err) {

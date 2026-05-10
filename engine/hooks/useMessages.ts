@@ -93,7 +93,7 @@ export function useMessages(): UseMessagesReturn {
   // ─── Souscription aux événements ────────────────────────────────────────────
   useEffect(() => {
     // S'abonner aux DMs entrants
-    const unsub = messageService.onDM((msg) => {
+    const unsubDM = messageService.onDM((msg) => {
       if (!isMounted.current) return;
 
       setConversations(prev => {
@@ -106,7 +106,22 @@ export function useMessages(): UseMessagesReturn {
       });
     });
 
-    return unsub;
+    // S'abonner aux messages de canal entrants
+    const unsubChannel = messageService.onChannelMessage('*', (msg) => {
+      if (!isMounted.current) return;
+
+      setConversations(prev => {
+        const current = prev.get(msg.channelId) ?? [];
+        const next = new Map(prev);
+        next.set(msg.channelId, [...current, msg as any]);
+        return next;
+      });
+    });
+
+    return () => {
+      unsubDM();
+      unsubChannel();
+    };
   }, []);
 
   // ─── Actions ────────────────────────────────────────────────────────────────
@@ -114,7 +129,8 @@ export function useMessages(): UseMessagesReturn {
   const sendDM = useCallback(async (
     toNodeId: string,
     toPubkey: string,
-    content: string
+    content: string,
+    options?: SendMessageOptions
   ): Promise<void> => {
     setIsLoading(true);
     setError(null);
@@ -131,7 +147,7 @@ export function useMessages(): UseMessagesReturn {
           to: toNodeId,
           content,
           timestamp: Date.now(),
-          transport: 'nostr',
+          transport: options?.transport ?? Transport.NOSTR,
           encryption: 'nip44',
         };
         const next = new Map(prev);

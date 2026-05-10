@@ -4,7 +4,6 @@
  */
 import {
   MeshCorePacket,
-  MeshCoreMessageType,
   chunkMessage,
   createChunkPacket,
   reassembleChunks,
@@ -13,7 +12,6 @@ import {
   validateMessageSize,
   LORA_MAX_TEXT_CHARS,
 } from '@/utils/meshcore-protocol';
-import { getNextMessageId } from '@/utils/database';
 
 interface PendingChunks {
   messageId: number;
@@ -22,17 +20,40 @@ interface PendingChunks {
   receivedAt: number;
 }
 
+// ✅ FIX: Constante pour la boucle anti-collision de messageId
+const MAX_MESSAGE_ID = 65535;
+const MESSAGE_ID_COLLISION_RETRIES = 5;
+
 class ChunkManager {
   private pendingReassembly = new Map<number, PendingChunks>();
+  private completedAssemblies = new Map<number, string>();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private readonly CHUNK_TIMEOUT = 30 * 1000; // 30 secondes (était 5 min - trop long)
-  
+  private lastMessageId = 0;
+
   // Set pour détecter les chunks dupliqués (hash du contenu)
   private receivedChunkHashes = new Set<string>();
 
   constructor() {
     // Nettoyage périodique des chunks expirés
     this.cleanupInterval = setInterval(() => this.cleanup(), 60000);
+  }
+
+  /**
+   * ✅ FIX: Génère un messageId avec garde anti-collision
+   */
+  private getNextMessageId(): number {
+    for (let attempt = 0; attempt < MESSAGE_ID_COLLISION_RETRIES; attempt++) {
+      this.lastMessageId = (this.lastMessageId + 1) % MAX_MESSAGE_ID;
+      // Vérifier que cet ID n'est pas déjà utilisé pour un assemblage en cours
+      if (!this.pendingReassembly.has(this.lastMessageId)) {
+        return this.lastMessageId;
+      }
+    }
+    // Si toutes les tentatives échouent, utiliser un ID basé sur le timestamp
+    const fallbackId = Date.now() % MAX_MESSAGE_ID;
+    console.warn(`[ChunkManager] Collision d'ID persistante, fallback vers timestamp: ${fallbackId}`);
+    return fallbackId;
   }
 
   /**
@@ -68,7 +89,7 @@ class ChunkManager {
     }
 
     // Message long: chunking
-    const messageId = await getNextMessageId();
+    const messageId = this.getNextMessageId();
     const chunks = chunkMessage(text, messageId);
     
     if (!chunks || chunks.length === 0) {
@@ -162,6 +183,32 @@ class ChunkManager {
   }
 
   /**
+   * ✅ FIX: Retourne les statistiques du ChunkManager
+   */
+  getStats(): {
+    pendingReassembly: number;
+    completedAssemblies: number;
+    receivedChunkHashes: number;
+  } {
+    return {
+      pendingReassembly: this.pendingReassembly.size,
+      completedAssemblies: this.completedAssemblies.size,
+      receivedChunkHashes: this.receivedChunkHashes.size,
+    };
+  }
+
+  /**
+   * ✅ FIX: Nettoie les assemblages complétés
+   */
+  clearCompletedAssemblies(): void {
+    const count = this.completedAssemblies.size;
+    this.completedAssemblies.clear();
+    if (count > 0) {
+      console.log(`[ChunkManager] ${count} assemblages complétés nettoyés`);
+    }
+  }
+
+  /**
    * Nettoie les chunks expirés
    */
   private cleanup(): void {
@@ -188,9 +235,6 @@ class ChunkManager {
   }
 
   /**
-   * Détruit le manager
-   */
-  /**
    * Calcule un hash simple pour détecter les chunks dupliqués
    */
   private computeChunkHash(data: Uint8Array, messageId: number, chunkIndex: number): string {
@@ -202,11 +246,15 @@ class ChunkManager {
     return `${messageId}:${chunkIndex}:${sum}:${data.length}`;
   }
 
+  /**
+   * Détruit le manager
+   */
   destroy(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
     }
     this.pendingReassembly.clear();
+    this.completedAssemblies.clear();
     this.receivedChunkHashes.clear();
   }
 }
@@ -224,6 +272,126 @@ export function getChunkManager(): ChunkManager {
 export function initChunkManager(): ChunkManager {
   chunkManager = new ChunkManager();
   return chunkManager;
+}
+
+/**
+ * ✅ FIX: ChunkSender — gestionnaire d'envoi de chunks avec mécanisme de cancel
+ * et vérification de connexion BLE entre chaque chunk.
+ */
+export class ChunkSender {
+  private chunks: MeshCorePacket[] = [];
+  private currentIndex = 0;
+  private isCancelled = false;
+  private sendFunction: (packet: MeshCorePacket) => Promise<void>;
+  private checkConnection: () => boolean;
+  private readonly MAX_SEND_ATTEMPTS = 1000; // ✅ FIX: Garde contre boucle infinie
+
+  constructor(
+    chunks: MeshCorePacket[],
+    sendFunction: (packet: MeshCorePacket) => Promise<void>,
+    checkConnection: () => boolean
+  ) {
+    this.chunks = chunks;
+    this.sendFunction = sendFunction;
+    this.checkConnection = checkConnection;
+  }
+
+  /**
+   * Annule l'envoi en cours
+   */
+  cancel(): void {
+    this.isCancelled = true;
+    console.log('[ChunkSender] Envoi annulé');
+  }
+
+  /**
+   * Envoie tous les chunks un par un
+   */
+  async sendAll(): Promise<{ success: boolean; sent: number; error?: string }> {
+    this.currentIndex = 0;
+    this.isCancelled = false;
+    let attempts = 0;
+
+    while (this.currentIndex < this.chunks.length) {
+      // ✅ FIX: Garde contre boucle infinie
+      attempts++;
+      if (attempts > this.MAX_SEND_ATTEMPTS) {
+        return { success: false, sent: this.currentIndex, error: 'Nombre max de tentatives atteint' };
+      }
+
+      // ✅ FIX: Vérifier si l'envoi a été annulé
+      if (this.isCancelled) {
+        return { success: false, sent: this.currentIndex, error: 'Envoi annulé' };
+      }
+
+      // ✅ FIX: Vérifier la connexion BLE entre chaque chunk
+      if (!this.checkConnection()) {
+        return { success: false, sent: this.currentIndex, error: 'Connexion BLE perdue' };
+      }
+
+      try {
+        await this.sendFunction(this.chunks[this.currentIndex]);
+        console.log(`[ChunkSender] Chunk ${this.currentIndex + 1}/${this.chunks.length} envoyé`);
+        this.currentIndex++;
+
+        // Petit délai entre chunks pour ne pas saturer LoRa
+        if (this.currentIndex < this.chunks.length) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        console.error(`[ChunkSender] Erreur envoi chunk ${this.currentIndex}:`, error);
+        return {
+          success: false,
+          sent: this.currentIndex,
+          error: `Échec chunk ${this.currentIndex}: ${error}`,
+        };
+      }
+    }
+
+    return { success: true, sent: this.currentIndex };
+  }
+
+  /**
+   * Envoie le prochain chunk (mode manuel)
+   */
+  async sendNextChunk(): Promise<{ success: boolean; done: boolean; error?: string }> {
+    // ✅ FIX: Garde contre boucle infinie / appels excessifs
+    if (this.currentIndex >= this.chunks.length) {
+      return { success: true, done: true };
+    }
+
+    if (this.isCancelled) {
+      return { success: false, done: true, error: 'Envoi annulé' };
+    }
+
+    // ✅ FIX: Vérifier la connexion BLE
+    if (!this.checkConnection()) {
+      return { success: false, done: false, error: 'Connexion BLE perdue' };
+    }
+
+    try {
+      await this.sendFunction(this.chunks[this.currentIndex]);
+      this.currentIndex++;
+
+      const done = this.currentIndex >= this.chunks.length;
+      if (!done) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      return { success: true, done };
+    } catch (error) {
+      return {
+        success: false,
+        done: false,
+        error: `Échec chunk ${this.currentIndex}: ${error}`,
+      };
+    }
+  }
+
+  getProgress(): number {
+    if (this.chunks.length === 0) return 0;
+    return Math.round((this.currentIndex / this.chunks.length) * 100);
+  }
 }
 
 export { LORA_MAX_TEXT_CHARS, validateMessageSize };

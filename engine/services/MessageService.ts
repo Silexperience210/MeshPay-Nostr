@@ -91,17 +91,17 @@ export class MessageServiceImpl implements MessageService {
         content,
         contentType: 'text',
         encryption: 'nip44',
-        toPubkey,
       },
       meta: {
         originalId: eventId,
       },
     };
 
-    await eventStore.save(event, 'outbound');
-
     // 2. Émettre via Hermès
     await hermes.emit(event, Transport.NOSTR);
+
+    // 1. Persister dans EventStore (outbound)
+    await eventStore.save(event, 'outbound');
   }
 
   async sendChannelMessage(channelId: string, content: string): Promise<void> {
@@ -136,8 +136,12 @@ export class MessageServiceImpl implements MessageService {
 
   onDM(handler: (msg: DirectMessage) => void): () => void {
     return hermes.on(EventType.DM_RECEIVED, async (event: HermesEvent) => {
-      // Persister en inbound
-      await eventStore.save(event, 'inbound');
+      // Persister en inbound (ne pas perdre le message si la DB échoue)
+      try {
+        await eventStore.save(event, 'inbound');
+      } catch (e) {
+        console.error('[MessageService] Erreur persistance DM:', e);
+      }
 
       const payload = event.payload as MessageEvent['payload'];
 

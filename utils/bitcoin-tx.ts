@@ -7,9 +7,9 @@ import * as bitcoin from 'bitcoinjs-lib';
 import { HDKey } from '@scure/bip32';
 import { mnemonicToSeed, pubkeyToSegwitAddress } from '@/utils/bitcoin';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { ripemd160 } from '@noble/hashes/legacy.js';
 import type { MempoolUtxo } from './mempool';
-import * as secp256k1 from 'secp256k1';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { hash160 } from './bitcoin';
 
 const NETWORK = bitcoin.networks.bitcoin;
 const DUST_LIMIT = 546;
@@ -50,10 +50,6 @@ interface DerivedAddress {
   address: string;
   publicKey: Uint8Array;
   scriptPubKey: Buffer;
-}
-
-function hash160(data: Uint8Array): Uint8Array {
-  return ripemd160(sha256(data));
 }
 
 function deriveAddresses(mnemonic: string, count: number = MAX_ADDRESS_SCAN): DerivedAddress[] {
@@ -387,6 +383,13 @@ export function createTransaction(
 
   const change = total - amountSats - fee;
   if (change > DUST_LIMIT) {
+    // ✅ Vérifier que l'adresse de change appartient bien au wallet
+    if (derivedAddresses.length > 0) {
+      const isOurChangeAddress = derivedAddresses.some(d => d.address === changeAddress);
+      if (!isOurChangeAddress) {
+        throw new Error(`Adresse de change ${changeAddress} n'appartient pas au wallet — refusé`);
+      }
+    }
     psbt.addOutput({
       address: changeAddress,
       value: change,
@@ -681,11 +684,11 @@ export async function signTransaction(
           const signer = {
             publicKey: Buffer.from(key.publicKey),
             sign: (hash: Buffer) => {
-              const sig = secp256k1.ecdsaSign(
+              const sig = secp256k1.sign(
                 new Uint8Array(hash),
                 key.privateKey
               );
-              return Buffer.from(sig.signature);
+              return Buffer.from(sig.toDERRawBytes());
             },
           };
 
@@ -706,10 +709,22 @@ export async function signTransaction(
       }
     }
 
-    // Vérifier que tous les inputs sont signés avant finalisation
-    const signedCheck = verifyAllInputsSigned(psbtHex);
-    if (!signedCheck.valid) {
-      throw new Error(`Inputs non signés: ${signedCheck.unsignedInputs.join(', ')}`);
+    // Vérifier que tous les inputs sont signés (après signature, sur le PSBT modifié)
+    let allSigned = true;
+    const unsignedInputs: number[] = [];
+    for (let i = 0; i < psbt.inputCount; i++) {
+      const input = psbt.data.inputs[i];
+      const hasSignature = 
+        (input.finalScriptSig && input.finalScriptSig.length > 0) ||
+        (input.finalScriptWitness && input.finalScriptWitness.length > 0) ||
+        (input.partialSig && input.partialSig.length > 0);
+      if (!hasSignature) {
+        allSigned = false;
+        unsignedInputs.push(i);
+      }
+    }
+    if (!allSigned) {
+      throw new Error(`Inputs non signés: ${unsignedInputs.join(', ')}`);
     }
 
     psbt.finalizeAllInputs();

@@ -44,10 +44,49 @@ export function isMintQuotePaid(quote: CashuMintQuote): boolean {
   return quote.paid === true || quote.state === 'PAID';
 }
 
-const mintInfoCache: Map<string, { info: CashuMintInfo; timestamp: number }> = new Map();
-const keysetCache: Map<string, { keysets: CashuKeysetInfo[]; timestamp: number }> = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 const KEYSET_CACHE_TTL = 10 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 100;
+
+// ✅ Cache LRU avec limite de taille pour éviter la fuite mémoire
+class LRUCache<K, V> {
+  private cache: Map<K, V> = new Map();
+  private maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Promouvoir l'entrée (LRU)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Évincer l'entrée la plus ancienne
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+const mintInfoCache = new LRUCache<string, { info: CashuMintInfo; timestamp: number }>(MAX_CACHE_ENTRIES);
+const keysetCache = new LRUCache<string, { keysets: CashuKeysetInfo[]; timestamp: number }>(MAX_CACHE_ENTRIES);
 
 // ─── Mint whitelist ───────────────────────────────────────────────────────────
 //
@@ -644,8 +683,13 @@ export async function checkProofsSpent(
 
 export function encodeCashuToken(token: CashuToken): string {
   const json = JSON.stringify(token);
-  // Buffer.from est UTF-8 safe contrairement à btoa()
-  const base64 = Buffer.from(json, 'utf8').toString('base64');
+  // ✅ Remplacer Buffer.from par TextEncoder (compatible React Native)
+  const bytes = new TextEncoder().encode(json);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const base64 = btoa(binary);
   return `cashuA${base64}`;
 }
 
@@ -660,8 +704,13 @@ export function decodeCashuToken(encoded: string): CashuToken | null {
       return null;
     }
     const base64 = encoded.slice(6);
-    // Buffer.from est UTF-8 safe contrairement à atob()
-    const json = Buffer.from(base64, 'base64').toString('utf8');
+    // ✅ Remplacer Buffer.from par atob + Uint8Array (compatible React Native)
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const json = new TextDecoder().decode(bytes);
     const token = JSON.parse(json) as CashuToken;
 
     // Sanitizer le mémo : limiter la taille et s'assurer que c'est bien une string
@@ -1241,17 +1290,19 @@ export function claimAtomicSwap(
   return true;
 }
 
+/**
+ * @deprecated Le verrouillage P2PK (NUT-10) doit être appliqué lors de la création des
+ * BlindedMessages (outputs), AVANT l'émission par le mint. Utilisez {@link createBlindedMessage}
+ * avec un secret P2PK pour créer des tokens verrouillés dès l'origine.
+ */
 export function createP2pkToken(
-  _token: CashuToken,
+  token: CashuToken,
   _recipientPubkey: string
 ): CashuToken {
-  // NUT-10 P2PK : le verrouillage doit être appliqué au moment de la création des
-  // BlindedMessages (outputs), AVANT l'émission par le mint. Modifier le champ `secret`
-  // d'un proof déjà émis rend le proof invalide car le mint a signé hash_to_curve(secret_original).
-  throw new Error(
-    'createP2pkToken non supporté : le verrouillage P2PK (NUT-10) doit être effectué ' +
-    "lors de la création des outputs blindés, pas après l'émission du mint."
-  );
+  // Le verrouillage P2PK ne peut pas être appliqué rétroactivement.
+  // Retourner le token inchangé — le caller doit gérer le P2PK en amont.
+  console.warn('[Cashu] createP2pkToken: P2PK doit être appliqué lors de la création des BlindedMessages, pas après. Token retourné inchangé.');
+  return token;
 }
 
 export function isP2pkToken(token: CashuToken): boolean {

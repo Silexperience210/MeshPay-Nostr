@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setTrustedMints } from '@/utils/cashu';
+import { setLanguage as setI18nLanguage } from '@/locales';
 
 const SETTINGS_KEY = 'meshcore_app_settings_v2';
 
@@ -123,19 +124,23 @@ export const useSettingsStore = create<SettingsState>()(
 
       // Actions
       updateSettings: (partial: Partial<AppSettings>) => {
-        const updated = { ...get(), ...partial };
-        set(updated);
-        
+        set((state) => ({ ...state, ...partial }));
+
         // Re-synchroniser la whitelist Cashu si les mints ont changé
         if (partial.defaultCashuMint || partial.fallbackCashuMint || partial.customCashuMint) {
-          const mints = [
-            updated.defaultCashuMint,
-            updated.fallbackCashuMint,
-            updated.customCashuMint,
-          ].filter(Boolean) as string[];
-          setTrustedMints(mints);
+          try {
+            const updated = get();
+            const mints = [
+              updated.defaultCashuMint,
+              updated.fallbackCashuMint,
+              updated.customCashuMint,
+            ].filter(Boolean) as string[];
+            setTrustedMints(mints);
+          } catch (e) {
+            console.warn('[SettingsStore] setTrustedMints failed:', e);
+          }
         }
-        
+
         console.log('[SettingsStore] Settings updated');
       },
 
@@ -146,6 +151,8 @@ export const useSettingsStore = create<SettingsState>()(
 
       setLanguage: (lang: AppLanguage) => {
         get().updateSettings({ language: lang });
+        // Synchroniser le système i18n avec la langue du store
+        setI18nLanguage(lang);
         console.log('[SettingsStore] Language set to:', lang);
       },
 

@@ -434,7 +434,8 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
                 autoCapitalize="none"
                 autoCorrect={false}
               />
-              {nodeId.length > 0 && (() => {
+              {(() => {
+                if (nodeId.length === 0) return null;
                 const p = parseNostrInput(nodeId);
                 const isNostr = p.type !== 'mesh';
                 return (
@@ -764,7 +765,7 @@ export default function MessagesScreen() {
     ({ item }: { item: StoredConversation }) => (
       <ConvItem
         conv={item}
-        onPress={() => router.push(`/(messages)/${encodeURIComponent(item.id)}` as never)}
+        onPress={() => router.push(`/(messages)/${encodeURIComponent(item.id)}` as `/(messages)/${string}`)}
         onLongPress={() => handleLongPressConv(item)}
       />
     ),
@@ -773,7 +774,7 @@ export default function MessagesScreen() {
 
   const handleDM = async (nodeId: string, name: string, pubkey?: string) => {
     await startConversation(nodeId, name, pubkey);
-    router.push(`/(messages)/${encodeURIComponent(nodeId)}` as never);
+    router.push(`/(messages)/${encodeURIComponent(nodeId)}` as `/(messages)/${string}`);
   };
 
   const handleDMContact = useCallback(async (contact: DBContact) => {
@@ -783,7 +784,7 @@ export default function MessagesScreen() {
 
   const handleForum = async (channelName: string, pskHex?: string, skipAnnounce?: boolean): Promise<void> => {
     await joinForum(channelName, undefined, pskHex, skipAnnounce);
-    router.push(`/(messages)/${encodeURIComponent('forum:' + channelName)}` as never);
+    router.push(`/(messages)/${encodeURIComponent('forum:' + channelName)}` as `/(messages)/${string}`);
   };
 
   return (

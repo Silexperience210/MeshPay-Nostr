@@ -216,11 +216,12 @@ export class SQLiteEventStore implements EventStore {
   }
 
   async getConversation(peerId: string, limit = 50): Promise<HermesEvent[]> {
-    return this.getEvents({
-      from: peerId,
-      to: peerId,
-      limit,
-    });
+    this.ensureInitialized();
+    const rows = await this.db.getAllAsync(
+      'SELECT * FROM hermes_events WHERE (from_node = ? OR to_node = ?) ORDER BY timestamp DESC LIMIT ?',
+      [peerId, peerId, limit]
+    );
+    return rows.map((row: any) => this.rowToEvent(row));
   }
 
   async getByType(type: EventType, limit = 50): Promise<HermesEvent[]> {

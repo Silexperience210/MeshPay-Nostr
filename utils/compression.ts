@@ -39,21 +39,24 @@ const SMAZ_FLUSH = 0xFF;
 export function compressText(text: string): Uint8Array | null {
   const encoder = new TextEncoder();
   const input = encoder.encode(text);
-  
+
   // Si le texte est très court, pas la peine de compresser
   if (input.length < 20) return null;
-  
+
+  // Pré-décoder l'input en string pour éviter les TextDecoder répétés dans la boucle O(n³)
+  const inputStr = text;
   const output: number[] = [];
   let i = 0;
-  
+
   while (i < input.length) {
     let matched = false;
-    
-    // Chercher le plus long match dans le codebook
-    for (let len = Math.min(7, input.length - i); len >= 1; len--) {
-      const substr = new TextDecoder().decode(input.slice(i, i + len));
+
+    // Chercher le plus long match dans le codebook (sur la string, pas les bytes)
+    const maxLen = Math.min(7, inputStr.length - i);
+    for (let len = maxLen; len >= 1; len--) {
+      const substr = inputStr.substring(i, i + len);
       const idx = SMAZ_CODEBOOK.indexOf(substr);
-      
+
       if (idx !== -1) {
         output.push(idx);
         i += len;
@@ -61,29 +64,22 @@ export function compressText(text: string): Uint8Array | null {
         break;
       }
     }
-    
+
     if (!matched) {
       // Pas de match - encoder le byte tel quel avec flush
-      if (input[i] < 32 || input[i] > 127) {
-        // Caractère non-ASCII ou contrôle
-        output.push(SMAZ_FLUSH);
-        output.push(input[i]);
-      } else {
-        // Caractère ASCII verbatim
-        output.push(SMAZ_FLUSH);
-        output.push(input[i]);
-      }
+      output.push(SMAZ_FLUSH);
+      output.push(input[i]);
       i++;
     }
   }
-  
+
   const compressed = new Uint8Array(output);
-  
+
   // Ne retourner que si c'est avantageux (compression > 10%)
   if (compressed.length >= input.length * 0.9) {
     return null;
   }
-  
+
   return compressed;
 }
 

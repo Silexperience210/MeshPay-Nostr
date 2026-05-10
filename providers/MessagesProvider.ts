@@ -131,11 +131,15 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   const pendingEncryptedTimestamps = useRef<Map<string, number>>(new Map());
   /** Durée max de buffering : 30 minutes. Après, on abandonne (pubkey jamais reçue). */
   const PENDING_PACKET_TTL_MS = 30 * 60 * 1000;
+  /** Limite globale du nombre de paquets bufferisés (tous nodeIds confondus). */
+  const MAX_PENDING_PACKETS_GLOBAL = 500;
   // Nostr : unsub functions pour les forums souscrits (channelName → unsub)
   const nostrChannelUnsubs = useRef<Map<string, () => void>>(new Map());
   // Ref sur le handler Nostr channel — évite les stale closures dans les callbacks
   // (identity peut changer APRÈS la souscription → le handler doit toujours être à jour)
   const nostrChannelHandlerRef = useRef<((channelName: string, event: any) => void) | null>(null);
+  // Ref sur le handler BLE MeshCore — évite le re-enregistrement à chaque changement d'identity
+  const meshCorePacketHandlerRef = useRef<((packet: MeshCorePacket) => void) | null>(null);
   const addToDedup = (id: string) => {
     recentMsgIds.current.add(id);
     if (recentMsgIds.current.size > 200) {
@@ -227,6 +231,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
   }, [ble.connected, identity]);
 
   // Handler pour paquets MeshCore entrants via BLE → LoRa
+  // Utilise une ref interne pour éviter les dépendances instables dans les useEffect
   const handleIncomingMeshCorePacket = useCallback(async (packet: MeshCorePacket) => {
     if (!identity) return;
 
@@ -375,8 +380,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
       // Traiter selon le type de message
       if (packet.type === MeshCoreMessageType.KEY_ANNOUNCE) {
-        // ✅ Gérer la réception d'une pubkey
-        const { extractPubkeyFromAnnounce } = await import('@/utils/meshcore-protocol');
+        // ✅ Gérer la réception d'une pubkey (import statique — pas de dynamic import)
         const pubkey = extractPubkeyFromAnnounce(packet);
         if (pubkey) {
           const fromNodeId = uint64ToNodeId(packet.fromNodeId);
@@ -546,6 +550,22 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
             // Buffer le paquet — sera retraité quand KEY_ANNOUNCE arrivera
             const existing = pendingEncryptedPackets.current.get(fromNodeId) ?? [];
+            // Limite globale : purge des entrées les plus anciennes si on dépasse 500 paquets
+            let totalBuffered = 0;
+            for (const arr of pendingEncryptedPackets.current.values()) totalBuffered += arr.length;
+            if (totalBuffered >= MAX_PENDING_PACKETS_GLOBAL) {
+              // Purger l'entrée la plus ancienne
+              let oldestNodeId: string | null = null;
+              let oldestTs = Infinity;
+              for (const [nid, ts] of pendingEncryptedTimestamps.current.entries()) {
+                if (ts < oldestTs) { oldestTs = ts; oldestNodeId = nid; }
+              }
+              if (oldestNodeId) {
+                pendingEncryptedPackets.current.delete(oldestNodeId);
+                pendingEncryptedTimestamps.current.delete(oldestNodeId);
+                console.warn(`[MeshCore] Buffer global plein — entrée ${oldestNodeId} purgée`);
+              }
+            }
             if (existing.length < 50) {
               pendingEncryptedPackets.current.set(fromNodeId, [...existing, packet]);
               // Enregistrer le timestamp du premier paquet bufferisé pour ce nodeId
@@ -703,17 +723,24 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
   }, [identity, handleLoRaMsg]); // stable — gatewayState.isActive lu via gatewayActiveRef
 
+  // Synchroniser la ref pour que les useEffect utilisent toujours le handler à jour
+  useEffect(() => {
+    meshCorePacketHandlerRef.current = handleIncomingMeshCorePacket;
+  }, [handleIncomingMeshCorePacket]);
+
   // Enregistrer le handler BLE dès que possible + annoncer notre clé publique
+  // Utilise une ref pour le handler afin d'éviter le re-enregistrement à chaque changement d'identity
   useEffect(() => {
     if (ble.connected && identity) {
       console.log('[MeshCore] Connexion BLE établie, enregistrement handler');
-      ble.onPacket(handleIncomingMeshCorePacket);
+      const handler = (packet: MeshCorePacket) => meshCorePacketHandlerRef.current?.(packet);
+      ble.onPacket(handler);
 
       // Après enregistrement du handler, le BleGatewayClient rejoue automatiquement
       // les paquets bufferisés (pendingPackets). On appelle aussi syncNextMessage()
       // pour récupérer les messages restants dans la file firmware.
       const client = getBleGatewayClient();
-      setTimeout(() => {
+      const syncTimer = setTimeout(() => {
         client.syncNextMessage()
           .then(() => console.log('[MeshCore] syncNextMessage post-handler OK'))
           .catch(() => { /* RESP_NO_MORE_MSGS = normal */ });
@@ -723,17 +750,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       ble.sendSelfAdvert()
         .then(() => console.log('[MeshCore] SelfAdvert envoyé (broadcast)'))
         .catch(err => console.warn('[MeshCore] Erreur SelfAdvert:', err));
+
+      return () => clearTimeout(syncTimer);
     }
-  }, [ble.connected, identity, handleIncomingMeshCorePacket]);
+  }, [ble.connected, identity]);
 
   // ✅ Enregistrer le handler USB Serial (transport alternatif au BLE)
   // UsbSerialProvider utilise un ref interne — onPacket() est idempotent et bon marché.
   useEffect(() => {
     if (usbSerial.connected && identity) {
       console.log('[MeshCore] Connexion USB Serial établie, enregistrement handler');
-      usbSerial.onPacket(handleIncomingMeshCorePacket);
+      const handler = (packet: MeshCorePacket) => meshCorePacketHandlerRef.current?.(packet);
+      usbSerial.onPacket(handler);
     }
-  }, [usbSerial.connected, identity, handleIncomingMeshCorePacket]);
+  }, [usbSerial.connected, identity]);
 
   // Polling périodique des messages en file (filet de sécurité si PUSH_MSG_WAITING manqué)
   // Le firmware peut parfois ne pas envoyer PUSH_MSG_WAITING (firmware edge case, BLE restart...)
@@ -1000,6 +1030,12 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       nostrChannelUnsubs.current.set(channelName, unsub);
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
     }
+
+    // Cleanup : désabonner toutes les subscriptions Nostr à la déconnexion/démontage
+    return () => {
+      for (const unsub of nostrChannelUnsubs.current.values()) unsub();
+      nostrChannelUnsubs.current.clear();
+    };
   }, [nostrConnected, isLoRaMode]);
 
   // ── Nostr DMs : Les DMs Nostr entrants (NIP-17 + NIP-04) sont gérés par

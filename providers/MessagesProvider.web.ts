@@ -145,8 +145,9 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     const id = identityRef.current;
     if (!id) throw new Error('No identity');
 
+    const msgId = genId();
     const msg: StoredMessage = {
-      id: genId(),
+      id: msgId,
       conversationId: convId,
       fromNodeId: id.nodeId,
       fromPubkey: id.pubkeyHex,
@@ -171,7 +172,42 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       persistConversations(updated);
       return updated;
     });
-  }, [persistMessages, persistConversations]);
+
+    // Envoyer via Nostr si connecté (DM ou forum)
+    try {
+      if (convId.startsWith('forum:')) {
+        const channelName = convId.slice(6);
+        const channelId = deriveChannelId(channelName);
+        await nostrClient.publishChannelMessage(channelId, text);
+        console.log('[Messages-Web] Forum message envoyé via Nostr:', channelName);
+      } else {
+        const conv = conversations.find(c => c.id === convId);
+        if (conv?.peerPubkey && nostrClient.isConnected) {
+          const pk = conv.peerPubkey.length === 66 ? conv.peerPubkey.slice(2) : conv.peerPubkey;
+          if (pk.length === 64) {
+            await nostrClient.publishDMSealed(pk, text);
+            console.log('[Messages-Web] DM envoyé via Nostr à:', convId);
+          }
+        }
+      }
+      // Marquer comme envoyé
+      setMessagesByConv(prev => {
+        const msgs = prev[convId] ?? [];
+        const updated = msgs.map(m => m.id === msgId ? { ...m, status: 'sent' as const } : m);
+        persistMessages(convId, updated);
+        return { ...prev, [convId]: updated };
+      });
+    } catch (err) {
+      console.warn('[Messages-Web] Échec envoi Nostr:', err);
+      // Marquer comme échoué
+      setMessagesByConv(prev => {
+        const msgs = prev[convId] ?? [];
+        const updated = msgs.map(m => m.id === msgId ? { ...m, status: 'failed' as const } : m);
+        persistMessages(convId, updated);
+        return { ...prev, [convId]: updated };
+      });
+    }
+  }, [persistMessages, persistConversations, conversations]);
 
   const sendCashu = useCallback(async (_convId: string, _token: string, _amountSats: number) => {
     console.log('[Messages-Web] sendCashu not available on web');

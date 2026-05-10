@@ -35,7 +35,7 @@ interface SeenMessage {
   timestamp: number;
 }
 
-const DEFAULT_TTL = 10;
+const DEFAULT_TTL = 5;  // TTL par défaut plus petit que le max
 const MAX_TTL = 10;
 const SEEN_MESSAGE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
@@ -90,13 +90,17 @@ export class MeshRouter {
   /**
    * Ajoute ou met à jour un voisin dans la routing table
    */
-  updateNeighbor(nodeId: string, rssi?: number, hopCount: number = 1) {
-    this.neighbors.set(nodeId, {
+  updateNeighbor(nodeId: string, rssi?: number, hopCount: number = 1, via?: string[]) {
+    const route: MeshRoute = {
       nodeId,
       lastSeen: Date.now(),
       rssi,
       hopCount,
-    });
+    };
+    if (via) {
+      route.via = via;
+    }
+    this.neighbors.set(nodeId, route);
   }
 
   /**
@@ -157,7 +161,7 @@ export class MeshRouter {
       type,
       ttl: DEFAULT_TTL,
       hopCount: 0,
-      route: [this.myNodeId],
+      route: [this.myNodeId], // Tracé du chemin emprunté
     };
   }
 
@@ -185,39 +189,55 @@ export class MeshRouter {
       return 'drop';
     }
 
-    // 4. Vérifier si le message est pour nous
-    if (message.to === this.myNodeId || message.to === 'broadcast') {
+    // 4. Vérifier si le message est pour nous ou en broadcast
+    if (message.to === this.myNodeId) {
       console.log(`[MeshRouter] DELIVER: Message ${message.msgId} is for us`);
       return 'deliver';
     }
 
-    // 5. Message pour quelqu'un d'autre → relay
+    // 5. Broadcast → deliver (pour nous) ET relay (pour les autres)
+    if (message.to === 'broadcast') {
+      console.log(`[MeshRouter] BROADCAST: Message ${message.msgId} — deliver + relay`);
+      return 'deliver'; // Le caller doit aussi relay après deliver
+    }
+
+    // 6. Message pour quelqu'un d'autre → relay
     console.log(`[MeshRouter] RELAY: Message ${message.msgId} from ${message.from} to ${message.to} (TTL=${message.ttl}, hops=${message.hopCount})`);
     return 'relay';
   }
 
   /**
    * Prépare un message pour relay (décrémente TTL, incrémente hopCount)
+   * Met à jour la route empruntée
    */
   prepareRelay(message: MeshMessage): MeshMessage {
+    const newRoute = [...message.route, this.myNodeId];
     return {
       ...message,
       ttl: message.ttl - 1,
       hopCount: message.hopCount + 1,
-      route: [...message.route, this.myNodeId],
+      route: newRoute,
     };
   }
 
   /**
-   * Génère un ID unique pour message
+   * Génère un ID unique pour message (UUID v4 cryptographiquement sécurisé)
    */
   private generateMsgId(): string {
-    // UUID v4 simple (sans dépendance externe)
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
+    // Utiliser crypto.getRandomValues si disponible, sinon fallback
+    const bytes = new Uint8Array(16);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < 16; i++) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+    }
+    // Version 4 UUID: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant 10
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0'));
+    return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
   }
 
   /**

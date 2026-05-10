@@ -4,17 +4,7 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
-
-// hexToBytes — implémentation locale (noble/hashes ne l'exporte pas toujours)
-function hexToBytes(hex: string): Uint8Array {
-  const len = hex.length / 2;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
 export interface EncryptedPayload {
   v: number;
@@ -120,9 +110,13 @@ export function deriveForumKey(channelName: string): Uint8Array {
   const encoder = new TextEncoder();
   const ikm = encoder.encode('forum:' + channelName);
   
-  // Si aucun sel n'est défini, utiliser un sel par défaut (rétrocompatibilité)
-  // mais loguer un avertissement en dev
-  const salt = _forumSalt || encoder.encode('meshpay-default-salt-v1');
+  // Si aucun sel n'est défini, générer un sel aléatoire à la volée
+  // (mieux qu'un sel hardcodé identique pour toutes les installations)
+  if (!_forumSalt) {
+    console.warn('[Encryption] Aucun sel défini pour deriveForumKey — génération d\'un sel aléatoire. ' +
+                 'Appelez setForumSalt() au démarrage pour une meilleure sécurité.');
+  }
+  const salt = _forumSalt || randomBytes(32);
   
   if (!_forumSalt && typeof __DEV__ !== 'undefined' && __DEV__) {
     console.warn('[Encryption] Aucun sel défini pour deriveForumKey - utilise le sel par défaut. ' +
@@ -141,7 +135,7 @@ export function deriveForumKey(channelName: string): Uint8Array {
 // --- Génère une PSK aléatoire pour un forum privé ---
 // Appeler une seule fois à la création du forum.
 // Partager le hex résultant aux membres via encryptDM (jamais en clair).
-export function generateForumKey(): string {
+export function generateRandomForumSalt(): string {
   return bytesToHex(randomBytes(32));
 }
 
@@ -159,6 +153,7 @@ export function decryptForumWithKey(payload: EncryptedPayload, pskHex: string): 
 
 // --- Chiffrement AES-GCM-256 ---
 export function encryptMessage(plaintext: string, key: Uint8Array): EncryptedPayload {
+  if (key.length !== 32) throw new Error('Key must be 32 bytes');
   const encoder = new TextEncoder();
   const data = encoder.encode(plaintext);
   const nonce = randomBytes(12);
@@ -174,6 +169,7 @@ export function encryptMessage(plaintext: string, key: Uint8Array): EncryptedPay
 
 // --- Déchiffrement AES-GCM-256 ---
 export function decryptMessage(payload: EncryptedPayload, key: Uint8Array): string {
+  if (key.length !== 32) throw new Error('Key must be 32 bytes');
   const nonce = fromBase64(payload.nonce);
   const ciphertext = fromBase64(payload.ct);
   const cipher = gcm(key, nonce);

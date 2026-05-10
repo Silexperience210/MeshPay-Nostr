@@ -1,8 +1,14 @@
 /**
  * Outils de migration - Helpers pour la transition Providers → Zustand
- * 
+ *
  * Ce fichier fournit des utilitaires pour faciliter la migration progressive
  * de l'app depuis les Context Providers vers Zustand.
+ *
+ * NOTE: Ce code n'est actuellement importé nulle part. Il est conservé comme
+ * référence pour une future intégration si une synchronisation bidirectionnelle
+ * legacy ↔ Zustand s'avère nécessaire (ex: migration de données utilisateur
+ * lors d'une mise à jour de l'app). Pour l'activer, importer useMigrationSync
+ * dans le composant racine et lui passer les données legacy en props.
  */
 
 import { useEffect } from 'react';

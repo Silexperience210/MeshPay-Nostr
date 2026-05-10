@@ -60,6 +60,7 @@ export class GatewayManagerImpl implements GatewayManager {
     if (this.isRunning) return;
 
     // S'abonner aux messages LoRa entrants pour bridge vers Nostr
+    // Filtrer aussi par type de payload pour eviter le double traitement
     const unsubLora = hermes.on(EventType.DM_RECEIVED, async (event) => {
       if (event.transport === Transport.LORA && this.bridgesEnabled.loraToNostr) {
         await this.handleLoraMessage(event);
@@ -68,6 +69,8 @@ export class GatewayManagerImpl implements GatewayManager {
 
     // S'abonner aux messages Nostr pour bridge vers LoRa (skip manual bridges)
     const unsubNostr = hermes.on(EventType.BRIDGE_NOSTR_TO_LORA, async (event) => {
+      // Verifier le transport source pour eviter le double traitement
+      if (event.transport !== Transport.NOSTR) return;
       if (this.bridgesEnabled.nostrToLora && !(event.payload as any)?.manual) {
         await this.handleNostrBridgeEvent(event);
       }
@@ -106,14 +109,13 @@ export class GatewayManagerImpl implements GatewayManager {
       const payload = event.payload as any;
       const content = payload?.content ?? String(payload);
 
-      // Émettre l'événement de bridge
+      // Émettre l'événement de bridge avec payload respectant l'interface BridgeEvent
       await hermes.createEvent(
         EventType.BRIDGE_LORA_TO_NOSTR,
         {
-          originalEvent: event,
-          payload: content,
-          from: event.from,
-          to: event.to,
+          originalTransport: Transport.LORA,
+          targetTransport: Transport.NOSTR,
+          rawPayload: JSON.stringify({ content, from: event.from, to: event.to }),
         },
         {
           transport: Transport.INTERNAL,
@@ -138,14 +140,18 @@ export class GatewayManagerImpl implements GatewayManager {
   private async handleLoraChannelMessage(event: HermesEvent): Promise<void> {
     try {
       const payload = event.payload as any;
-      
+
+      // Émettre l'événement de bridge avec payload respectant l'interface BridgeEvent
       await hermes.createEvent(
         EventType.BRIDGE_LORA_TO_NOSTR,
         {
-          originalEvent: event,
-          payload: payload?.content ?? '',
-          channelName: payload?.channelName,
-          from: event.from,
+          originalTransport: Transport.LORA,
+          targetTransport: Transport.NOSTR,
+          rawPayload: JSON.stringify({
+            content: payload?.content ?? '',
+            channelName: payload?.channelName,
+            from: event.from,
+          }),
         },
         {
           transport: Transport.INTERNAL,
@@ -166,12 +172,15 @@ export class GatewayManagerImpl implements GatewayManager {
   private async handleNostrBridgeEvent(event: HermesEvent): Promise<void> {
     try {
       const payload = event.payload as any;
-      
+
+      // Vérifier le transport source pour éviter le double traitement
+      if (event.transport !== Transport.NOSTR) return;
+
       // Émettre un événement pour le transport LoRa
       await hermes.createEvent(
         EventType.DM_SENT,
         {
-          content: payload?.payload ?? '',
+          content: payload?.rawPayload ?? payload?.payload ?? '',
           contentType: 'text',
           bridgedFromNostr: true,
         },

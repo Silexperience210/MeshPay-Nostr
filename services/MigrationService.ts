@@ -10,10 +10,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { 
   migrateFromAsyncStorage,
-  saveConversationDB,
-  saveMessageDB,
-  DBConversation,
-  DBMessage,
   getDatabase,
   withTransaction,
   toSQLiteParams,
@@ -76,6 +72,9 @@ export async function runMigration(): Promise<{ success: boolean; migrated: numb
     const msgCount = await database.getFirstAsync<{ count: number }>('SELECT COUNT(*) as count FROM messages');
     
     const totalMigrated = (convCount?.count || 0) + (msgCount?.count || 0);
+    
+    // ✅ FIX: Flag de migration set APRÈS succès (pas avant)
+    await AsyncStorage.setItem(MIGRATION_KEY, 'true');
     
     return { success: true, migrated: totalMigrated };
   } catch (error) {

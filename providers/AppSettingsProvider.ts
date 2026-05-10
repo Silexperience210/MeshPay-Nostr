@@ -41,67 +41,101 @@ export interface AppSettingsHookValue {
 // ─── Thin wrapper → Zustand settingsStore ────────────────────────────────────
 
 export const [AppSettingsContext, useAppSettings] = createContextHook((): AppSettingsHookValue => {
-  const store = useSettingsStore();
+  // Sélecteurs granulaires pour éviter la souscription complète au store
+  const connectionMode = useSettingsStore(s => s.connectionMode);
+  const language = useSettingsStore(s => s.language);
+  const onboardingLangDone = useSettingsStore(s => s.onboardingLangDone);
+  const mempoolUrl = useSettingsStore(s => s.mempoolUrl);
+  const customMempoolUrl = useSettingsStore(s => s.customMempoolUrl);
+  const useCustomMempool = useSettingsStore(s => s.useCustomMempool);
+  const defaultCashuMint = useSettingsStore(s => s.defaultCashuMint);
+  const fallbackCashuMint = useSettingsStore(s => s.fallbackCashuMint);
+  const customCashuMint = useSettingsStore(s => s.customCashuMint);
+  const useCustomCashuMint = useSettingsStore(s => s.useCustomCashuMint);
+  const bitcoinNetwork = useSettingsStore(s => s.bitcoinNetwork);
+  const fiatCurrency = useSettingsStore(s => s.fiatCurrency);
+  const autoSyncInterval = useSettingsStore(s => s.autoSyncInterval);
+  const autoRelay = useSettingsStore(s => s.autoRelay);
+  const loraAutoConnect = useSettingsStore(s => s.loraAutoConnect);
+  const preferredRelaySet = useSettingsStore(s => s.preferredRelaySet);
+  const customRelays = useSettingsStore(s => s.customRelays);
+  const gatewayMode = useSettingsStore(s => s.gatewayMode);
+  const gatewayServices = useSettingsStore(s => s.gatewayServices);
+  const _updateSettings = useSettingsStore(s => s.updateSettings);
+  const _resetToDefaults = useSettingsStore(s => s.resetToDefaults);
+  const _isLoading = useSettingsStore(s => s.isLoading);
+  const _isSaving = useSettingsStore(s => s.isSaving);
+  const _mempoolUrlResolved = useSettingsStore(s => s.mempoolUrlResolved);
+  const _cashuMintUrlResolved = useSettingsStore(s => s.cashuMintUrlResolved);
+  const _activeRelayUrls = useSettingsStore(s => s.activeRelayUrls);
+  const notifications = useSettingsStore(s => s.notifications);
+  const shareLocation = useSettingsStore(s => s.shareLocation);
+  const nostrRelays = useSettingsStore(s => s.nostrRelays);
+  const isInternetMode = useSettingsStore(s => s.connectionMode === 'internet');
+  const isLoRaMode = useSettingsStore(s => s.connectionMode === 'lora');
+  const isBridgeMode = useSettingsStore(s => s.connectionMode === 'bridge');
 
   const settings: import('@/stores/settingsStore').AppSettings = useMemo(() => ({
-    connectionMode: store.connectionMode,
-    language: store.language,
-    onboardingLangDone: store.onboardingLangDone,
-    mempoolUrl: store.mempoolUrl,
-    customMempoolUrl: store.customMempoolUrl,
-    useCustomMempool: store.useCustomMempool,
-    defaultCashuMint: store.defaultCashuMint,
-    fallbackCashuMint: store.fallbackCashuMint,
-    customCashuMint: store.customCashuMint,
-    useCustomCashuMint: store.useCustomCashuMint,
-    bitcoinNetwork: store.bitcoinNetwork,
-    fiatCurrency: store.fiatCurrency,
-    autoSyncInterval: store.autoSyncInterval,
-    autoRelay: store.autoRelay,
-    notifications: store.notifications,
-    shareLocation: store.shareLocation,
-    nostrRelays: store.nostrRelays,
+    connectionMode: connectionMode,
+    language: language,
+    onboardingLangDone: onboardingLangDone,
+    mempoolUrl: mempoolUrl,
+    customMempoolUrl: customMempoolUrl,
+    useCustomMempool: useCustomMempool,
+    defaultCashuMint: defaultCashuMint,
+    fallbackCashuMint: fallbackCashuMint,
+    customCashuMint: customCashuMint,
+    useCustomCashuMint: useCustomCashuMint,
+    bitcoinNetwork: bitcoinNetwork,
+    fiatCurrency: fiatCurrency,
+    autoSyncInterval: autoSyncInterval,
+    autoRelay: autoRelay,
+    notifications: notifications,
+    shareLocation: shareLocation,
+    nostrRelays: nostrRelays,
   }), [
-    store.connectionMode,
-    store.language,
-    store.onboardingLangDone,
-    store.mempoolUrl,
-    store.customMempoolUrl,
-    store.useCustomMempool,
-    store.defaultCashuMint,
-    store.fallbackCashuMint,
-    store.customCashuMint,
-    store.useCustomCashuMint,
-    store.bitcoinNetwork,
-    store.fiatCurrency,
-    store.autoSyncInterval,
-    store.autoRelay,
-    store.notifications,
-    store.shareLocation,
-    store.nostrRelays,
+    connectionMode,
+    language,
+    onboardingLangDone,
+    mempoolUrl,
+    customMempoolUrl,
+    useCustomMempool,
+    defaultCashuMint,
+    fallbackCashuMint,
+    customCashuMint,
+    useCustomCashuMint,
+    bitcoinNetwork,
+    fiatCurrency,
+    autoSyncInterval,
+    autoRelay,
+    notifications,
+    shareLocation,
+    nostrRelays,
   ]);
 
   return useMemo(() => ({
     settings,
-    updateSettings: store.updateSettings,
-    getMempoolUrl: store.getMempoolUrl,
-    getCashuMintUrl: store.getCashuMintUrl,
-    getActiveRelayUrls: store.getActiveRelayUrls,
-    resetToDefaults: store.resetToDefaults,
-    isInternetMode: store.isInternetMode(),
-    isLoRaMode: store.isLoRaMode(),
-    isBridgeMode: store.isBridgeMode(),
-    isLoading: store.isLoading,
-    isSaving: store.isSaving,
+    updateSettings: _updateSettings,
+    getMempoolUrl: () => _mempoolUrlResolved,
+    getCashuMintUrl: () => _cashuMintUrlResolved,
+    getActiveRelayUrls: () => _activeRelayUrls,
+    resetToDefaults: _resetToDefaults,
+    isInternetMode: isInternetMode,
+    isLoRaMode: isLoRaMode,
+    isBridgeMode: isBridgeMode,
+    isLoading: _isLoading,
+    isSaving: _isSaving,
   }), [
     settings,
-    store.updateSettings,
-    store.getMempoolUrl,
-    store.getCashuMintUrl,
-    store.getActiveRelayUrls,
-    store.resetToDefaults,
-    store.connectionMode,
-    store.isLoading,
-    store.isSaving,
+    _updateSettings,
+    _mempoolUrlResolved,
+    _cashuMintUrlResolved,
+    _activeRelayUrls,
+    _resetToDefaults,
+    isInternetMode,
+    isLoRaMode,
+    isBridgeMode,
+    _isLoading,
+    _isSaving,
   ]);
 });

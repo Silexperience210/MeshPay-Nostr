@@ -153,17 +153,22 @@ export const useWalletStore = create<WalletState>()(
       },
 
       setHasHydrated: (hasHydrated: boolean) => {
-        set({ _hasHydrated: hasHydrated });
+        set({ _hasHydrated: hasHydrated, isLoading: false });
       },
 
       // Internal actions
-      _setWalletData: (mnemonic: string) => {
+      // NOTE: Devient async pour uniformité avec walletStore.ts natif
+      _setWalletData: async (mnemonic: string) => {
         const info = deriveWalletInfo(mnemonic);
+        await new Promise<void>((r) => setTimeout(r, 0)); // yield thread
         set({
           mnemonic,
           walletInfo: info,
           receiveAddresses: deriveReceiveAddresses(mnemonic, 5),
-          changeAddresses: [], // Pas besoin sur web
+          // NOTE: Les change addresses ne sont pas dérivées sur web car le wallet web
+          // utilise uniquement des adresses de réception (receive). Les transactions
+          // de change sont gérées différemment en session web.
+          changeAddresses: [],
           isInitialized: true,
         });
       },
@@ -229,6 +234,13 @@ export function useReceiveAddresses() {
 
 export function useChangeAddresses() {
   return useWalletStore((state) => state.changeAddresses);
+}
+
+export function useWalletAddresses() {
+  return useWalletStore((state) => ({
+    receiveAddresses: state.receiveAddresses || [],
+    changeAddresses: state.changeAddresses || [],
+  }));
 }
 
 export function useWalletActions() {
