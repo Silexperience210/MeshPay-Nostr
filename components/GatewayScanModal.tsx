@@ -1,0 +1,815 @@
+/**
+ * Modal de scan et connexion gateway LoRa BLE
+ */
+
+import React from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  TouchableOpacity,
+  FlatList,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+  Platform,
+  PermissionsAndroid,
+} from 'react-native';
+import BleManager from 'react-native-ble-manager';
+import { Bluetooth, X, Wifi, CheckCircle2, Radio, Bug } from 'lucide-react-native';
+import Colors from '@/constants/colors';
+import { useBle } from '@/providers/BleProvider';
+import { type BleGatewayDevice } from '@/utils/ble-gateway';
+
+const CHANNEL_OPTIONS = [
+  { idx: 0, label: 'Public (ch0)', icon: '🌐' },
+  { idx: 1, label: 'Privé 1 (ch1)', icon: '🔒' },
+  { idx: 2, label: 'Privé 2 (ch2)', icon: '🔒' },
+  { idx: 3, label: 'Privé 3 (ch3)', icon: '🔒' },
+  { idx: 4, label: 'Privé 4 (ch4)', icon: '🔒' },
+];
+
+interface GatewayScanModalProps {
+  visible: boolean;
+  onClose: () => void;
+}
+
+export default function GatewayScanModal({ visible, onClose }: GatewayScanModalProps) {
+  const { connected, device, error, connectToGateway, currentChannel, setChannel } = useBle();
+
+  const [showChannelPicker, setShowChannelPicker] = React.useState(false);
+  const [localScanning, setLocalScanning] = React.useState(false);
+  const [localDevices, setLocalDevices] = React.useState<BleGatewayDevice[]>([]);
+  const [connecting, setConnecting] = React.useState(false);
+  // Device sélectionné en attente de connexion
+  const [pendingDevice, setPendingDevice] = React.useState<BleGatewayDevice | null>(null);
+  // PIN BLE — MeshCore firmware défaut: 123456 (build flag BLE_PIN_CODE)
+  const [pinValue, setPinValue] = React.useState('123456');
+  // Guard anti-setState sur composant démonté (modal fermé pendant scan)
+  const isMountedRef = React.useRef(true);
+  const scanTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Subscription BLE discovery — doit être dans un ref pour cleanup propre
+  const discoverSubRef = React.useRef<{ remove: () => void } | null>(null);
+
+  // Reset isMountedRef à chaque fois que la visibilité change
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (scanTimerRef.current) { clearTimeout(scanTimerRef.current); scanTimerRef.current = null; }
+      discoverSubRef.current?.remove(); discoverSubRef.current = null;
+      BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
+    };
+  }, [visible]);
+
+  const NUS_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+
+  // ── Permissions Android ──────────────────────────────────────────
+  // Retourne true si les permissions BLE nécessaires sont accordées.
+  const requestPerms = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') return true;
+    try {
+      if (Platform.Version >= 31) {
+        const granted = await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ]);
+        return (
+          granted['android.permission.BLUETOOTH_SCAN'] === 'granted' &&
+          granted['android.permission.BLUETOOTH_CONNECT'] === 'granted'
+        );
+      } else {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+        );
+        return granted === 'granted';
+      }
+    } catch {
+      return true; // permissions déjà accordées (requestMultiple peut throw si déjà granted)
+    }
+  };
+
+  // ── Détection type device ─────────────────────────────────────────
+  const detectDeviceType = (name: string): BleGatewayDevice['type'] => {
+    const n = name.toLowerCase();
+    if (
+      n.startsWith('meshcore') || n.startsWith('whisper') ||
+      n.startsWith('lora') || n.startsWith('bitmesh') ||
+      n.includes('mesh') || n.includes('lora')
+    ) return 'companion';
+    return 'gateway';
+  };
+
+  // ── Scan unifié (même code debug et scan normal) ──────────────────
+  // Phase 1 : scan filtré NUS UUID (6s) — détecte devices qui annoncent le service
+  // Phase 2 : si 0 résultat, fallback sans filtre (4s) — firmware sans NUS dans primary ADV
+  // Phase 0 : pré-charge les devices déjà bondés (directed advertising invisible au scan)
+  const runScan = async (debugMode: boolean) => {
+    try {
+      console.log('=== SCAN BLE START ===');
+
+      const permsOk = await requestPerms();
+      if (!permsOk) {
+        Alert.alert(
+          'Permissions Bluetooth requises',
+          'Autorisez Bluetooth et Localisation dans :\nParamètres → Applications → MeshPay → Autorisations.'
+        );
+        return;
+      }
+
+      await BleManager.start({ showAlert: false });
+      const bleState = await BleManager.checkState();
+      if (bleState !== 'on') {
+        Alert.alert('Bluetooth éteint', `État : ${bleState}\nAllumez le Bluetooth.`);
+        return;
+      }
+
+      setLocalScanning(true);
+      setLocalDevices([]);
+      setPendingDevice(null);
+
+      const found: Map<string, BleGatewayDevice> = new Map();
+
+      // Sur certains OEM (Xiaomi notamment) `allowDuplicates: false` n'est pas
+      // respecté — le même device ressort à chaque scan window. On déduplique
+      // strictement par id et on ne met à jour le state/log que si une donnée
+      // utile (nom ou RSSI significativement meilleur) a changé.
+      const RSSI_CHANGE_THRESHOLD = 10; // ne rafraîchit pas pour ±10 dBm
+      const reportDevice = (dev: any) => {
+        if (!dev?.id) return;
+        const name: string = dev.name || dev.advertising?.localName || dev.localName || '';
+        const rssi: number = typeof dev.rssi === 'number' ? dev.rssi : -100;
+
+        const existing = found.get(dev.id);
+        const displayName = name || existing?.name || `BLE ${dev.id.slice(-5)}`;
+
+        // Premier hit → on ajoute et on log.
+        if (!existing) {
+          found.set(dev.id, {
+            id: dev.id,
+            name: displayName,
+            rssi,
+            type: detectDeviceType(displayName),
+          });
+          if (isMountedRef.current) {
+            setLocalDevices(Array.from(found.values()).sort((a, b) => b.rssi - a.rssi));
+          }
+          console.log('📱 TROUVÉ:', displayName, dev.id, rssi);
+          return;
+        }
+
+        // Hit suivant — ne met à jour que si le nom est nouveau ou si le RSSI
+        // bouge franchement. Évite le re-render à chaque window de scan.
+        const nameChanged = !!name && name !== existing.name;
+        const rssiChanged = Math.abs(rssi - existing.rssi) >= RSSI_CHANGE_THRESHOLD;
+        if (!nameChanged && !rssiChanged) return;
+
+        found.set(dev.id, {
+          ...existing,
+          name: nameChanged ? name : existing.name,
+          rssi: rssiChanged ? rssi : existing.rssi,
+          type: detectDeviceType(nameChanged ? name : existing.name),
+        });
+        if (isMountedRef.current) {
+          setLocalDevices(Array.from(found.values()).sort((a, b) => b.rssi - a.rssi));
+        }
+      };
+
+      // ── Phase 0 : devices déjà bondés (directed adv, invisibles au scan actif) ──
+      try {
+        const bonded: any[] = await BleManager.getBondedPeripherals();
+        console.log(`[Scan] ${bonded.length} device(s) bondé(s)`);
+        for (const p of bonded) reportDevice(p);
+      } catch (e) {
+        console.log('[Scan] getBondedPeripherals non supporté:', e);
+      }
+
+      // Arrêter tout scan précédent
+      discoverSubRef.current?.remove();
+      discoverSubRef.current = null;
+      await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
+
+      // Enregistrer le handler de découverte
+      discoverSubRef.current = BleManager.onDiscoverPeripheral(reportDevice);
+
+      // ── Phase 1 : scan filtré NUS UUID (6s) ──
+      console.log('[Scan] Phase 1 — filtré NUS UUID');
+      await BleManager.scan(
+        { serviceUUIDs: [NUS_UUID], seconds: 6, allowDuplicates: false, scanMode: 2, matchMode: 1 } as any
+      );
+
+      // Attendre fin phase 1
+      await new Promise<void>((res) => {
+        scanTimerRef.current = setTimeout(res, 6500);
+      });
+
+      if (!isMountedRef.current) return;
+
+      // ── Phase 2 : fallback sans filtre (4s) si rien trouvé ──
+      if (found.size === 0) {
+        console.log('[Scan] Phase 2 — fallback sans filtre UUID');
+        await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
+        await BleManager.scan(
+          { serviceUUIDs: [], seconds: 4, allowDuplicates: false, scanMode: 2 } as any
+        );
+        await new Promise<void>((res) => {
+          scanTimerRef.current = setTimeout(res, 4500);
+        });
+        if (!isMountedRef.current) return;
+      }
+
+      await BleManager.stopScan().catch(() => { /* cleanup: ignore */ });
+      discoverSubRef.current?.remove();
+      discoverSubRef.current = null;
+
+      const devices = Array.from(found.values()).sort((a, b) => b.rssi - a.rssi);
+      console.log('=== Scan terminé ===', devices.length, 'device(s)');
+
+      if (isMountedRef.current) {
+        setLocalDevices(devices);
+        setLocalScanning(false);
+      }
+
+      if (debugMode) {
+        if (devices.length > 0) {
+          Alert.alert(
+            `${devices.length} device(s) trouvé(s)`,
+            devices.map(d => `• ${d.name} (${d.rssi} dBm)`).join('\n'),
+            [
+              { text: 'Fermer', style: 'cancel' },
+              {
+                text: `Connecter → ${devices[0].name}`,
+                onPress: () => setPendingDevice(devices[0]),
+              },
+            ]
+          );
+        } else {
+          Alert.alert('Aucun device trouvé', 'Vérifiez que votre MeshCore est allumé et à proximité.');
+        }
+      }
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setLocalScanning(false);
+      console.error('❌ ERREUR SCAN:', err);
+      Alert.alert('Scan impossible', err.message || 'Vérifiez que le Bluetooth est activé.');
+    }
+  };
+
+  const handleScan = () => runScan(false);
+  const handleDebugBle = () => runScan(true);
+
+  // ── Connexion avec createBond + PIN ──────────────────────────────
+  const doConnect = async () => {
+    if (!pendingDevice) return;
+    setConnecting(true);
+
+    // BLUETOOTH_CONNECT requis pour createBond + connect sur Android 12+
+    const permsOk = await requestPerms();
+    if (!permsOk) {
+      Alert.alert(
+        'Permission Bluetooth requise',
+        'La permission BLUETOOTH_CONNECT est nécessaire pour se connecter.\nActivez-la dans Paramètres → Applications → MeshPay → Autorisations.'
+      );
+      setConnecting(false);
+      return;
+    }
+
+    try {
+      const pin = pinValue.trim();
+      // PIN défaut firmware MeshCore = 123456 (-D BLE_PIN_CODE=123456 dans platformio.ini)
+      console.log('[Connect] createBond PIN:', pin || '(aucun)');
+      try {
+        await BleManager.createBond(pendingDevice.id, pin || null);
+        console.log('[Connect] Bond OK');
+      } catch (bondErr: any) {
+        const bMsg = String(bondErr).toLowerCase();
+        const isWrongPin =
+          bMsg.includes('133') || bMsg.includes('auth') ||
+          bMsg.includes('pin') || bMsg.includes('passkey');
+        if (isWrongPin) {
+          // PIN incorrect → garder le panneau ouvert pour que l'user corrige
+          Alert.alert('PIN incorrect', 'Vérifiez le PIN et réessayez.\nDéfaut MeshCore : 123456');
+          setConnecting(false);
+          return; // ne pas tenter la connexion GATT avec un bond raté
+        }
+        // Autre erreur bond (déjà bondé, Just Works…) → on continue
+        console.log('[Connect] createBond non bloquant:', bondErr);
+      }
+
+      await connectToGateway(pendingDevice.id);
+      // Succès : fermer le panneau et le modal
+      setPendingDevice(null);
+      onClose();
+    } catch (err: any) {
+      // Erreur GATT → garder pendingDevice ouvert pour retry
+      const msg: string = err?.message ?? String(err);
+      const isPairing = msg.includes('133') || msg.includes('pairing') ||
+        msg.includes('bonding') || msg.includes('authentication');
+      Alert.alert(
+        isPairing ? 'PIN incorrect ou bond expiré' : 'Connexion échouée',
+        isPairing
+          ? 'Corrigez le PIN et réessayez.\nDéfaut MeshCore : 123456\n\nSi ça persiste : Paramètres Android → Bluetooth → supprimez "MeshCore-..." puis réessayez.'
+          : msg + '\n\nAppuyez sur Connecter pour réessayer.'
+      );
+    } finally {
+      setConnecting(false);
+      // setPendingDevice(null) UNIQUEMENT en cas de succès (voir ci-dessus)
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <View style={styles.modalContainer}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Bluetooth size={24} color={Colors.accent} />
+              <Text style={styles.title}>Scanner Gateway LoRa</Text>
+            </View>
+            <TouchableOpacity onPress={onClose}>
+              <X size={24} color={Colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Status connexion actuelle */}
+          {connected && device && (
+            <View style={styles.connectedBanner}>
+              <CheckCircle2 size={20} color={Colors.green} />
+              <Text style={styles.connectedText}>Connecté à {device.name}</Text>
+            </View>
+          )}
+
+          {/* Sélecteur de channel */}
+          {connected && (
+            <View style={styles.channelRow}>
+              <Radio size={16} color={Colors.textMuted} />
+              <Text style={styles.channelLabel}>Channel actif :</Text>
+              <View style={[styles.channelBadge, { backgroundColor: currentChannel === 0 ? `${Colors.green}20` : `${Colors.purple}20` }]}>
+                <Text style={[styles.channelText, { color: currentChannel === 0 ? Colors.green : Colors.purple }]}>
+                  {currentChannel === 0 ? '🌐 Public (ch0)' : `🔒 Privé (ch${currentChannel})`}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowChannelPicker(v => !v)}>
+                <Text style={styles.channelChange}>Changer →</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Picker de channel */}
+          {connected && showChannelPicker && (
+            <View style={styles.channelPickerContainer}>
+              {CHANNEL_OPTIONS.map(opt => (
+                <TouchableOpacity
+                  key={opt.idx}
+                  style={[styles.channelOption, currentChannel === opt.idx && styles.channelOptionActive]}
+                  onPress={() => { setChannel(opt.idx); setShowChannelPicker(false); }}
+                >
+                  <Text style={[styles.channelOptionText, currentChannel === opt.idx && styles.channelOptionTextActive]}>
+                    {opt.icon} {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {/* Panel de connexion (apparaît quand un device est sélectionné) */}
+          {pendingDevice && !connecting && (
+            <View style={styles.connectPanel}>
+              <Text style={styles.connectTitle}>Connecter à {pendingDevice.name}</Text>
+              <View style={styles.pinRow}>
+                <Text style={styles.pinLabel}>PIN (optionnel) :</Text>
+                <TextInput
+                  style={styles.pinInput}
+                  value={pinValue}
+                  onChangeText={setPinValue}
+                  placeholder="Ex: 1234"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                  maxLength={8}
+                />
+              </View>
+              <Text style={styles.pinHint}>
+                Défaut firmware MeshCore : 123456{'\n'}
+                Si votre device a un écran, entrez le PIN affiché.
+              </Text>
+              <View style={styles.connectBtnRow}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setPendingDevice(null)}>
+                  <Text style={styles.cancelBtnText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.connectBtn} onPress={doConnect}>
+                  <Text style={styles.connectBtnText}>Connecter</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Spinner connexion */}
+          {connecting && (
+            <View style={styles.bondingBanner}>
+              <ActivityIndicator size="small" color={Colors.accent} style={{ marginRight: 8 }} />
+              <Text style={styles.bondingText}>Connexion en cours...</Text>
+            </View>
+          )}
+
+          {/* Erreur BLE */}
+          {error && !localScanning && !connecting && (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>⚠ {error}</Text>
+            </View>
+          )}
+
+          {/* Boutons scan */}
+          {!pendingDevice && !connecting && (
+            <>
+              <TouchableOpacity
+                style={[styles.scanButton, localScanning && styles.scanButtonDisabled]}
+                onPress={handleScan}
+                disabled={localScanning}
+              >
+                {localScanning ? (
+                  <>
+                    <ActivityIndicator size="small" color={Colors.background} />
+                    <Text style={styles.scanButtonText}>Scan en cours...</Text>
+                  </>
+                ) : (
+                  <>
+                    <Wifi size={20} color={Colors.background} />
+                    <Text style={styles.scanButtonText}>Démarrer le scan</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.debugButton} onPress={handleDebugBle} disabled={localScanning}>
+                <Bug size={16} color={Colors.textMuted} />
+                <Text style={styles.debugButtonText}>Debug BLE (scan + alert + connecter)</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
+          {/* Liste des devices */}
+          <View style={styles.listContainer}>
+            <Text style={styles.listTitle}>Appareils BLE détectés ({localDevices.length})</Text>
+            {localDevices.length === 0 && !localScanning ? (
+              <Text style={styles.emptyText}>
+                Aucun appareil trouvé. Vérifiez que votre device MeshCore est allumé et à proximité.
+              </Text>
+            ) : (
+              <FlatList
+                data={localDevices}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item }) => (
+                  <DeviceItem device={item} onSelect={setPendingDevice} />
+                )}
+                style={styles.list}
+              />
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+interface DeviceItemProps {
+  device: BleGatewayDevice;
+  onSelect: (device: BleGatewayDevice) => void;
+}
+
+function DeviceItem({ device, onSelect }: DeviceItemProps) {
+  const signalColor = device.rssi > -70 ? Colors.green : device.rssi > -85 ? Colors.accent : Colors.red;
+  const typeColor = device.type === 'gateway' ? Colors.cyan : Colors.yellow;
+  const typeLabel = device.type === 'gateway' ? 'Gateway' : 'Compagnon';
+
+  return (
+    <TouchableOpacity style={styles.deviceItem} onPress={() => onSelect(device)}>
+      <View style={styles.deviceInfo}>
+        <Text style={styles.deviceName}>{device.name}</Text>
+        <View style={styles.deviceMeta}>
+          <View style={[styles.typeBadge, { backgroundColor: `${typeColor}20` }]}>
+            <Text style={[styles.typeText, { color: typeColor }]}>{typeLabel}</Text>
+          </View>
+          <Text style={styles.deviceId}>{device.id.slice(0, 17)}</Text>
+        </View>
+      </View>
+      <View style={styles.deviceRight}>
+        <View style={[styles.signalBadge, { backgroundColor: `${signalColor}20` }]}>
+          <Text style={[styles.signalText, { color: signalColor }]}>{device.rssi} dBm</Text>
+        </View>
+        <Bluetooth size={20} color={Colors.accent} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+    maxHeight: '85%',
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  connectedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: `${Colors.green}20`,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  connectedText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.green,
+  },
+  connectPanel: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: Colors.accent + '60',
+  },
+  connectTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text,
+    marginBottom: 12,
+  },
+  pinRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  pinLabel: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    width: 110,
+  },
+  pinInput: {
+    flex: 1,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    color: Colors.text,
+    fontSize: 16,
+    fontFamily: 'monospace',
+  },
+  pinHint: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    lineHeight: 16,
+    marginBottom: 12,
+  },
+  connectBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    fontWeight: '600',
+  },
+  connectBtn: {
+    flex: 2,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: Colors.accent,
+    alignItems: 'center',
+  },
+  connectBtnText: {
+    fontSize: 14,
+    color: Colors.background,
+    fontWeight: '700',
+  },
+  scanButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: Colors.accent,
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  scanButtonDisabled: {
+    opacity: 0.6,
+  },
+  scanButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.background,
+  },
+  debugButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 8,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  debugButtonText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  bondingBanner: {
+    backgroundColor: `${Colors.accent}20`,
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: `${Colors.accent}50`,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bondingText: {
+    color: Colors.accent,
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  errorBanner: {
+    backgroundColor: `${Colors.red}20`,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: `${Colors.red}40`,
+  },
+  errorText: {
+    color: Colors.red,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  channelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  channelLabel: {
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  channelBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  channelText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  channelChange: {
+    fontSize: 13,
+    color: Colors.accent,
+    fontWeight: '600',
+  },
+  channelPickerContainer: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  channelOption: {
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  channelOptionActive: {
+    backgroundColor: `${Colors.accent}20`,
+  },
+  channelOptionText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  channelOptionTextActive: {
+    color: Colors.accent,
+    fontWeight: '700',
+  },
+  listContainer: {
+    flex: 1,
+  },
+  listTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+  },
+  list: {
+    flex: 1,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginTop: 20,
+    paddingHorizontal: 20,
+    lineHeight: 22,
+  },
+  deviceItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  deviceInfo: {
+    flex: 1,
+  },
+  deviceName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  deviceMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  typeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  deviceId: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    fontFamily: 'monospace',
+  },
+  deviceRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  signalBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+  },
+  signalText: {
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+});
