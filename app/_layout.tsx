@@ -39,7 +39,7 @@ import { ShopProvider } from "@/providers/ShopProvider";
 // Hermès démarre uniquement après création d'identité (via UnifiedIdentityManager)
 // pour éviter le double démarrage et les conflits
 
-import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener } from "@/utils/notifications";
+import { requestNotificationPermission, configureNotificationChannels, addNotificationResponseListener, initNotifications } from "@/utils/notifications";
 import { router } from "expo-router";
 import { WelcomeModal } from "@/components/WelcomeModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -174,6 +174,7 @@ function AppContent() {
   }, [isHydrated, onboardingDone]);
 
   useEffect(() => {
+    initNotifications();
     requestNotificationPermission()
       .then(() => configureNotificationChannels())
       .catch((e) => console.warn('[Layout] Notification permission error:', e));

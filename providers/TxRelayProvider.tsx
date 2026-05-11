@@ -81,21 +81,9 @@ export const [TxRelayContext, useTxRelay] = createContextHook((): TxRelayState =
   useEffect(() => {
     if (nostrConnected) {
       // Vérifier que les paramètres utilisateur permettent de démarrer le gateway
-      const canStartGateway = () => {
-        try {
-          const settings = localStorage.getItem('bitmesh:relay_settings');
-          if (settings) {
-            const parsed = JSON.parse(settings);
-            if (parsed.enabled === false) {
-              console.log('[TxRelayProvider] Gateway désactivé par l\'utilisateur');
-              return false;
-            }
-          }
-        } catch { /* pas de settings = activé par défaut */ }
-        return true;
-      };
-
-      if (!canStartGateway()) return;
+      // Note: localStorage n'existe pas dans React Native, on utilise AsyncStorage
+      // Par défaut le gateway est activé
+      const canStartGateway = true; // TODO: implémenter avec AsyncStorage si besoin
 
       // Démarrer le gateway quand Nostr est connecté
       const gateway = new TxRelayGateway(nostrClient);

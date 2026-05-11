@@ -440,6 +440,9 @@ export const useWalletStore = create<WalletState>()(
           if (state) {
             state.rehydrationError = err;
             state.setHasHydrated(true);
+          } else {
+            // State null + error — force hydratation quand même pour débloquer le splash
+            useWalletStore.getState().setHasHydrated(true);
           }
           return;
         }
@@ -456,6 +459,10 @@ export const useWalletStore = create<WalletState>()(
           } else {
             state.setHasHydrated(true);
           }
+        } else {
+          // Premier lancement — state null = pas de données précédentes
+          // Forcer l'hydratation pour débloquer le splash screen
+          useWalletStore.getState().setHasHydrated(true);
         }
       },
       partialize: (state) => ({

@@ -68,6 +68,7 @@ import {
   LORA_SHOP_PREFIX,
   LORA_PAY_PREFIX,
 } from '@/utils/shop';
+import { getChunkManager } from '@/services/ChunkManager';
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -131,7 +132,7 @@ export function useShop(): ShopContextType {
 // ─── Provider ────────────────────────────────────────────────────────────────
 
 export function ShopProvider({ children }: { children: React.ReactNode }) {
-  const { publish, publishDMSealed, publicKey } = useNostr();
+  const { publish, publishDMSealed, publicKey, isConnected: nostrConnected } = useNostr();
   const ble = useBle();
   const { settings } = useAppSettings();
   const notificationsEnabled = settings.notifications;
