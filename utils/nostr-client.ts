@@ -611,14 +611,13 @@ export class NostrClient {
     if (!this.isConnected) throw new Error('[Nostr] Hors ligne — Gift Wrap nécessite une connexion active');
 
     // Créer le rumor (kind:14 PrivateDirectMessage) puis le wrap avec nip17
-    const rumor: NostrEvent = {
+    // Note: wrapEvent attend un UnsignedEvent (sans id/sig)
+    const rumor = {
       kind: Kind.PrivateDirectMessage,
       content,
       tags: [['p', recipientPubKey]],
       created_at: Math.floor(Date.now() / 1000),
       pubkey: this.keypair.publicKey,
-      id: '',
-      sig: '',
     };
 
     // Créer le gift wrap chiffré pour le destinataire

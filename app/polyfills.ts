@@ -58,6 +58,16 @@ if (typeof globalThis === 'object') {
   }
 }
 
+// TextEncoder / TextDecoder polyfill (required by ble-gateway, nostr-tools, etc.)
+try {
+  if (typeof global.TextEncoder === 'undefined' || typeof global.TextDecoder === 'undefined') {
+    require('@stardazed/streams-text-encoding');
+    console.log('[Polyfills] TextEncoder/TextDecoder initialized');
+  }
+} catch (e) {
+  console.warn('@stardazed/streams-text-encoding polyfill failed', e);
+}
+
 // URL polyfill
 try {
   if (typeof global.URL === 'undefined') {
