@@ -225,8 +225,10 @@ export function BleProvider({ children }: { children: React.ReactNode }) {
         });
 
         // Callback : stats — stockées par type pour ne pas écraser les autres
+        // FIX: stats.type est un nombre (0/1/2), on map vers clé string
         client.onStats((stats) => {
-          setState((prev) => ({ ...prev, allStats: { ...prev.allStats, [stats.type]: stats } }));
+          const typeKey = stats.type === 0 ? 'core' : stats.type === 1 ? 'radio' : 'packets';
+          setState((prev) => ({ ...prev, allStats: { ...prev.allStats, [typeKey]: stats } }));
         });
 
         // Callback : voisins

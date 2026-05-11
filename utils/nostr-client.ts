@@ -610,15 +610,22 @@ export class NostrClient {
     if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
     if (!this.isConnected) throw new Error('[Nostr] Hors ligne — Gift Wrap nécessite une connexion active');
 
-    // Créer le sealed event (rumor) puis le wrap individuel
-    // nip17.wrapEvent crée un gift wrap chiffré pour le destinataire
-    const recipientPubkeyHex = recipientPubKey;
+    // Créer le rumor (kind:14 PrivateDirectMessage) puis le wrap avec nip17
+    const rumor: NostrEvent = {
+      kind: Kind.PrivateDirectMessage,
+      content,
+      tags: [['p', recipientPubKey]],
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: this.keypair.publicKey,
+      id: '',
+      sig: '',
+    };
 
-    // Créer le wrap pour le destinataire
+    // Créer le gift wrap chiffré pour le destinataire
     const sealedEvent = nip17.wrapEvent(
       this.keypair.secretKey,
-      recipientPubkeyHex,
-      content,
+      recipientPubKey,
+      rumor,
     );
     const wraps = [sealedEvent];
 
