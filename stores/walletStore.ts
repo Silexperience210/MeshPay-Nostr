@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Hermès Engine - émission d'événements
 import { hermes, EventType, Transport } from '@/engine';
+import { utf8Encode, utf8Decode } from '@/utils/text-codec';
 
 // Types et fonctions Bitcoin qui ne dépendent pas de @noble/hashes
 import type { DerivedWalletInfo } from '@/utils/bitcoin';
@@ -61,8 +62,8 @@ async function exportWalletEncryptedInternal(mnemonic: string, password: string)
   const salt = randomBytes(32);
   const iv = randomBytes(12);
 
-  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 10_000, dkLen: 32 });
-  const plaintext = new TextEncoder().encode(mnemonic);
+  const key = pbkdf2(sha256, utf8Encode(password), salt, { c: 10_000, dkLen: 32 });
+  const plaintext = utf8Encode(mnemonic);
   const ciphertext = gcm(key, iv).encrypt(plaintext);
 
   const backup: EncryptedWalletBackup = {
@@ -93,11 +94,11 @@ async function importWalletDecryptedInternal(backupJson: string, password: strin
   const iv = hexToBytes(backup.iv);
   const ciphertext = hexToBytes(backup.ct);
 
-  const key = pbkdf2(sha256, new TextEncoder().encode(password), salt, { c: 10_000, dkLen: 32 });
+  const key = pbkdf2(sha256, utf8Encode(password), salt, { c: 10_000, dkLen: 32 });
 
   try {
     const plaintext = gcm(key, iv).decrypt(ciphertext);
-    return new TextDecoder().decode(plaintext);
+    return utf8Decode(plaintext);
   } catch {
     throw new Error('Mot de passe incorrect ou backup corrompu');
   }

@@ -1,3 +1,4 @@
+import { utf8Encode, utf8Decode } from './text-codec';
 /**
  * Repeater Configuration - Version Protocol Binaire MeshCore
  * 
@@ -67,7 +68,7 @@ export async function configureRepeater(
 ): Promise<boolean> {
   try {
     if (config.name) {
-      const nameData = new TextEncoder().encode(config.name);
+      const nameData = utf8Encode(config.name);
       await sendFn(encodeRepeaterCommand(REPEATER_CMDS.SET_NAME, nameData));
     }
     
@@ -127,7 +128,7 @@ export async function getRepeaterNeighbors(
     if (!response) return [];
     
     try {
-      return JSON.parse(new TextDecoder().decode(response));
+      return JSON.parse(utf8Decode(response));
     } catch {
       return parseBinaryNeighbors(response);
     }
@@ -144,7 +145,7 @@ function parseBinaryNeighbors(data: Uint8Array): RepeaterNeighbor[] {
   while (offset < data.length) {
     try {
       const idLen = data[offset++];
-      const nodeId = new TextDecoder().decode(data.slice(offset, offset + idLen));
+      const nodeId = utf8Decode(data.slice(offset, offset + idLen));
       offset += idLen;
       
       const rssi = -data[offset++];
@@ -175,7 +176,7 @@ export async function getRepeaterStats(
     if (!response) return null;
     
     try {
-      const data = JSON.parse(new TextDecoder().decode(response));
+      const data = JSON.parse(utf8Decode(response));
       return {
         totalRelayed: data.totalRelayed || 0,
         totalDropped: data.totalDropped || 0,

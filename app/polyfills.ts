@@ -59,12 +59,29 @@ if (typeof globalThis === 'object') {
 }
 
 // TextEncoder / TextDecoder polyfill (required by ble-gateway, nostr-tools, etc.)
-// NOTE: @stardazed/streams-text-encoding provides TextEncoderStream/TextDecoderStream,
-// NOT TextEncoder/TextDecoder. Use fast-text-encoding for the base classes.
+// NOTE 1: @stardazed/streams-text-encoding provides TextEncoderStream/TextDecoderStream,
+//   NOT TextEncoder/TextDecoder. Use fast-text-encoding for the base classes.
+// NOTE 2: On Hermes (RN's JS engine), `fast-text-encoding` attaches to `globalThis`
+//   but `global.TextEncoder` may still be undefined depending on the bundle. We
+//   force-mirror onto both `global` AND `globalThis` so bare `new TextEncoder()`
+//   (which looks up the identifier in the global scope) always resolves.
 try {
-  if (typeof global.TextEncoder === 'undefined' || typeof global.TextDecoder === 'undefined') {
+  if (typeof (globalThis as any).TextEncoder === 'undefined' || typeof (globalThis as any).TextDecoder === 'undefined') {
     require('fast-text-encoding');
     console.log('[Polyfills] TextEncoder/TextDecoder initialized via fast-text-encoding');
+  }
+  // Mirror onto `global` in case fast-text-encoding only patched `globalThis`
+  if (typeof (global as any).TextEncoder === 'undefined' && typeof (globalThis as any).TextEncoder !== 'undefined') {
+    (global as any).TextEncoder = (globalThis as any).TextEncoder;
+    console.log('[Polyfills] TextEncoder mirrored from globalThis to global');
+  }
+  if (typeof (global as any).TextDecoder === 'undefined' && typeof (globalThis as any).TextDecoder !== 'undefined') {
+    (global as any).TextDecoder = (globalThis as any).TextDecoder;
+    console.log('[Polyfills] TextDecoder mirrored from globalThis to global');
+  }
+  // Sanity check — log if still missing so the dev sees it in Logcat
+  if (typeof (global as any).TextEncoder === 'undefined') {
+    console.error('[Polyfills] CRITICAL: TextEncoder still undefined on global after polyfill attempts');
   }
 } catch (e) {
   console.warn('fast-text-encoding polyfill failed:', e);

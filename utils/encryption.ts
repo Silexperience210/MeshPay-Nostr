@@ -5,6 +5,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 export interface EncryptedPayload {
   v: number;
@@ -107,8 +108,7 @@ export function generateForumSalt(): Uint8Array {
  * @returns Clé symétrique de 32 bytes dérivée via HKDF
  */
 export function deriveForumKey(channelName: string): Uint8Array {
-  const encoder = new TextEncoder();
-  const ikm = encoder.encode('forum:' + channelName);
+  const ikm = utf8Encode('forum:' + channelName);
   
   // Si aucun sel n'est défini, générer un sel aléatoire à la volée
   // (mieux qu'un sel hardcodé identique pour toutes les installations)
@@ -128,7 +128,7 @@ export function deriveForumKey(channelName: string): Uint8Array {
   // salt: sel unique par installation
   // info: contexte de dérivation
   // dkLen: 32 bytes pour AES-256
-  const info = encoder.encode('meshpay-forum-v1');
+  const info = utf8Encode('meshpay-forum-v1');
   return hkdf(sha256, ikm, salt, info, 32);
 }
 
@@ -154,8 +154,7 @@ export function decryptForumWithKey(payload: EncryptedPayload, pskHex: string): 
 // --- Chiffrement AES-GCM-256 ---
 export function encryptMessage(plaintext: string, key: Uint8Array): EncryptedPayload {
   if (key.length !== 32) throw new Error('Key must be 32 bytes');
-  const encoder = new TextEncoder();
-  const data = encoder.encode(plaintext);
+  const data = utf8Encode(plaintext);
   const nonce = randomBytes(12);
   const cipher = gcm(key, nonce);
   const ciphertext = cipher.encrypt(data);
@@ -174,7 +173,7 @@ export function decryptMessage(payload: EncryptedPayload, key: Uint8Array): stri
   const ciphertext = fromBase64(payload.ct);
   const cipher = gcm(key, nonce);
   const plaintext = cipher.decrypt(ciphertext);
-  return new TextDecoder().decode(plaintext);
+  return utf8Decode(plaintext);
 }
 
 // --- Chiffrer un DM pour un destinataire ---

@@ -63,6 +63,7 @@ import {
 // Import Cashu validation
 import { verifyCashuToken, generateTokenId } from '@/utils/cashu';
 import { getChunkManager, validateMessageSize } from '@/services/ChunkManager';
+import { utf8Encode } from '@/utils/text-codec';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const JOINED_FORUMS_KEY = 'bitmesh:joined_forums_v1';
@@ -294,7 +295,7 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
             toNodeId: packet.toNodeId,
             timestamp: packet.timestamp,
             subMeshId: (packet as any).subMeshId || 0,
-            payload: new TextEncoder().encode(result.message),
+            payload: utf8Encode(result.message),
           };
           
           // Traiter le paquet reconstruit

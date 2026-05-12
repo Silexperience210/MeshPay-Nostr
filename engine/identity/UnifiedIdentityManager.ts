@@ -13,6 +13,7 @@ import { gcm } from '@noble/ciphers/aes.js';
 import { deriveUnifiedIdentity, UnifiedIdentity, BitcoinIdentity, NostrIdentity, MeshCoreIdentity } from './Derivation';
 import { HermesEngine, hermes } from '../HermesEngine';
 import { EventType } from '../types';
+import { utf8Encode, utf8Decode } from '@/utils/text-codec';
 
 /** Yield the JS thread so the UI can update */
 const yieldThread = () => new Promise<void>(resolve => setTimeout(resolve, 0));
@@ -285,13 +286,13 @@ export class UnifiedIdentityManager {
 
     const keyMaterial = pbkdf2(
       sha256,
-      new TextEncoder().encode(password),
+      utf8Encode(password),
       salt,
       { c: PBKDF2_ITERATIONS, dkLen: 32 }
     );
 
     const cipher = gcm(keyMaterial, iv);
-    const ciphertext = cipher.encrypt(new TextEncoder().encode(key));
+    const ciphertext = cipher.encrypt(utf8Encode(key));
 
     return JSON.stringify({
       v: ENCRYPTION_VERSION,
@@ -314,7 +315,7 @@ export class UnifiedIdentityManager {
 
     const keyMaterial = pbkdf2(
       sha256,
-      new TextEncoder().encode(password),
+      utf8Encode(password),
       saltBytes,
       { c: PBKDF2_ITERATIONS, dkLen: 32 }
     );
@@ -322,7 +323,7 @@ export class UnifiedIdentityManager {
     try {
       const decipher = gcm(keyMaterial, ivBytes);
       const plaintext = decipher.decrypt(ciphertext);
-      return new TextDecoder().decode(plaintext);
+      return utf8Decode(plaintext);
     } catch (error) {
       throw new DecryptionError();
     }

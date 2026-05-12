@@ -7,6 +7,7 @@
 
 // Compression functions imported from compression.ts
 import { compressWithFallback, decompressFromLora, isCompressed } from './compression';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // UUIDs BLE MeshCore (Nordic UART Service standard)
 export const MESHCORE_BLE = {
@@ -50,8 +51,7 @@ export const LORA_MAX_TEXT_CHARS = 200; // caractères
  * (Utilisé localement — non exporté car non utilisé à l'extérieur)
  */
 function validateMessageSize(text: string): { valid: boolean; size: number; max: number } {
-  const encoder = new TextEncoder();
-  const size = encoder.encode(text).length;
+  const size = utf8Encode(text).length;
   return {
     valid: size <= LORA_MAX_PAYLOAD,
     size,
@@ -283,8 +283,7 @@ export async function createTextMessage(
       flags |= MeshCoreFlags.COMPRESSED;
     }
   } else {
-    const encoder = new TextEncoder();
-    payload = encoder.encode(text);
+    payload = utf8Encode(text);
   }
 
   if (encrypted) flags |= MeshCoreFlags.ENCRYPTED;
@@ -330,8 +329,7 @@ export function createTextMessageSync(
       console.log('[MeshCore] Compression activée:', text.length, '→', payload.length, 'bytes');
     }
   } else {
-    const encoder = new TextEncoder();
-    payload = encoder.encode(text);
+    payload = utf8Encode(text);
   }
 
   if (encrypted) flags |= MeshCoreFlags.ENCRYPTED;
@@ -376,9 +374,7 @@ export function extractTextFromPacket(packet: MeshCorePacket): string {
   if (packet.flags & MeshCoreFlags.COMPRESSED) {
     return decompressFromLora(packet.payload);
   }
-
-  const decoder = new TextDecoder();
-  return decoder.decode(packet.payload);
+  return utf8Decode(packet.payload);
 }
 
 /**
@@ -515,8 +511,7 @@ export function createPingPacket(fromNodeId: string): MeshCorePacket {
  * Payload : pubkey compressed secp256k1 (33 bytes hex) encodé en UTF-8
  */
 export function createKeyAnnouncePacket(fromNodeId: string, pubkeyHex: string): MeshCorePacket {
-  const encoder = new TextEncoder();
-  const payload = encoder.encode(pubkeyHex); // 66 chars hex = 33 bytes compressed pubkey
+    const payload = utf8Encode(pubkeyHex); // 66 chars hex = 33 bytes compressed pubkey
 
   return {
     version: 0x01,
@@ -539,9 +534,7 @@ export function extractPubkeyFromAnnounce(packet: MeshCorePacket): string | null
   if (packet.type !== MeshCoreMessageType.KEY_ANNOUNCE) {
     return null;
   }
-
-  const decoder = new TextDecoder();
-  const pubkeyHex = decoder.decode(packet.payload);
+  const pubkeyHex = utf8Decode(packet.payload);
 
   // Valider que c'est bien du hex de 66 caractères (33 bytes compressed)
   if (!/^[0-9a-fA-F]{66}$/.test(pubkeyHex)) {
@@ -667,8 +660,7 @@ export function chunkMessage(
   text: string,
   messageId: number
 ): MessageChunk[] | null {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(text);
+    const data = utf8Encode(text);
   
   // Si ça tient dans un seul paquet, pas besoin de chunking
   if (data.length <= LORA_MAX_PAYLOAD) {
@@ -773,7 +765,7 @@ export function reassembleChunks(
     offset += part.length;
   }
   
-  return new TextDecoder().decode(fullData);
+  return utf8Decode(fullData);
 }
 
 /**

@@ -2,6 +2,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { logger } from '@/utils/logger';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // ─── Configuration de validation ──────────────────────────────────────────────
 const DLEQ_REQUIRED = true; // DLEQ requis par défaut (NUT-12)
@@ -153,7 +154,7 @@ export interface CashuProof {
 }
 
 function hashToCurve(message: Uint8Array): InstanceType<typeof secp256k1.ProjectivePoint> {
-  const domainSeparator = new TextEncoder().encode('Secp256k1_HashToCurve_Cashu_');
+  const domainSeparator = utf8Encode('Secp256k1_HashToCurve_Cashu_');
   let counter = 0;
 
   while (counter < 65536) {
@@ -214,7 +215,7 @@ function generateSecret(): string {
 
 export function createBlindedMessage(amount: number, keysetId: string): BlindedMessage {
   const secret = generateSecret();
-  const secretBytes = new TextEncoder().encode(secret);
+  const secretBytes = utf8Encode(secret);
 
   const Y = hashToCurve(secretBytes);
   const r = generateBlindingFactor();
@@ -298,7 +299,7 @@ export function verifyDleqProof(
     const eK = K.multiply(e);
     const R1 = sG.add(eK.negate()); // R1 = s*G - e*K (NUT-12)
 
-    const secretBytes = new TextEncoder().encode(proof.secret);
+    const secretBytes = utf8Encode(proof.secret);
     const Y = hashToCurve(secretBytes);
     const sY = Y.multiply(s);
     const eC = C.multiply(e);
@@ -652,7 +653,7 @@ export async function checkProofsSpent(
 
   const Ys = proofs.map(p => {
     try {
-      const secretBytes = new TextEncoder().encode(p.secret);
+      const secretBytes = utf8Encode(p.secret);
       const Y = hashToCurve(secretBytes);
       return Y.toHex(true);
     } catch {
@@ -684,7 +685,7 @@ export async function checkProofsSpent(
 export function encodeCashuToken(token: CashuToken): string {
   const json = JSON.stringify(token);
   // ✅ Remplacer Buffer.from par TextEncoder (compatible React Native)
-  const bytes = new TextEncoder().encode(json);
+  const bytes = utf8Encode(json);
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);
@@ -710,7 +711,7 @@ export function decodeCashuToken(encoded: string): CashuToken | null {
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    const json = new TextDecoder().decode(bytes);
+    const json = utf8Decode(bytes);
     const token = JSON.parse(json) as CashuToken;
 
     // Sanitizer le mémo : limiter la taille et s'assurer que c'est bien une string
@@ -908,7 +909,7 @@ export async function verifyCashuToken(
 
 export function generateTokenId(token: CashuToken): string {
   const secrets = token.token.flatMap(t => t.proofs.map(p => p.secret)).sort().join('|');
-  const hash = sha256(new TextEncoder().encode(secrets));
+  const hash = sha256(utf8Encode(secrets));
   return `cashu_${bytesToHex(hash).slice(0, 12)}_${Date.now().toString(36)}`;
 }
 
@@ -1246,7 +1247,7 @@ export function createAtomicSwap(
   const idBytes = new Uint8Array(6);
   crypto.getRandomValues(idBytes);
   const id = `swap_${Date.now()}_${bytesToHex(idBytes)}`;
-  const secretBytes = new TextEncoder().encode(secret);
+  const secretBytes = utf8Encode(secret);
   const hashBytes = sha256(secretBytes);
   const hashlock = bytesToHex(hashBytes);
   const timelock = Date.now() + (timelockHours * 60 * 60 * 1000);
@@ -1277,7 +1278,7 @@ export function claimAtomicSwap(
     return false;
   }
 
-  const secretBytes = new TextEncoder().encode(secret);
+  const secretBytes = utf8Encode(secret);
   const hashBytes = sha256(secretBytes);
   const providedHash = bytesToHex(hashBytes);
 

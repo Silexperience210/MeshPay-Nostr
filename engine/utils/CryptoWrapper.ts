@@ -17,6 +17,7 @@ import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils.js';
+import { utf8Encode, utf8Decode } from '@/utils/text-codec';
 
 // ============================================================================
 // Constantes de sécurité
@@ -600,7 +601,7 @@ export class NobleCryptoWrapper implements CryptoWrapper {
     if (typeof str !== 'string') {
       throw new Error('Input must be a string');
     }
-    return new TextEncoder().encode(str);
+    return utf8Encode(str);
   }
 
   /**
@@ -611,7 +612,7 @@ export class NobleCryptoWrapper implements CryptoWrapper {
       throw new Error('Input must be a Uint8Array');
     }
     try {
-      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      return utf8Decode(bytes);
     } catch (error) {
       throw new Error('Invalid UTF-8 sequence');
     }

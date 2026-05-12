@@ -6,6 +6,7 @@
 
 import { UsbSerialManager, type UsbSerial } from 'react-native-usb-serialport-for-android';
 import { decompressFromLora } from './compression';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 export interface MeshCoreUsbDevice {
   id: number;
@@ -157,14 +158,14 @@ async function parseTextPacket(data: Uint8Array, flags: number): Promise<{
     if (flags & 0x02) { // COMPRESSED flag
       // ✅ Décompression via compression.ts (import statique)
       try {
-        const compressed = new TextDecoder().decode(payload);
+        const compressed = utf8Decode(payload);
         text = decompressFromLora(compressed);
       } catch (err) {
         console.error('[MeshCore-USB] Decompression failed:', err);
         text = '[Decompression failed]';
       }
     } else {
-      text = new TextDecoder().decode(payload);
+      text = utf8Decode(payload);
     }
     
     return {
