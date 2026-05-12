@@ -610,35 +610,57 @@ export class NostrClient {
     if (!this.keypair) throw new Error('[Nostr] Keypair non initialisée');
     if (!this.isConnected) throw new Error('[Nostr] Hors ligne — Gift Wrap nécessite une connexion active');
 
-    // Créer le rumor (kind:14 PrivateDirectMessage) puis le wrap avec nip17
-    // Note: wrapEvent attend un UnsignedEvent (sans id/sig)
-    const rumor = {
+    const myPrivKey = this.keypair.secretKey;
+    const myPubKey = this.keypair.publicKey;
+
+    // ── NIP-17 Gift Wrap — implémentation manuelle (nip17.wrapEvent API instable) ──
+    // 1. Rumor (kind:14) — le message en clair
+    const rumor: EventTemplate = {
       kind: Kind.PrivateDirectMessage,
       content,
       tags: [['p', recipientPubKey]],
       created_at: Math.floor(Date.now() / 1000),
-      pubkey: this.keypair.publicKey,
+      pubkey: myPubKey,
     };
 
-    // Créer le gift wrap chiffré pour le destinataire
-    const sealedEvent = nip17.wrapEvent(
-      this.keypair.secretKey,
-      recipientPubKey,
-      rumor,
-    );
-    const wraps = [sealedEvent];
+    // 2. Seal (kind:13) — rumor chiffré avec NIP-44, signé par la clé de l'expéditeur
+    const sealConversationKey = nip44.getConversationKey(myPrivKey, recipientPubKey);
+    const sealContent = nip44.encrypt(JSON.stringify(rumor), sealConversationKey);
 
-    // Publier tous les wraps en parallèle (ne pas bloquer si un relay refuse)
-    await Promise.all(
-      wraps.map(wrap =>
-        Promise.any(this.pool.publish(this.relayUrls, wrap)).catch(() => {
-          console.warn('[Nostr] Gift Wrap : relay n\'a pas accepté kind:1059');
-        }),
-      ),
-    );
+    const seal = finalizeEvent({
+      kind: 13,
+      content: sealContent,
+      tags: [['p', recipientPubKey]],
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: myPubKey,
+    }, myPrivKey);
+
+    // 3. Gift Wrap (kind:1059) — seal chiffré avec NIP-44, signé par clé éphémère
+    const ephemeralPrivKey = secp256k1.utils.randomPrivateKey();
+    const ephemeralPubKey = getPublicKey(ephemeralPrivKey);
+
+    const gwConversationKey = nip44.getConversationKey(ephemeralPrivKey, recipientPubKey);
+    const gwContent = nip44.encrypt(JSON.stringify(seal), gwConversationKey);
+
+    // NIP-17 : timestamp aléatoire ±2 jours pour l'obfuscation
+    const now = Math.floor(Date.now() / 1000);
+    const randomOffset = Math.floor(Math.random() * 345600) - 172800;
+
+    const giftWrap = finalizeEvent({
+      kind: Kind.GiftWrap,
+      content: gwContent,
+      tags: [['p', recipientPubKey]],
+      created_at: now + randomOffset,
+      pubkey: ephemeralPubKey,
+    }, ephemeralPrivKey);
+
+    // Publier le gift wrap (ne pas bloquer si un relay refuse)
+    await Promise.any(this.pool.publish(this.relayUrls, giftWrap)).catch(() => {
+      console.warn('[Nostr] Gift Wrap : relay n\'a pas accepté kind:1059');
+    });
 
     console.log('[Nostr] Gift Wrap envoyé — kind:1059, destinataire:', recipientPubKey.slice(0, 12) + '…');
-    return sealedEvent;
+    return giftWrap;
   }
 
   /**

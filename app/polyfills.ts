@@ -59,13 +59,15 @@ if (typeof globalThis === 'object') {
 }
 
 // TextEncoder / TextDecoder polyfill (required by ble-gateway, nostr-tools, etc.)
+// NOTE: @stardazed/streams-text-encoding provides TextEncoderStream/TextDecoderStream,
+// NOT TextEncoder/TextDecoder. Use fast-text-encoding for the base classes.
 try {
   if (typeof global.TextEncoder === 'undefined' || typeof global.TextDecoder === 'undefined') {
-    require('@stardazed/streams-text-encoding');
-    console.log('[Polyfills] TextEncoder/TextDecoder initialized');
+    require('fast-text-encoding');
+    console.log('[Polyfills] TextEncoder/TextDecoder initialized via fast-text-encoding');
   }
 } catch (e) {
-  console.warn('@stardazed/streams-text-encoding polyfill failed', e);
+  console.warn('fast-text-encoding polyfill failed:', e);
 }
 
 // URL polyfill
