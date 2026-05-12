@@ -707,13 +707,30 @@ export class NostrClient {
   // ── NIP-28 : Channels ─────────────────────────────────────────────────────
 
   /**
-   * Crée un channel public. Retourne l'event dont l'id est l'identifiant du channel.
+   * Tag NIP-12 utilisé pour identifier les forums MeshPay sur les relais Nostr.
+   * Permet à `subscribeForums` de filtrer uniquement les forums MeshPay au lieu
+   * de recevoir tous les kind:40 globaux (Damus, Iris, etc).
+   */
+  static readonly MESHPAY_FORUM_TAG = 'meshpay-forum';
+
+  /**
+   * Crée un channel public (NIP-28 kind:40).
+   *
+   * ✅ FIX FORUM DISCOVERY : ajoute un tag `['t', 'meshpay-forum']` (NIP-12)
+   * pour identifier le forum comme appartenant à MeshPay. Sans ce tag,
+   * `subscribeForums` recevait tous les kind:40 globaux du relai (la majorité
+   * non liés à MeshPay), rendant la découverte invisible dans le bruit.
+   *
+   * @returns L'event publié dont l'id est l'identifiant du channel.
    */
   async createChannel(name: string, about: string, picture?: string): Promise<NostrEvent> {
     return this.publish({
       kind: Kind.ChannelCreate,
       content: JSON.stringify({ name, about, picture: picture ?? '' }),
-      tags: [],
+      tags: [
+        ['t', NostrClient.MESHPAY_FORUM_TAG], // identifie MeshPay (NIP-12)
+        ['name', name.toLowerCase().trim()],  // facette de recherche / dedup
+      ],
       created_at: Math.floor(Date.now() / 1000),
     });
   }
@@ -755,23 +772,52 @@ export class NostrClient {
   }
 
   /**
-   * Découverte de forums publics via NIP-28 kind:40 (ChannelCreate).
-   * Récupère les `limit` forums les plus récents sur les relays.
+   * Découverte de forums publics MeshPay via NIP-28 kind:40 (ChannelCreate).
    *
-   * ✅ FIX : kind:40 sont exemptés du check d'âge 24h dans _validateEvent
-   * (sinon tous les forums créés il y a plus de 24h seraient rejetés).
+   * ✅ FIX FORUM DISCOVERY : filtre par tag `#t: meshpay-forum` (NIP-12) pour
+   * ne récupérer que les forums créés par MeshPay (ignore le bruit de tous les
+   * autres kind:40 du relai). Combiné au tag posé par `createChannel`.
    *
-   * @param onChannel  Callback appelé pour chaque kind:40 valide
+   * Note : kind:40 sont exemptés du check d'âge 24h dans `_validateEvent`
+   * (un forum créé il y a des mois reste valide).
+   *
+   * @param onChannel  Callback appelé pour chaque kind:40 MeshPay valide
    * @param onEOSE     Callback appelé quand les relays ont fini d'envoyer
    *                   les events stockés (End Of Stored Events)
-   * @param limit      Nombre max d'events à recevoir (défaut 50)
+   * @param limit      Nombre max d'events à recevoir (défaut 100)
    */
   subscribeForums(
     onChannel: (event: NostrEvent) => void,
     onEOSE?: () => void,
+    limit = 100,
+  ): () => void {
+    console.log(`[Nostr] subscribeForums: kind:40 #t=${NostrClient.MESHPAY_FORUM_TAG} limit=${limit} relays=${this.relayUrls.length}`);
+    return this.subscribe(
+      [{
+        kinds: [Kind.ChannelCreate],
+        '#t': [NostrClient.MESHPAY_FORUM_TAG],
+        limit,
+      }],
+      onChannel,
+      onEOSE,
+    );
+  }
+
+  /**
+   * Découverte de forums kind:40 sans filtrage par tag MeshPay (rétrocompat).
+   *
+   * À utiliser en complément de `subscribeForums` pour récupérer les forums
+   * créés AVANT l'introduction du tag (commit "fix forum discovery" v1.0.10).
+   * Le filtrage MeshPay se fait alors côté client en parsant le content JSON.
+   *
+   * Sera supprimé une fois la base de forums migrée (~v1.2.0).
+   */
+  subscribeForumsLegacy(
+    onChannel: (event: NostrEvent) => void,
+    onEOSE?: () => void,
     limit = 50,
   ): () => void {
-    console.log(`[Nostr] subscribeForums: kind:40 limit=${limit} relays=${this.relayUrls.length}`);
+    console.log(`[Nostr] subscribeForumsLegacy: kind:40 limit=${limit} (sans tag MeshPay)`);
     return this.subscribe(
       [{ kinds: [Kind.ChannelCreate], limit }],
       onChannel,

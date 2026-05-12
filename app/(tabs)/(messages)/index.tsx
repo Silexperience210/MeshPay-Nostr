@@ -243,43 +243,61 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   };
 
   // Découverte de forums via kind:40 quand l'onglet est actif
+  // ✅ FIX FORUM DISCOVERY :
+  //   - Double subscription : taggé MeshPay (préférée) + legacy (rétrocompat
+  //     pour les forums créés avant l'ajout du tag dans createChannel)
+  //   - Filtrage côté client pour la branche legacy : name pattern strict
+  //     pour éviter le bruit des kind:40 globaux non-MeshPay du relai
   useEffect(() => {
     if (tab !== 'discover' || !visible || !nostrConnected) return;
 
     setDiscoverLoading(true);
     const found = new Map<string, DiscoveredForum>();
     let receivedCount = 0;
+    let eoseCount = 0; // attendre EOSE des 2 subscriptions
 
     console.log('[Discover] Démarrage recherche forums Nostr...');
 
-    const unsub = nostrClient.subscribeForums(
-      (event: NostrEvent) => {
-        receivedCount++;
-        try {
-          const meta = JSON.parse(event.content) as { name?: string; about?: string };
-          const forumName = (meta.name ?? '').toLowerCase().trim();
-          if (!forumName) return;
-          if (!found.has(event.id)) {
-            found.set(event.id, {
-              channelId: event.id,
-              name: forumName,
-              about: meta.about ?? '',
-              creatorPubkey: event.pubkey,
-              createdAt: event.created_at,
-            });
-            setDiscoveredForums(Array.from(found.values())
-              .sort((a, b) => b.createdAt - a.createdAt)
-              .slice(0, 30));
-          }
-        } catch {
-          // Content non-JSON, ignoré
+    const handleEvent = (event: NostrEvent, isLegacy: boolean) => {
+      receivedCount++;
+      try {
+        const meta = JSON.parse(event.content) as { name?: string; about?: string };
+        const forumName = (meta.name ?? '').toLowerCase().trim();
+        if (!forumName) return;
+        // Filtre supplémentaire pour la branche legacy : pattern de nom MeshPay
+        // (a-z 0-9 tiret uniquement, taille raisonnable). Évite que la liste
+        // soit polluée par les forums Damus/Iris/etc.
+        if (isLegacy && !/^[a-z0-9-]{1,32}$/.test(forumName)) return;
+        if (!found.has(event.id)) {
+          found.set(event.id, {
+            channelId: event.id,
+            name: forumName,
+            about: meta.about ?? '',
+            creatorPubkey: event.pubkey,
+            createdAt: event.created_at,
+          });
+          setDiscoveredForums(Array.from(found.values())
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .slice(0, 30));
         }
-      },
-      () => {
-        // EOSE : les relays ont fini d'envoyer leurs events stockés
-        console.log(`[Discover] EOSE reçu — ${receivedCount} events, ${found.size} forums uniques`);
-        setDiscoverLoading(false);
-      },
+      } catch {
+        // Content non-JSON, ignoré
+      }
+    };
+
+    const onEOSE = (source: string) => {
+      eoseCount += 1;
+      console.log(`[Discover] EOSE ${source} (${eoseCount}/2) — ${receivedCount} events, ${found.size} forums`);
+      if (eoseCount >= 2) setDiscoverLoading(false);
+    };
+
+    const unsubTagged = nostrClient.subscribeForums(
+      (e) => handleEvent(e, false),
+      () => onEOSE('tagged'),
+    );
+    const unsubLegacy = nostrClient.subscribeForumsLegacy(
+      (e) => handleEvent(e, true),
+      () => onEOSE('legacy'),
     );
 
     // Filet de sécurité : stop loading après 10s même sans EOSE
@@ -288,7 +306,7 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
       setDiscoverLoading(false);
     }, 10000);
 
-    return () => { unsub(); clearTimeout(timer); };
+    return () => { unsubTagged(); unsubLegacy(); clearTimeout(timer); };
   }, [tab, visible, nostrConnected]);
 
   const handleDM = () => {
