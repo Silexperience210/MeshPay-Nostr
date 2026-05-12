@@ -29,6 +29,7 @@
 
 import BleManager from 'react-native-ble-manager';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
+import { utf8Encode, utf8Decode } from '@/utils/text-codec';
 import {
   MESHCORE_BLE,
   type MeshCorePacket,
@@ -674,7 +675,7 @@ export class BleGatewayClient {
     // → Layout : [cmd:1][reserved:7][app_name:UTF-8][null-padding si besoin]
     // Firmware exige len >= 8. app_name commence obligatoirement à cmd_frame[8].
     // Donc payload (sans le cmd byte) doit avoir 7 bytes réservés + nom à payload[7+].
-    const appNameBytes = new TextEncoder().encode('MeshPay\0');
+    const appNameBytes = utf8Encode('MeshPay\0');
     const payload = new Uint8Array(7 + appNameBytes.length);
     // payload[0..6] = 7 bytes réservés (tous zéro — firmware les ignore complètement)
     payload.set(appNameBytes, 7);
@@ -796,7 +797,7 @@ export class BleGatewayClient {
 
     const hexClean = this.normalizePubkeyHex(pubkeyHex);
     const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-    const textBytes   = new TextEncoder().encode(text);
+    const textBytes   = utf8Encode(text);
     // Limite cohérente avec sendChannelMessage et sendChannelData : au-delà,
     // le firmware MeshCore Companion rejette ou tronque silencieusement le
     // message. Faire échouer côté app permet à MessagesProvider de proposer
@@ -855,7 +856,7 @@ export class BleGatewayClient {
       }
     }
 
-    const textBytes = new TextEncoder().encode(text);
+    const textBytes = utf8Encode(text);
     if (textBytes.length > 150) throw new Error(`Message trop long: ${textBytes.length}B (max 150)`);
 
     const ts    = Math.floor(Date.now() / 1000);
@@ -947,7 +948,7 @@ export class BleGatewayClient {
 
     const payload   = new Uint8Array(1 + 32 + 16); // 49 bytes total
     payload[0]      = channelIdx;
-    const nameBytes = new TextEncoder().encode(name);
+    const nameBytes = utf8Encode(name);
     payload.set(nameBytes.slice(0, Math.min(nameBytes.length, 31)), 1); // null-padded 32B
     payload.set(secret.slice(0, 16), 33);
 
@@ -967,7 +968,7 @@ export class BleGatewayClient {
   /** Changer le nom d'annonce du device sur le mesh */
   async setAdvertName(name: string): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
-    const nameBytes = new TextEncoder().encode(name.slice(0, 31) + '\0');
+    const nameBytes = utf8Encode(name.slice(0, 31) + '\0');
     await this.sendFrame(CMD_SET_ADVERT_NAME, nameBytes);
     console.log(`[BleGateway] SetAdvertName: "${name}"`);
   }
@@ -1060,7 +1061,7 @@ export class BleGatewayClient {
   async reboot(): Promise<void> {
     if (!this.connectedId) throw new Error('Non connecté');
     // Le firmware attend la string "reboot" après le cmd (cohérent avec meshcore.js)
-    await this.sendFrame(CMD_REBOOT, new TextEncoder().encode('reboot'));
+    await this.sendFrame(CMD_REBOOT, utf8Encode('reboot'));
     console.log('[BleGateway] Reboot envoyé');
   }
 
@@ -1078,7 +1079,7 @@ export class BleGatewayClient {
       return;
     }
     const name = regionName.startsWith('#') ? regionName : `#${regionName}`;
-    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(name));
+    const hash = await crypto.subtle.digest('SHA-256', utf8Encode(name));
     const transportKey = new Uint8Array(hash);
     const payload = new Uint8Array(1 + 32);
     payload[0] = 0; // byte obligatoire (vérifié par firmware v8+)
@@ -1104,7 +1105,7 @@ export class BleGatewayClient {
     if (!this.connectedId) throw new Error('Non connecté');
     const hexClean = this.normalizePubkeyHex(pubkeyHex);
     const pubkeyBytes = new Uint8Array(hexClean.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
-    const passBytes = new TextEncoder().encode(password);
+    const passBytes = utf8Encode(password);
     const payload = new Uint8Array(32 + passBytes.length);
     payload.set(pubkeyBytes, 0);
     payload.set(passBytes, 32);
@@ -1455,8 +1456,7 @@ export class BleGatewayClient {
     const radioSf     = payload[off++];
     const radioCr     = payload[off++];
 
-    const name = new TextDecoder()
-      .decode(payload.slice(off))
+    const name = utf8Decode(payload.slice(off))
       .replace(/\0/g, '')
       .trim() || 'MeshCore';
 
@@ -1508,7 +1508,7 @@ export class BleGatewayClient {
     const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(11, true);
     // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix before text
     const textOffset = txtType === 2 ? 19 : 15;
-    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
+    const text       = utf8Decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] DM de ${senderPubkeyPrefix} SNR=${snr}: "${text.slice(0, 40)}"`);
 
@@ -1532,7 +1532,7 @@ export class BleGatewayClient {
     const ts         = new DataView(payload.buffer, payload.byteOffset).getUint32(6, true);
     // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix avant le texte
     const textOffset = txtType === 2 ? 14 : 10;
-    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
+    const text       = utf8Decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] Canal ch=${channelIdx} SNR=${snr}: "${text.slice(0, 40)}"`);
 
@@ -1577,7 +1577,7 @@ export class BleGatewayClient {
     const ts      = new DataView(payload.buffer, payload.byteOffset).getUint32(8, true);
     // txt_type==2 (TXT_TYPE_SIGNED_PLAIN) : 4-byte signature prefix avant le texte (doc officielle)
     const textOffset = txtType === 2 ? 16 : 12;
-    const text    = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
+    const text    = utf8Decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] DM (legacy) de ${senderPubkeyPrefix}: "${text.slice(0, 40)}"`);
     const msg: MeshCoreIncomingMsg = {
@@ -1600,7 +1600,7 @@ export class BleGatewayClient {
     // ✅ FIX: txtType==2 (TXT_TYPE_SIGNED_PLAIN) ajoute un préfixe 4 bytes avant le texte
     // Même traitement que parseDirectMsgLegacy et parseChannelMsgV3
     const textOffset = txtType === 2 ? 11 : 7;
-    const text       = new TextDecoder().decode(payload.slice(textOffset)).replace(/\0/g, '');
+    const text       = utf8Decode(payload.slice(textOffset)).replace(/\0/g, '');
 
     console.log(`[BleGateway] Canal (legacy) ch=${channelIdx}: "${text.slice(0, 40)}"`);
     const msg: MeshCoreIncomingMsg = {
@@ -1618,7 +1618,7 @@ export class BleGatewayClient {
     // Format v1.13: [idx:1][name:32][secret_hash:16] = 49B
     if (payload.length >= 49) {
       const nameBytes = payload.slice(1, 33);
-      const name      = new TextDecoder().decode(nameBytes).replace(/\0/g, '').trim();
+      const name      = utf8Decode(nameBytes).replace(/\0/g, '').trim();
       const secretLen = payload.length >= 65 ? 32 : 16;
       const secret    = payload.slice(33, 33 + secretLen);
 
@@ -1741,7 +1741,7 @@ export class BleGatewayClient {
     }
     if (payload.length > 9) {
       // Essayer de décoder le reste comme UTF-8 (souvent du CLI output)
-      text = new TextDecoder().decode(payload.slice(7)).replace(/\0/g, '').trim();
+      text = utf8Decode(payload.slice(7)).replace(/\0/g, '').trim();
     }
     console.log(`[BleGateway] StatusResponse ${prefix}: batt=${batteryVoltage?.toFixed(2)}V`);
     this.statusResponseCallback?.({ pubkeyPrefix: prefix, batteryVoltage, text, rawPayload: payload });
@@ -1775,7 +1775,7 @@ export class BleGatewayClient {
     const pubkeyHex    = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
     const pubkeyPrefix = pubkeyHex.slice(0, 12);
     const nameBytes    = payload.slice(99, 131);
-    const name         = new TextDecoder().decode(nameBytes).replace(/\0/g, '').trim()
+    const name         = utf8Decode(nameBytes).replace(/\0/g, '').trim()
       || `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
     const view         = new DataView(payload.buffer, payload.byteOffset);
     const lastSeen     = view.getUint32(131, true);
@@ -1873,7 +1873,7 @@ export class BleGatewayClient {
     const pubkeyHex    = Array.from(pubkeyBytes).map((b) => b.toString(16).padStart(2, '0')).join('');
     const pubkeyPrefix = pubkeyHex.slice(0, 12);
     const nameBytes    = payload.slice(99, 131);
-    const name         = new TextDecoder().decode(nameBytes).replace(/\0/g, '').trim()
+    const name         = utf8Decode(nameBytes).replace(/\0/g, '').trim()
       || `Node-${pubkeyPrefix.slice(0, 6).toUpperCase()}`;
     const view         = new DataView(payload.buffer, payload.byteOffset);
     const lastSeen     = view.getUint32(131, true);
@@ -1922,7 +1922,7 @@ export class BleGatewayClient {
         toNodeId: 0n, // broadcast / nous
         timestamp: Math.floor(Date.now() / 1000),
         subMeshId: isChannel ? channelIdx : 0,
-        payload: new TextEncoder().encode(text),
+        payload: utf8Encode(text),
       };
 
       if (this.messageHandler) {

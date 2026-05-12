@@ -3,6 +3,7 @@
  * Format: 25x25 grid pour 12 words, 29x29 pour 24 words
  */
 import { validateMnemonic, entropyToMnemonic, wordlist } from '@/utils/bitcoin';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // SeedQR utilise un encodage binaire compact
 // Chaque mot = 11 bits (index 0-2047 dans BIP39 wordlist)
@@ -60,8 +61,7 @@ export function seedToSeedQRData(mnemonic: string): Uint8Array {
  */
 export function seedQRDataToSeed(data: Uint8Array): string {
   // Essayer d'abord comme texte
-  const decoder = new TextDecoder();
-  const text = decoder.decode(data).trim().toLowerCase();
+  const text = utf8Decode(data).trim().toLowerCase();
   
   if (validateMnemonic(text)) {
     return text;

@@ -1,3 +1,4 @@
+import { utf8Encode, utf8Decode } from './text-codec';
 /**
  * Room Server Configuration - Version Protocol Binaire MeshCore
  * 
@@ -67,7 +68,7 @@ export async function configureRoomServer(
   try {
     // Configurer le nom
     if (config.name) {
-      const nameData = new TextEncoder().encode(config.name);
+      const nameData = utf8Encode(config.name);
       const payload = encodeRoomServerCommand(ROOM_SERVER_CMDS.SET_NAME, nameData);
       await sendFn(payload);
     }
@@ -132,7 +133,7 @@ export async function getRoomServerPosts(
     if (!response) return [];
     
     try {
-      const text = new TextDecoder().decode(response);
+      const text = utf8Decode(response);
       return JSON.parse(text);
     } catch {
       return parseBinaryPosts(response);
@@ -150,15 +151,15 @@ function parseBinaryPosts(data: Uint8Array): RoomServerPost[] {
   while (offset < data.length) {
     try {
       const idLen = data[offset++];
-      const id = new TextDecoder().decode(data.slice(offset, offset + idLen));
+      const id = utf8Decode(data.slice(offset, offset + idLen));
       offset += idLen;
       
       const authorLen = data[offset++];
-      const author = new TextDecoder().decode(data.slice(offset, offset + authorLen));
+      const author = utf8Decode(data.slice(offset, offset + authorLen));
       offset += authorLen;
       
       const contentLen = data[offset++];
-      const content = new TextDecoder().decode(data.slice(offset, offset + contentLen));
+      const content = utf8Decode(data.slice(offset, offset + contentLen));
       offset += contentLen;
       
       const view = new DataView(data.buffer, data.byteOffset + offset, 4);

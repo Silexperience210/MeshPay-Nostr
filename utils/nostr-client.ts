@@ -33,6 +33,7 @@ import { HDKey } from '@scure/bip32';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { mnemonicToSeed } from '@/utils/bitcoin';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ export const Kind = {
  * Utilisé pour filtrer les kind:42 : `{kinds:[42], '#e': [channelId]}`.
  */
 export function deriveChannelId(channelName: string): string {
-  const input = new TextEncoder().encode(
+  const input = utf8Encode(
     `meshpay:forum:${channelName.toLowerCase().trim()}`
   );
   const hash = sha256(input);

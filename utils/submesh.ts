@@ -8,6 +8,7 @@
  */
 
 import { type MeshCorePacket, MeshCoreMessageType, MeshCoreFlags, nodeIdToUint64 } from './meshcore-protocol';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // Identifiants de sub-mesh (16 bits = 65536 réseaux possibles)
 export type SubMeshId = string; // Format: "0xABCD"
@@ -245,7 +246,7 @@ export function sendToSubMesh(
     messageId: Date.now(),
     timestamp: Math.floor(Date.now() / 1000),
     subMeshId: parseInt(subMeshId, 16) || 0,
-    payload: new TextEncoder().encode(message),
+    payload: utf8Encode(message),
   };
   
   console.log('[SubMesh] Packet created:', subMeshId, 'hops:', packet.ttl);

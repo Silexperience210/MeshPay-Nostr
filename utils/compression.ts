@@ -1,3 +1,5 @@
+import { utf8Encode, utf8Decode } from './text-codec';
+
 /**
  * Compression utilities - Smaz for LoRa payload optimization
  * Réduit la taille des messages texte de ~30-50%
@@ -37,8 +39,7 @@ const SMAZ_FLUSH = 0xFF;
  * Retourne Uint8Array ou null si compression inefficace
  */
 export function compressText(text: string): Uint8Array | null {
-  const encoder = new TextEncoder();
-  const input = encoder.encode(text);
+  const input = utf8Encode(text);
 
   // Si le texte est très court, pas la peine de compresser
   if (input.length < 20) return null;
@@ -129,14 +130,14 @@ export function compressForLora(text: string): Uint8Array | null {
  * Décompresse depuis LoRa
  */
 export function decompressFromLora(data: Uint8Array): string {
-  if (data.length < 2) return new TextDecoder().decode(data);
+  if (data.length < 2) return utf8Decode(data);
   
   const version = data[0];
   const flags = data[1];
   
   if (version !== 0x01) {
     // Version inconnue - retourner tel quel
-    return new TextDecoder().decode(data);
+    return utf8Decode(data);
   }
   
   if (flags & 0x01) {
@@ -145,7 +146,7 @@ export function decompressFromLora(data: Uint8Array): string {
   }
   
   // Non compressé
-  return new TextDecoder().decode(data.slice(2));
+  return utf8Decode(data.slice(2));
 }
 
 /**
@@ -166,8 +167,7 @@ export function compressWithFallback(text: string): { data: Uint8Array; compress
   }
   
   // Fallback: verbatim avec header
-  const encoder = new TextEncoder();
-  const raw = encoder.encode(text);
+  const raw = utf8Encode(text);
   const result = new Uint8Array(2 + raw.length);
   result[0] = 0x01; // Version
   result[1] = 0x00; // Flags: non compressé

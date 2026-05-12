@@ -7,6 +7,8 @@
  * NUT-XX: Proposition pour MeshCore v2
  */
 
+import { utf8Encode } from './text-codec';
+
 // Table de caractères initiale (ASCII étendu)
 const INITIAL_DICT_SIZE = 256;
 const MAX_DICT_SIZE = 4096; // 12 bits max
@@ -172,9 +174,9 @@ export function compressMeshCoreMessage(message: string): {
   compressedSize: number;
   ratio: number;
 } {
-  const originalSize = new TextEncoder().encode(message).length;
+  const originalSize = utf8Encode(message).length;
   const compressed = lzwCompress(message);
-  const compressedSize = new TextEncoder().encode(compressed).length;
+  const compressedSize = utf8Encode(compressed).length;
   const ratio = originalSize > 0 ? (1 - compressedSize / originalSize) : 0;
   
   return {

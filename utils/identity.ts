@@ -5,6 +5,7 @@ import { hmac } from '@noble/hashes/hmac.js';
 import { bytesToHex, randomBytes } from '@noble/hashes/utils.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { mnemonicToSeed } from '@/utils/bitcoin';
+import { utf8Encode, utf8Decode } from './text-codec';
 
 // Chemin de dérivation dédié à la messagerie MeshCore
 const MESHCORE_PATH = "m/69'/0'/0'/0";
@@ -49,7 +50,7 @@ export function deriveBip85Seed(masterSeed: Uint8Array, index: number): Uint8Arr
   }
 
   // HMAC-SHA512(key="bip-entropy-from-k", data=child.privateKey) — per BIP-85 spec
-  const hmacKey = new TextEncoder().encode('bip-entropy-from-k');
+  const hmacKey = utf8Encode('bip-entropy-from-k');
   const entropy = hmac(sha512, hmacKey, child.privateKey);
 
   // 32 premiers bytes = seed enfant (SHA512 donne 64 bytes, on prend les 32 premiers)
