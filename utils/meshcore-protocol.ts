@@ -48,9 +48,10 @@ export const LORA_MAX_TEXT_CHARS = 200; // caractères
 
 /**
  * Vérifie si un texte dépasse la limite LoRa
- * (Utilisé localement — non exporté car non utilisé à l'extérieur)
+ * ⚠️ FIX CRITIQUE : était déclarée non-exportée mais réexportée par ChunkManager
+ * → undefined à l'exécution → "undefined is not a function" à chaque envoi.
  */
-function validateMessageSize(text: string): { valid: boolean; size: number; max: number } {
+export function validateMessageSize(text: string): { valid: boolean; size: number; max: number } {
   const size = utf8Encode(text).length;
   return {
     valid: size <= LORA_MAX_PAYLOAD,
