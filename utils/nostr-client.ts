@@ -453,19 +453,28 @@ export class NostrClient {
       console.warn('[Nostr] Signature invalide — event ignoré:', event.id.slice(0, 12));
       return false;
     }
-    // NIP-59 gift wraps use deliberately randomized timestamps (up to 2 days old) — skip age check
-    if (event.kind === 1059) return true;
-    // Vérification timestamp (pas plus vieux que 24h, pas dans le futur de plus de 1h)
+    // ✅ FIX (forum discovery) — Kinds long-vécus exemptés du check d'âge max :
+    //   - kind 0 (Metadata) : profil utilisateur, peut dater de mois
+    //   - kind 40/41 (ChannelCreate/Metadata NIP-28) : un forum créé il y a
+    //     6 mois reste valide ; sans cette exemption, subscribeForums()
+    //     ne retournait quasi rien car tous les forums sont rejetés
+    //   - kind 1059 (Gift Wrap NIP-59) : timestamps deliberately randomized
+    //   - kind 10002 (RelayList NIP-65) : liste de relais persistante
+    const LONG_LIVED_KINDS = new Set<number>([0, 40, 41, 1059, 10002]);
+    const isLongLived = LONG_LIVED_KINDS.has(event.kind);
+    // Check "pas dans le futur" appliqué à tous les events
     const now = Math.floor(Date.now() / 1000);
-    const maxAge = 24 * 60 * 60; // 24 heures
     const maxFuture = 60 * 60; // 1 heure
-    if (event.created_at < now - maxAge) {
-      console.warn('[Nostr] Event trop vieux — ignoré:', event.id.slice(0, 12));
-      return false;
-    }
     if (event.created_at > now + maxFuture) {
       console.warn('[Nostr] Event dans le futur — ignoré:', event.id.slice(0, 12));
       return false;
+    }
+    if (!isLongLived) {
+      const maxAge = 24 * 60 * 60; // 24h pour les kinds éphémères
+      if (event.created_at < now - maxAge) {
+        console.warn('[Nostr] Event trop vieux — ignoré:', event.id.slice(0, 12), 'kind:', event.kind);
+        return false;
+      }
     }
     return true;
   }
@@ -747,15 +756,26 @@ export class NostrClient {
 
   /**
    * Découverte de forums publics via NIP-28 kind:40 (ChannelCreate).
-   * Récupère les 50 forums les plus récents sur les relays.
+   * Récupère les `limit` forums les plus récents sur les relays.
+   *
+   * ✅ FIX : kind:40 sont exemptés du check d'âge 24h dans _validateEvent
+   * (sinon tous les forums créés il y a plus de 24h seraient rejetés).
+   *
+   * @param onChannel  Callback appelé pour chaque kind:40 valide
+   * @param onEOSE     Callback appelé quand les relays ont fini d'envoyer
+   *                   les events stockés (End Of Stored Events)
+   * @param limit      Nombre max d'events à recevoir (défaut 50)
    */
   subscribeForums(
     onChannel: (event: NostrEvent) => void,
+    onEOSE?: () => void,
     limit = 50,
   ): () => void {
+    console.log(`[Nostr] subscribeForums: kind:40 limit=${limit} relays=${this.relayUrls.length}`);
     return this.subscribe(
       [{ kinds: [Kind.ChannelCreate], limit }],
       onChannel,
+      onEOSE,
     );
   }
 

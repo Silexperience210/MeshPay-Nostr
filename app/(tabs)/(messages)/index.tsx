@@ -248,31 +248,45 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
 
     setDiscoverLoading(true);
     const found = new Map<string, DiscoveredForum>();
+    let receivedCount = 0;
 
-    const unsub = nostrClient.subscribeForums((event: NostrEvent) => {
-      try {
-        const meta = JSON.parse(event.content) as { name?: string; about?: string };
-        const forumName = (meta.name ?? '').toLowerCase().trim();
-        if (!forumName) return;
-        if (!found.has(event.id)) {
-          found.set(event.id, {
-            channelId: event.id,
-            name: forumName,
-            about: meta.about ?? '',
-            creatorPubkey: event.pubkey,
-            createdAt: event.created_at,
-          });
-          setDiscoveredForums(Array.from(found.values())
-            .sort((a, b) => b.createdAt - a.createdAt)
-            .slice(0, 30));
+    console.log('[Discover] Démarrage recherche forums Nostr...');
+
+    const unsub = nostrClient.subscribeForums(
+      (event: NostrEvent) => {
+        receivedCount++;
+        try {
+          const meta = JSON.parse(event.content) as { name?: string; about?: string };
+          const forumName = (meta.name ?? '').toLowerCase().trim();
+          if (!forumName) return;
+          if (!found.has(event.id)) {
+            found.set(event.id, {
+              channelId: event.id,
+              name: forumName,
+              about: meta.about ?? '',
+              creatorPubkey: event.pubkey,
+              createdAt: event.created_at,
+            });
+            setDiscoveredForums(Array.from(found.values())
+              .sort((a, b) => b.createdAt - a.createdAt)
+              .slice(0, 30));
+          }
+        } catch {
+          // Content non-JSON, ignoré
         }
-      } catch {}
-    });
+      },
+      () => {
+        // EOSE : les relays ont fini d'envoyer leurs events stockés
+        console.log(`[Discover] EOSE reçu — ${receivedCount} events, ${found.size} forums uniques`);
+        setDiscoverLoading(false);
+      },
+    );
 
-    // Arrêt auto après 8 secondes (pas un stream continu)
+    // Filet de sécurité : stop loading après 10s même sans EOSE
     const timer = setTimeout(() => {
+      console.log(`[Discover] Timeout 10s — ${receivedCount} events reçus, ${found.size} forums`);
       setDiscoverLoading(false);
-    }, 8000);
+    }, 10000);
 
     return () => { unsub(); clearTimeout(timer); };
   }, [tab, visible, nostrConnected]);
