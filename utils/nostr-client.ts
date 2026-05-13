@@ -292,54 +292,40 @@ export class NostrClient {
       }
       this._notifyStatus();
 
-      // Ping léger : subscribe à 1 event pour établir les connexions WS
-      await new Promise<void>((resolve) => {
-        let resolved = false;
-        const timeout = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            // Timeout → ne PAS forcer le statut à connected (relays potentiellement morts)
-            // Laisser le statut tel quel (connecting/error selon ce qui s'est passé)
-            console.warn('[Nostr] Timeout connexion relays — certains relays peuvent être lents');
-            resolve();
-          }
-        }, CONNECT_TIMEOUT_MS);
-
+      // ✅ FIX FORUM DISCOVERY v4 — connecter chaque relai INDIVIDUELLEMENT
+      // au lieu d'un seul ping global qui marquait tous les relais 'connected'
+      // dès qu'UN SEUL répondait EOSE. Cela faussait isConnected et causait
+      // l'envoi de REQ à des relais morts (qui ne répondent jamais).
+      //
+      // Maintenant : pool.ensureRelay(url) ouvre la WS pour chaque relai
+      // séparément, avec un timeout par relai. On marque 'connected' UNIQUEMENT
+      // les relais dont la WS s'est vraiment ouverte.
+      const connectPromises = relays.map(async (url): Promise<void> => {
         try {
-          // NB: `onevent` est obligatoire même si on ne consomme pas l'event,
-          // sinon nostr-tools log "onevent() callback not defined for subscription".
-          // On utilise ce sub uniquement comme handshake WS ; on ferme dès l'EOSE.
-          const sub = this.pool.subscribeMany(
-            this.relayUrls,
-            [{ kinds: [Kind.Text], limit: 1 }], // ⚠️ Doit être un array (Filter[])
-            {
-              onevent: () => { /* ping handshake — on ignore le payload */ },
-              oneose: () => {
-                if (!resolved) {
-                  resolved = true;
-                  clearTimeout(timeout);
-                  for (const url of this.relayUrls) {
-                    this.relayStatus.set(url, 'connected');
-                  }
-                  this._notifyStatus();
-                  sub.close();
-                  resolve();
-                }
-              },
-            },
-          );
-        } catch {
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timeout);
-            for (const url of this.relayUrls) {
-              this.relayStatus.set(url, 'error');
-            }
-            this._notifyStatus();
-            resolve(); // Ne pas bloquer le démarrage de l'app
-          }
+          const relay = await Promise.race([
+            this.pool.ensureRelay(url),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('timeout')), CONNECT_TIMEOUT_MS)
+            ),
+          ]);
+          // ensureRelay a réussi (WS ouvert) — marquer 'connected'
+          this.relayStatus.set(url, 'connected');
+          console.log(`[Nostr] ✅ Relai connecté : ${url}`);
+          // Notifier au fur et à mesure (UI peut afficher les relais qui passent connected)
+          this._notifyStatus();
+        } catch (err) {
+          this.relayStatus.set(url, 'error');
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[Nostr] ❌ Relai inaccessible : ${url} (${errMsg})`);
+          this._notifyStatus();
         }
       });
+
+      // Attendre que TOUS les relais aient soit succeed soit failed
+      await Promise.all(connectPromises);
+
+      const connectedCount = Array.from(this.relayStatus.values()).filter(s => s === 'connected').length;
+      console.log(`[Nostr] Connexion terminée : ${connectedCount}/${relays.length} relais OK`);
 
       // Renvoyer les events en attente
       await this._drainOfflineQueue();
@@ -451,6 +437,7 @@ export class NostrClient {
     filters: Filter[],
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
+    relays?: string[],
   ): () => void {
     let eventCount = 0;
     let rejectedCount = 0;
@@ -472,7 +459,9 @@ export class NostrClient {
       onEOSE();
     } : undefined;
 
-    const sub = this.pool.subscribeMany(this.relayUrls, filters as any, {
+    // Utilise les relais spécifiés si fournis, sinon tous les relayUrls
+    const targetRelays = relays && relays.length > 0 ? relays : this.relayUrls;
+    const sub = this.pool.subscribeMany(targetRelays, filters as any, {
       onevent: handler,
       oneose: eoseHandler,
     });
@@ -580,18 +569,18 @@ export class NostrClient {
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
   ): () => void {
-    // ✅ Diagnostic — log au démarrage de chaque subscription
-    const connectedRelays = Array.from(this.relayStatus.entries()).filter(([, s]) => s === 'connected').length;
-    console.log(`[Nostr] subscribe(${JSON.stringify(filters)}) — pool relayUrls=${this.relayUrls.length} connected=${connectedRelays}`);
-    if (this.relayUrls.length === 0) {
-      console.warn('[Nostr] ⚠️ subscribe called but no relays configured — subscription will receive nothing');
-    }
-    if (connectedRelays === 0) {
-      console.warn('[Nostr] ⚠️ subscribe called but no relays connected — subscription may not receive events until reconnect');
+    // ✅ FIX FORUM DISCOVERY v4 — n'envoyer la subscription qu'aux relais
+    // RÉELLEMENT connectés (status === 'connected'). Avant : on envoyait
+    // à tous les relayUrls, y compris des relais 'error' qui ne renvoient
+    // jamais d'event ni d'EOSE — résultat la subscription restait pendue.
+    const activeRelays = this.relayUrls.filter(url => this.relayStatus.get(url) === 'connected');
+    console.log(`[Nostr] subscribe(${JSON.stringify(filters)}) — ${activeRelays.length}/${this.relayUrls.length} relais actifs : ${activeRelays.join(', ')}`);
+    if (activeRelays.length === 0) {
+      console.warn('[Nostr] ⚠️ subscribe called but NO relays connected — subscription will receive nothing. Try reconnecting.');
     }
 
     // Créer la subscription
-    const unsub = this._doSubscribe(filters, onEvent, onEOSE);
+    const unsub = this._doSubscribe(filters, onEvent, onEOSE, activeRelays);
     
     // Stocker pour réabonnement auto après reconnect
     const subRecord = { filters, onEvent, onEOSE, unsub };

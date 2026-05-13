@@ -243,38 +243,33 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   };
 
   // Découverte de forums via kind:40 quand l'onglet est actif
-  // ✅ FIX FORUM DISCOVERY v3 :
-  //   - Subscription UNIQUE avec 2 filtres OR (taggé + sans tag) au lieu de
-  //     2 subscriptions parallèles — évite tout problème de pool dedup
-  //   - Compteur de refresh pour permettre à l'utilisateur de relancer
-  //     manuellement la recherche
-  //   - Affichage debug : nb events reçus + nb forums uniques + EOSE
-  const [discoverDebug, setDiscoverDebug] = useState({ events: 0, eose: 0, forums: 0 });
+  // ✅ FIX FORUM DISCOVERY v4 :
+  //   - PARALLÈLE : nostr-tools SimplePool + WebSocket DIRECTE vers damus.io
+  //     (bypass nostr-tools si bug interne — vérifie indépendamment que les
+  //     events sont accessibles depuis le device)
+  //   - Le panneau debug affiche maintenant : ws (direct), nostr-tools, EOSE
+  //   - Subscription UNIQUE avec 1 filtre kind:40
+  const [discoverDebug, setDiscoverDebug] = useState({ events: 0, ws: 0, eose: 0, forums: 0, relays: 0 });
   const [refreshCounter, setRefreshCounter] = useState(0);
 
   useEffect(() => {
     if (tab !== 'discover' || !visible || !nostrConnected) return;
 
     setDiscoverLoading(true);
-    setDiscoverDebug({ events: 0, eose: 0, forums: 0 });
+    setDiscoverDebug({ events: 0, ws: 0, eose: 0, forums: 0, relays: 0 });
     const found = new Map<string, DiscoveredForum>();
     let receivedCount = 0;
+    let wsCount = 0;
     let eoseCount = 0;
 
     console.log('[Discover] Démarrage recherche forums Nostr...');
 
-    const handleEvent = (event: NostrEvent) => {
-      receivedCount++;
-      // Vérifier que c'est bien un forum MeshPay :
-      // - soit il a le tag NIP-12 'meshpay-forum' (events créés via createChannel)
-      // - soit il a un nom qui correspond au pattern MeshPay (a-z 0-9 tiret, ≤32 char)
-      //   pour les forums legacy créés avant l'ajout du tag
+    const acceptForum = (event: NostrEvent, src: 'pool' | 'ws') => {
       const hasMeshpayTag = event.tags?.some(t => t[0] === 't' && t[1] === 'meshpay-forum');
       try {
         const meta = JSON.parse(event.content) as { name?: string; about?: string };
         const forumName = (meta.name ?? '').toLowerCase().trim();
         if (!forumName) return;
-        // Si pas de tag MeshPay, vérifier le pattern strict
         if (!hasMeshpayTag && !/^[a-z0-9-]{1,32}$/.test(forumName)) return;
         if (!found.has(event.id)) {
           found.set(event.id, {
@@ -287,44 +282,86 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
           setDiscoveredForums(Array.from(found.values())
             .sort((a, b) => b.createdAt - a.createdAt)
             .slice(0, 30));
-          setDiscoverDebug({ events: receivedCount, eose: eoseCount, forums: found.size });
+          console.log(`[Discover] +1 forum via ${src} : ${forumName} (${event.id.slice(0, 12)})`);
         }
-      } catch {
-        // JSON content invalide
-      }
+      } catch {}
+    };
+
+    const handlePoolEvent = (event: NostrEvent) => {
+      receivedCount++;
+      setDiscoverDebug(d => ({ ...d, events: receivedCount }));
+      acceptForum(event, 'pool');
     };
 
     const onEOSE = () => {
       eoseCount += 1;
-      setDiscoverDebug({ events: receivedCount, eose: eoseCount, forums: found.size });
-      console.log(`[Discover] EOSE (${eoseCount}) — ${receivedCount} events, ${found.size} forums uniques`);
-      // ✅ Ne pas arrêter au premier EOSE — attendre au moins 3 relais ou
-      // 5 secondes après le 1er EOSE pour laisser le temps aux autres relais
-      // (souvent damus.io ou primal arrive en second avec les vrais events).
-      if (eoseCount >= 3) {
-        setDiscoverLoading(false);
-      } else if (eoseCount === 1) {
-        // Au premier EOSE, donner 5s aux autres relais pour répondre
-        setTimeout(() => setDiscoverLoading(false), 5000);
-      }
+      setDiscoverDebug(d => ({ ...d, eose: eoseCount, forums: found.size }));
+      console.log(`[Discover] EOSE pool (${eoseCount}) — ${receivedCount} events, ${found.size} forums`);
+      if (eoseCount >= 3) setDiscoverLoading(false);
+      else if (eoseCount === 1) setTimeout(() => setDiscoverLoading(false), 5000);
     };
 
-    // ⚡ Subscription UNIQUE avec UN filtre kind:40 (pas de tag pour
-    // ratisser large, on filtre côté client). Plus simple et plus fiable
-    // qu'une double subscription parallèle.
+    // ── Subscription via nostr-tools (SimplePool) ────────────────────────────
     const unsub = nostrClient.subscribe(
       [{ kinds: [40], limit: 200 }],
-      handleEvent,
+      handlePoolEvent,
       onEOSE,
     );
 
-    // Filet de sécurité : stop loading après 12s même sans EOSE
+    // ── ✅ WS DIRECTE vers damus.io et primal.net (bypass nostr-tools) ───────
+    // Permet de diagnostiquer si le bug est dans nostr-tools/SimplePool ou
+    // dans le réseau du device. Si la WS directe reçoit des events mais que
+    // SimplePool n'en reçoit pas, on aura la preuve que nostr-tools est cassé.
+    const directRelays = ['wss://relay.damus.io', 'wss://relay.primal.net'];
+    const wsList: WebSocket[] = [];
+    for (const url of directRelays) {
+      try {
+        console.log(`[Discover/WS] Connexion directe à ${url}…`);
+        const ws = new WebSocket(url);
+        wsList.push(ws);
+        ws.onopen = () => {
+          console.log(`[Discover/WS] ✅ ${url} ouvert`);
+          ws.send(JSON.stringify(['REQ', 'discover', { kinds: [40], '#t': ['meshpay-forum'], limit: 100 }]));
+        };
+        ws.onmessage = (msg) => {
+          try {
+            const data = JSON.parse(msg.data);
+            if (data[0] === 'EVENT' && data[1] === 'discover') {
+              wsCount++;
+              setDiscoverDebug(d => ({ ...d, ws: wsCount }));
+              acceptForum(data[2], 'ws');
+            } else if (data[0] === 'EOSE') {
+              console.log(`[Discover/WS] EOSE de ${url} — ${wsCount} events directs cumulés`);
+              try { ws.close(); } catch {}
+            }
+          } catch (e) {
+            console.warn(`[Discover/WS] parse error from ${url}:`, e);
+          }
+        };
+        ws.onerror = (e: any) => {
+          console.warn(`[Discover/WS] ❌ erreur ${url}:`, e?.message || e);
+        };
+        ws.onclose = () => {
+          console.log(`[Discover/WS] ${url} fermé`);
+        };
+      } catch (e) {
+        console.error(`[Discover/WS] Impossible de créer WS pour ${url}:`, e);
+      }
+    }
+
+    // Filet de sécurité : stop loading après 12s
     const timer = setTimeout(() => {
-      console.log(`[Discover] Timeout 12s — ${receivedCount} events reçus, ${found.size} forums`);
+      console.log(`[Discover] Timeout 12s — pool=${receivedCount} ws=${wsCount} forums=${found.size}`);
       setDiscoverLoading(false);
     }, 12000);
 
-    return () => { unsub(); clearTimeout(timer); };
+    return () => {
+      unsub();
+      clearTimeout(timer);
+      for (const ws of wsList) {
+        try { ws.close(); } catch {}
+      }
+    };
   }, [tab, visible, nostrConnected, refreshCounter]);
 
   const handleRefreshDiscover = () => {
@@ -740,7 +777,7 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
               {/* Panneau diagnostic — affiche les compteurs en bas si pas de forum trouvé */}
               {nostrConnected && discoveredForums.length === 0 && (
                 <Text style={{ color: Colors.textMuted, fontSize: 10, textAlign: 'center', marginVertical: 4 }}>
-                  events reçus: {discoverDebug.events} · EOSE: {discoverDebug.eose} · forums: {discoverDebug.forums}
+                  pool: {discoverDebug.events} · ws: {discoverDebug.ws} · EOSE: {discoverDebug.eose} · forums: {discoverDebug.forums}
                 </Text>
               )}
 
