@@ -243,31 +243,39 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
   };
 
   // Découverte de forums via kind:40 quand l'onglet est actif
-  // ✅ FIX FORUM DISCOVERY :
-  //   - Double subscription : taggé MeshPay (préférée) + legacy (rétrocompat
-  //     pour les forums créés avant l'ajout du tag dans createChannel)
-  //   - Filtrage côté client pour la branche legacy : name pattern strict
-  //     pour éviter le bruit des kind:40 globaux non-MeshPay du relai
+  // ✅ FIX FORUM DISCOVERY v3 :
+  //   - Subscription UNIQUE avec 2 filtres OR (taggé + sans tag) au lieu de
+  //     2 subscriptions parallèles — évite tout problème de pool dedup
+  //   - Compteur de refresh pour permettre à l'utilisateur de relancer
+  //     manuellement la recherche
+  //   - Affichage debug : nb events reçus + nb forums uniques + EOSE
+  const [discoverDebug, setDiscoverDebug] = useState({ events: 0, eose: 0, forums: 0 });
+  const [refreshCounter, setRefreshCounter] = useState(0);
+
   useEffect(() => {
     if (tab !== 'discover' || !visible || !nostrConnected) return;
 
     setDiscoverLoading(true);
+    setDiscoverDebug({ events: 0, eose: 0, forums: 0 });
     const found = new Map<string, DiscoveredForum>();
     let receivedCount = 0;
-    let eoseCount = 0; // attendre EOSE des 2 subscriptions
+    let eoseCount = 0;
 
     console.log('[Discover] Démarrage recherche forums Nostr...');
 
-    const handleEvent = (event: NostrEvent, isLegacy: boolean) => {
+    const handleEvent = (event: NostrEvent) => {
       receivedCount++;
+      // Vérifier que c'est bien un forum MeshPay :
+      // - soit il a le tag NIP-12 'meshpay-forum' (events créés via createChannel)
+      // - soit il a un nom qui correspond au pattern MeshPay (a-z 0-9 tiret, ≤32 char)
+      //   pour les forums legacy créés avant l'ajout du tag
+      const hasMeshpayTag = event.tags?.some(t => t[0] === 't' && t[1] === 'meshpay-forum');
       try {
         const meta = JSON.parse(event.content) as { name?: string; about?: string };
         const forumName = (meta.name ?? '').toLowerCase().trim();
         if (!forumName) return;
-        // Filtre supplémentaire pour la branche legacy : pattern de nom MeshPay
-        // (a-z 0-9 tiret uniquement, taille raisonnable). Évite que la liste
-        // soit polluée par les forums Damus/Iris/etc.
-        if (isLegacy && !/^[a-z0-9-]{1,32}$/.test(forumName)) return;
+        // Si pas de tag MeshPay, vérifier le pattern strict
+        if (!hasMeshpayTag && !/^[a-z0-9-]{1,32}$/.test(forumName)) return;
         if (!found.has(event.id)) {
           found.set(event.id, {
             channelId: event.id,
@@ -279,35 +287,42 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
           setDiscoveredForums(Array.from(found.values())
             .sort((a, b) => b.createdAt - a.createdAt)
             .slice(0, 30));
+          setDiscoverDebug({ events: receivedCount, eose: eoseCount, forums: found.size });
         }
       } catch {
-        // Content non-JSON, ignoré
+        // JSON content invalide
       }
     };
 
-    const onEOSE = (source: string) => {
+    const onEOSE = () => {
       eoseCount += 1;
-      console.log(`[Discover] EOSE ${source} (${eoseCount}/2) — ${receivedCount} events, ${found.size} forums`);
-      if (eoseCount >= 2) setDiscoverLoading(false);
+      setDiscoverDebug({ events: receivedCount, eose: eoseCount, forums: found.size });
+      console.log(`[Discover] EOSE (${eoseCount}) — ${receivedCount} events, ${found.size} forums uniques`);
+      setDiscoverLoading(false);
     };
 
-    const unsubTagged = nostrClient.subscribeForums(
-      (e) => handleEvent(e, false),
-      () => onEOSE('tagged'),
-    );
-    const unsubLegacy = nostrClient.subscribeForumsLegacy(
-      (e) => handleEvent(e, true),
-      () => onEOSE('legacy'),
+    // ⚡ Subscription UNIQUE avec UN filtre kind:40 (pas de tag pour
+    // ratisser large, on filtre côté client). Plus simple et plus fiable
+    // qu'une double subscription parallèle.
+    const unsub = nostrClient.subscribe(
+      [{ kinds: [40], limit: 200 }],
+      handleEvent,
+      onEOSE,
     );
 
-    // Filet de sécurité : stop loading après 10s même sans EOSE
+    // Filet de sécurité : stop loading après 12s même sans EOSE
     const timer = setTimeout(() => {
-      console.log(`[Discover] Timeout 10s — ${receivedCount} events reçus, ${found.size} forums`);
+      console.log(`[Discover] Timeout 12s — ${receivedCount} events reçus, ${found.size} forums`);
       setDiscoverLoading(false);
-    }, 10000);
+    }, 12000);
 
-    return () => { unsubTagged(); unsubLegacy(); clearTimeout(timer); };
-  }, [tab, visible, nostrConnected]);
+    return () => { unsub(); clearTimeout(timer); };
+  }, [tab, visible, nostrConnected, refreshCounter]);
+
+  const handleRefreshDiscover = () => {
+    setDiscoveredForums([]);
+    setRefreshCounter(c => c + 1);
+  };
 
   const handleDM = () => {
     if (!nodeId.trim()) return;
@@ -704,7 +719,22 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
               <View style={styles.discoverHeader}>
                 <Text style={styles.inputLabel}>Forums Nostr (NIP-28)</Text>
                 {discoverLoading && <ActivityIndicator size="small" color={Colors.purple ?? '#9b59b6'} />}
+                <TouchableOpacity
+                  onPress={handleRefreshDiscover}
+                  style={{ marginLeft: 'auto', padding: 6 }}
+                  disabled={discoverLoading}
+                >
+                  <Text style={{ color: discoverLoading ? Colors.textMuted : (Colors.green ?? '#4ade80'), fontSize: 12 }}>
+                    {discoverLoading ? '...' : '↻ Rafraîchir'}
+                  </Text>
+                </TouchableOpacity>
               </View>
+              {/* Panneau diagnostic — affiche les compteurs en bas si pas de forum trouvé */}
+              {nostrConnected && discoveredForums.length === 0 && (
+                <Text style={{ color: Colors.textMuted, fontSize: 10, textAlign: 'center', marginVertical: 4 }}>
+                  events reçus: {discoverDebug.events} · EOSE: {discoverDebug.eose} · forums: {discoverDebug.forums}
+                </Text>
+              )}
 
               {!nostrConnected ? (
                 <View style={styles.discoverEmpty}>

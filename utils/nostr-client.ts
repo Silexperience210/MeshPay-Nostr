@@ -297,7 +297,7 @@ export class NostrClient {
           // On utilise ce sub uniquement comme handshake WS ; on ferme dès l'EOSE.
           const sub = this.pool.subscribeMany(
             this.relayUrls,
-            { kinds: [Kind.Text], limit: 1 },
+            [{ kinds: [Kind.Text], limit: 1 }], // ⚠️ Doit être un array (Filter[])
             {
               onevent: () => { /* ping handshake — on ignore le payload */ },
               oneose: () => {
@@ -438,15 +438,29 @@ export class NostrClient {
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
   ): () => void {
+    let eventCount = 0;
+    let rejectedCount = 0;
     const handler = (event: NostrEvent): void => {
+      eventCount++;
       // Double validation : hash + signature + timestamp
-      if (!this._validateEvent(event)) return;
+      if (!this._validateEvent(event)) {
+        rejectedCount++;
+        if (rejectedCount <= 3) {
+          console.warn(`[Nostr] _doSubscribe: event rejeté par _validateEvent — kind=${event.kind} id=${event.id.slice(0,12)} ts=${event.created_at}`);
+        }
+        return;
+      }
       onEvent(event);
     };
 
+    const eoseHandler = onEOSE ? () => {
+      console.log(`[Nostr] _doSubscribe: EOSE reçu — ${eventCount} events total (${rejectedCount} rejetés)`);
+      onEOSE();
+    } : undefined;
+
     const sub = this.pool.subscribeMany(this.relayUrls, filters as any, {
       onevent: handler,
-      oneose: onEOSE ?? undefined,
+      oneose: eoseHandler,
     });
 
     return () => sub.close();
@@ -552,6 +566,16 @@ export class NostrClient {
     onEvent: (event: NostrEvent) => void,
     onEOSE?: () => void,
   ): () => void {
+    // ✅ Diagnostic — log au démarrage de chaque subscription
+    const connectedRelays = Array.from(this.relayStatus.entries()).filter(([, s]) => s === 'connected').length;
+    console.log(`[Nostr] subscribe(${JSON.stringify(filters)}) — pool relayUrls=${this.relayUrls.length} connected=${connectedRelays}`);
+    if (this.relayUrls.length === 0) {
+      console.warn('[Nostr] ⚠️ subscribe called but no relays configured — subscription will receive nothing');
+    }
+    if (connectedRelays === 0) {
+      console.warn('[Nostr] ⚠️ subscribe called but no relays connected — subscription may not receive events until reconnect');
+    }
+
     // Créer la subscription
     const unsub = this._doSubscribe(filters, onEvent, onEOSE);
     
