@@ -52,6 +52,20 @@ export const DEFAULT_RELAYS: string[] = [
 const OFFLINE_QUEUE_MAX = 100;
 const CONNECT_TIMEOUT_MS = 5_000;
 
+/**
+ * ✅ Tag NIP-12 utilisé pour identifier les forums MeshPay sur les relais Nostr.
+ *
+ * Posé par `createChannel` dans les tags du kind:40 :
+ *   tags: [['t', 'meshpay-forum'], ...]
+ *
+ * Récupéré par `subscribeForums` via filter NIP-12 :
+ *   { kinds: [40], '#t': ['meshpay-forum'] }
+ *
+ * Const top-level (et non `static` class member) pour éviter des problèmes
+ * d'initialisation potentiels avec Hermes (le moteur JS de RN en release).
+ */
+export const MESHPAY_FORUM_TAG = 'meshpay-forum';
+
 // ─── Event kinds ─────────────────────────────────────────────────────────────
 
 export const Kind = {
@@ -710,8 +724,11 @@ export class NostrClient {
    * Tag NIP-12 utilisé pour identifier les forums MeshPay sur les relais Nostr.
    * Permet à `subscribeForums` de filtrer uniquement les forums MeshPay au lieu
    * de recevoir tous les kind:40 globaux (Damus, Iris, etc).
+   *
+   * ⚠️ Exporté comme const top-level (cf. MESHPAY_FORUM_TAG plus bas) plutôt
+   * que static class member pour éviter des surprises avec Hermes (les static
+   * members peuvent être problématiques avec le JS engine de RN en release).
    */
-  static readonly MESHPAY_FORUM_TAG = 'meshpay-forum';
 
   /**
    * Crée un channel public (NIP-28 kind:40).
@@ -724,15 +741,19 @@ export class NostrClient {
    * @returns L'event publié dont l'id est l'identifiant du channel.
    */
   async createChannel(name: string, about: string, picture?: string): Promise<NostrEvent> {
-    return this.publish({
+    const normalizedName = name.toLowerCase().trim();
+    console.log(`[Nostr] createChannel: name=${normalizedName} tag=${MESHPAY_FORUM_TAG}`);
+    const event = await this.publish({
       kind: Kind.ChannelCreate,
       content: JSON.stringify({ name, about, picture: picture ?? '' }),
       tags: [
-        ['t', NostrClient.MESHPAY_FORUM_TAG], // identifie MeshPay (NIP-12)
-        ['name', name.toLowerCase().trim()],  // facette de recherche / dedup
+        ['t', MESHPAY_FORUM_TAG],     // NIP-12 : identifie MeshPay
+        ['name', normalizedName],     // facette de recherche / dedup
       ],
       created_at: Math.floor(Date.now() / 1000),
     });
+    console.log(`[Nostr] createChannel SUCCESS — kind:40 publié id=${event.id.slice(0, 16)} tags=${JSON.stringify(event.tags)}`);
+    return event;
   }
 
   /**
@@ -791,11 +812,11 @@ export class NostrClient {
     onEOSE?: () => void,
     limit = 100,
   ): () => void {
-    console.log(`[Nostr] subscribeForums: kind:40 #t=${NostrClient.MESHPAY_FORUM_TAG} limit=${limit} relays=${this.relayUrls.length}`);
+    console.log(`[Nostr] subscribeForums: kind:40 #t=${MESHPAY_FORUM_TAG} limit=${limit} relays=${this.relayUrls.length}`);
     return this.subscribe(
       [{
         kinds: [Kind.ChannelCreate],
-        '#t': [NostrClient.MESHPAY_FORUM_TAG],
+        '#t': [MESHPAY_FORUM_TAG],
         limit,
       }],
       onChannel,

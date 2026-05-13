@@ -1010,6 +1010,13 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
 
   // ── Réabonnement Nostr aux forums quand la connexion est rétablie ────────────
 
+  // ✅ FIX FORUM DISCOVERY : Re-annonce auto des forums déjà rejoints quand
+  // Nostr se connecte (max 1× par lancement de l'app). Sans cela, les forums
+  // créés sur l'ancienne version (sans tag MeshPay) ne deviendraient jamais
+  // découvrables. Avec cette re-annonce, la base de forums migrate
+  // progressivement vers le nouveau format taggé.
+  const forumsReannouncedRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!nostrConnected || isLoRaMode) {
       // Déconnecter proprement les subs Nostr
@@ -1030,6 +1037,20 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       });
       nostrChannelUnsubs.current.set(channelName, unsub);
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
+    }
+
+    // ✅ Re-annonce kind:40 (1× par session de lancement) pour rendre les forums
+    // existants découvrables via subscribeForums avec le nouveau tag MeshPay.
+    // Skip 'public' (canal LoRa-only, jamais annoncé sur Nostr).
+    for (const channelName of joinedForums.current) {
+      if (channelName === 'public') continue;
+      if (forumsReannouncedRef.current.has(channelName)) continue;
+      forumsReannouncedRef.current.add(channelName);
+      const conv = conversationsRef.current.find(c => c.id === `forum:${channelName}`);
+      const description = conv?.lastMessage || `Forum ${channelName}`;
+      nostrClient.createChannel(channelName, description)
+        .then((ev) => console.log(`[Forum] 🔄 Re-annonce kind:40 pour "${channelName}" id=${ev.id.slice(0, 16)}…`))
+        .catch((err) => console.warn(`[Forum] Re-annonce échouée pour "${channelName}":`, err));
     }
 
     // Cleanup : désabonner toutes les subscriptions Nostr à la déconnexion/démontage
@@ -1566,10 +1587,17 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
     }
 
     // Nostr : publier kind:40 uniquement si mode le permet
+    // ✅ FIX FORUM DISCOVERY : await + log explicite pour détecter les échecs
+    // silencieux. Si le publish échoue, on log mais on ne throw pas (le forum
+    // est utilisable localement et via LoRa même sans annonce Nostr).
     if ((isInternetMode || isBridgeMode) && nostrClient.isConnected && !skipAnnounce) {
-      nostrClient.createChannel(channelName, description || `Forum ${channelName}`)
-        .then(() => console.log('[Forum] kind:40 publié:', channelName))
-        .catch((err) => console.warn('[Forum] Impossible de publier kind:40:', err));
+      try {
+        const event = await nostrClient.createChannel(channelName, description || `Forum ${channelName}`);
+        console.log(`[Forum] ✅ kind:40 publié pour "${channelName}": id=${event.id.slice(0, 16)}…`);
+      } catch (err) {
+        console.warn(`[Forum] ⚠️ Impossible de publier kind:40 pour "${channelName}":`, err);
+        // On continue : le forum reste utilisable localement
+      }
     }
 
     // Nostr : souscrire au channel déterministe si mode le permet
