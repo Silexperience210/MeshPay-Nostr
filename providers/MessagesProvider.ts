@@ -1039,19 +1039,41 @@ export const [MessagesContext, useMessages] = createContextHook((): MessagesStat
       console.log('[Messages] Nostr forum réabonné:', channelName, channelId.slice(0, 16) + '…');
     }
 
-    // ✅ Re-annonce kind:40 (1× par session de lancement) pour rendre les forums
-    // existants découvrables via subscribeForums avec le nouveau tag MeshPay.
+    // ✅ Re-annonce kind:40 — throttle persistant : max 1× tous les 7 jours par
+    // forum. Avant : 1× par session JS → 10 boot = 10 events kind:40 publiés sur
+    // les relais Nostr (pollution + duplicats dans Discover). Maintenant : on
+    // persiste dans AsyncStorage la date de dernière annonce, on skip si < 7j.
     // Skip 'public' (canal LoRa-only, jamais annoncé sur Nostr).
-    for (const channelName of joinedForums.current) {
-      if (channelName === 'public') continue;
-      if (forumsReannouncedRef.current.has(channelName)) continue;
-      forumsReannouncedRef.current.add(channelName);
-      const conv = conversationsRef.current.find(c => c.id === `forum:${channelName}`);
-      const description = conv?.lastMessage || `Forum ${channelName}`;
-      nostrClient.createChannel(channelName, description)
-        .then((ev) => console.log(`[Forum] 🔄 Re-annonce kind:40 pour "${channelName}" id=${ev.id.slice(0, 16)}…`))
-        .catch((err) => console.warn(`[Forum] Re-annonce échouée pour "${channelName}":`, err));
-    }
+    (async () => {
+      const REANNOUNCE_THROTTLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 jours
+      const now = Date.now();
+      for (const channelName of joinedForums.current) {
+        if (channelName === 'public') continue;
+        if (forumsReannouncedRef.current.has(channelName)) continue;
+        forumsReannouncedRef.current.add(channelName);
+
+        // Check throttle persistant
+        const key = `forum-reannounce:${channelName}`;
+        let lastAnnounceAt = 0;
+        try {
+          const raw = await AsyncStorage.getItem(key);
+          if (raw) lastAnnounceAt = parseInt(raw, 10) || 0;
+        } catch {}
+        if (now - lastAnnounceAt < REANNOUNCE_THROTTLE_MS) {
+          console.log(`[Forum] Skip re-annonce "${channelName}" — dernière il y a ${Math.round((now - lastAnnounceAt) / 86400000)}j`);
+          continue;
+        }
+
+        const conv = conversationsRef.current.find(c => c.id === `forum:${channelName}`);
+        const description = conv?.lastMessage || `Forum ${channelName}`;
+        nostrClient.createChannel(channelName, description)
+          .then(async (ev) => {
+            console.log(`[Forum] 🔄 Re-annonce kind:40 pour "${channelName}" id=${ev.id.slice(0, 16)}…`);
+            await AsyncStorage.setItem(key, String(now)).catch(() => {});
+          })
+          .catch((err) => console.warn(`[Forum] Re-annonce échouée pour "${channelName}":`, err));
+      }
+    })();
 
     // Cleanup : désabonner toutes les subscriptions Nostr à la déconnexion/démontage
     return () => {

@@ -294,7 +294,7 @@ export const useSettingsStore = create<SettingsState>()(
           ].filter(Boolean) as string[];
           setTrustedMints(mints);
 
-          // ✅ MIGRATION RELAIS (v1.0.15) : forcer l'ajout des relais
+          // ✅ MIGRATION RELAIS (v1.0.15+) : forcer l'ajout des relais
           // fiables pour les utilisateurs existants. Sans cette migration,
           // les users avec une vieille liste persistée n'utiliseraient pas
           // relay.primal.net → forum discovery cassée.
@@ -303,6 +303,14 @@ export const useSettingsStore = create<SettingsState>()(
             'wss://relay.primal.net',
             'wss://nos.lol',
             'wss://nostr.bitcoiner.social',
+          ];
+          // ✅ Relais notoirement défaillants : on les laisse dans la liste pour
+          // que l'utilisateur puisse les ré-activer manuellement, mais on les
+          // désactive par défaut pour ne pas polluer le statut "error".
+          const UNRELIABLE_RELAYS = [
+            'wss://relay.nostr.band',     // n'indexe pas kind:40 + souvent timeout
+            'wss://nostr.wine',           // n'indexe pas kind:40
+            'wss://relay.snort.social',   // souvent timeout
           ];
           const existingUrls = new Set(state.nostrRelays.map(r => r.url));
           let migrated = false;
@@ -313,8 +321,16 @@ export const useSettingsStore = create<SettingsState>()(
               migrated = true;
             }
           }
+          // Désactiver les relais notoirement défaillants
+          for (const relay of state.nostrRelays) {
+            if (UNRELIABLE_RELAYS.includes(relay.url) && relay.enabled) {
+              relay.enabled = false;
+              console.log(`[SettingsStore] 🔄 Migration : désactivation relai défaillant ${relay.url}`);
+              migrated = true;
+            }
+          }
           if (migrated) {
-            console.log(`[SettingsStore] ✅ Migration relais terminée — ${state.nostrRelays.length} relais configurés`);
+            console.log(`[SettingsStore] ✅ Migration relais terminée — ${state.nostrRelays.length} relais configurés (${state.nostrRelays.filter(r => r.enabled).length} actifs)`);
           }
         }
       },

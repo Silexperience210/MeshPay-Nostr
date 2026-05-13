@@ -264,6 +264,12 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
 
     console.log('[Discover] Démarrage recherche forums Nostr...');
 
+    // ✅ Dedup par NOM de forum (pas par event.id) — garde l'event le plus récent.
+    // Pourquoi : NIP-28 ne fournit pas de mécanisme natif d'unicité par nom, donc
+    // chaque appel à createChannel publie un nouveau kind:40. Si l'utilisateur a
+    // créé 3 fois le même forum (ou que la re-annonce auto a publié 2 fois), on
+    // se retrouve avec N events pour le même forum logique. Côté UX on n'affiche
+    // qu'une seule entrée — la plus récente.
     const acceptForum = (event: NostrEvent, src: 'pool' | 'ws') => {
       const hasMeshpayTag = event.tags?.some(t => t[0] === 't' && t[1] === 'meshpay-forum');
       try {
@@ -271,19 +277,22 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
         const forumName = (meta.name ?? '').toLowerCase().trim();
         if (!forumName) return;
         if (!hasMeshpayTag && !/^[a-z0-9-]{1,32}$/.test(forumName)) return;
-        if (!found.has(event.id)) {
-          found.set(event.id, {
-            channelId: event.id,
-            name: forumName,
-            about: meta.about ?? '',
-            creatorPubkey: event.pubkey,
-            createdAt: event.created_at,
-          });
-          setDiscoveredForums(Array.from(found.values())
-            .sort((a, b) => b.createdAt - a.createdAt)
-            .slice(0, 30));
-          console.log(`[Discover] +1 forum via ${src} : ${forumName} (${event.id.slice(0, 12)})`);
-        }
+
+        // Dedup par nom : si on a déjà un event pour ce forum, garder le plus récent
+        const existing = found.get(forumName);
+        if (existing && existing.createdAt >= event.created_at) return; // déjà plus récent
+
+        found.set(forumName, {
+          channelId: event.id,
+          name: forumName,
+          about: meta.about ?? '',
+          creatorPubkey: event.pubkey,
+          createdAt: event.created_at,
+        });
+        setDiscoveredForums(Array.from(found.values())
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 30));
+        console.log(`[Discover] ${existing ? '↻ update' : '+1'} forum via ${src} : ${forumName} (${event.id.slice(0, 12)})`);
       } catch {}
     };
 
