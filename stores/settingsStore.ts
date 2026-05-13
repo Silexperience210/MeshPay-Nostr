@@ -67,12 +67,15 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoRelay: true,
   notifications: true,
   shareLocation: false,
+  // ✅ FIX FORUM DISCOVERY (v1.0.15) : relais validés en production.
+  // Voir aussi DEFAULT_RELAYS dans utils/nostr-client.ts (doivent rester sync).
+  // Migration auto via ensureRelayDefaults() si l'utilisateur a une liste obsolète.
   nostrRelays: [
-    { url: 'wss://relay.damus.io', enabled: true },
+    { url: 'wss://relay.damus.io', enabled: true },        // ✅ Très fiable
+    { url: 'wss://relay.primal.net', enabled: true },      // ✅ Très fiable (ajouté v1.0.15)
     { url: 'wss://nos.lol', enabled: true },
-    { url: 'wss://relay.nostr.band', enabled: true },
-    { url: 'wss://nostr.wine', enabled: true },
-    { url: 'wss://relay.snort.social', enabled: true },
+    { url: 'wss://nostr.bitcoiner.social', enabled: true },
+    { url: 'wss://relay.snort.social', enabled: false },   // Désactivé : trop souvent timeout
   ],
 };
 
@@ -290,6 +293,29 @@ export const useSettingsStore = create<SettingsState>()(
             state.customCashuMint,
           ].filter(Boolean) as string[];
           setTrustedMints(mints);
+
+          // ✅ MIGRATION RELAIS (v1.0.15) : forcer l'ajout des relais
+          // fiables pour les utilisateurs existants. Sans cette migration,
+          // les users avec une vieille liste persistée n'utiliseraient pas
+          // relay.primal.net → forum discovery cassée.
+          const RELIABLE_RELAYS = [
+            'wss://relay.damus.io',
+            'wss://relay.primal.net',
+            'wss://nos.lol',
+            'wss://nostr.bitcoiner.social',
+          ];
+          const existingUrls = new Set(state.nostrRelays.map(r => r.url));
+          let migrated = false;
+          for (const url of RELIABLE_RELAYS) {
+            if (!existingUrls.has(url)) {
+              state.nostrRelays.push({ url, enabled: true });
+              console.log(`[SettingsStore] 🔄 Migration : ajout relai ${url}`);
+              migrated = true;
+            }
+          }
+          if (migrated) {
+            console.log(`[SettingsStore] ✅ Migration relais terminée — ${state.nostrRelays.length} relais configurés`);
+          }
         }
       },
       // Exclure les états de loading de la persistance

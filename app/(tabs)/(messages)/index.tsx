@@ -298,7 +298,15 @@ function NewChatModal({ visible, onClose, onDM, onForum }: {
       eoseCount += 1;
       setDiscoverDebug({ events: receivedCount, eose: eoseCount, forums: found.size });
       console.log(`[Discover] EOSE (${eoseCount}) — ${receivedCount} events, ${found.size} forums uniques`);
-      setDiscoverLoading(false);
+      // ✅ Ne pas arrêter au premier EOSE — attendre au moins 3 relais ou
+      // 5 secondes après le 1er EOSE pour laisser le temps aux autres relais
+      // (souvent damus.io ou primal arrive en second avec les vrais events).
+      if (eoseCount >= 3) {
+        setDiscoverLoading(false);
+      } else if (eoseCount === 1) {
+        // Au premier EOSE, donner 5s aux autres relais pour répondre
+        setTimeout(() => setDiscoverLoading(false), 5000);
+      }
     };
 
     // ⚡ Subscription UNIQUE avec UN filtre kind:40 (pas de tag pour
